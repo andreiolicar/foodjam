@@ -30,7 +30,7 @@ qualquer fase não final ──cancelar──▶ cancelada
 | Fase | Arquivo | Modelo | O que faz |
 |---|---|---|---|
 | Coleta | `coleta.ts` | `fast`, sem ferramentas | Filtro barato (descarta vazias e só emoji), extrai `foodPreferences`, `dietaryRestrictions`, `avoids` e o trecho de orçamento (convertido em código). Perguntas ficam em `pendingQuestions`. `coletarLote` faz o mesmo para até 10 pessoas numa chamada, com schema montado com os ids do lote. |
-| Proposta | `proposta.ts` | `capable`, sem tool calling | Busca lojas em código (`catalogo.ts`), filtra itens elegíveis por pessoa (`regras/elegibilidade.ts`), o modelo escolhe ids, o código valida, recalcula e escolhe a melhor opção. |
+| Proposta | `proposta.ts` | `capable` (classificação) + `fast` (justificativa) | Busca lojas em código (`catalogo.ts`) e filtra itens elegíveis por pessoa (`regras/elegibilidade.ts`). O modelo só classifica, por desejo de cada pessoa, os itens em "atende", "substituto" ou "não serve". O código (`regras/combinacoes.ts`) enumera todas as combinações de 1 e 2 lojas, escolhe o melhor item por desejo, confere pedido mínimo e orçamento e escolhe: mais atendidos > menos desejos sem item > menos substitutos > menos lojas > menor total. O modelo só escreve a justificativa da opção escolhida. |
 | Ajuste | `ajuste.ts` | `fast` | `interpretarAjuste` converte texto em troca estruturada; `ajustar` troca o item da pessoa e recalcula. A pessoa só troca o próprio item. |
 | Fechamento | `fechamento.ts` | nenhum | Exige organizador e catálogo consultado há no máximo 60 s; revalida tudo e devolve `AuthorizedOrder`. |
 
@@ -43,6 +43,8 @@ qualquer fase não final ──cancelar──▶ cancelada
 - Cada chamada é registrada (fase, nível, tentativa, duração, sucesso, erro fatal) via `registrar`.
 - Modelo reserva opcional por nível (`AI_MODEL_FAST_FALLBACK`, `AI_MODEL_CAPABLE_FALLBACK`): um 429 do principal troca na hora para o reserva, e o principal fica de lado pelo tempo pedido pelo provedor.
 - Erros do provedor: chave inválida, plano ou cota diária (401, 402, 403, `FreeTierError`, `PerDay`) são **fatais**, sem nova tentativa; 429 de limite por minuto espera (`Retry-After`, `retryDelay`, "try again in") e repete até 3 vezes.
+
+Decisões, provedor escolhido e números medidos (acerto, latência, tokens): [`docs/core-decisoes.md`](../../docs/core-decisoes.md).
 
 ## Como o bot usa o core
 
@@ -71,7 +73,7 @@ Sem HTTP: o Telegram importa o core e chama a fachada `criarAgente` (`agente.ts`
 ## Contratos compartilhados (`contracts.ts`)
 
 - `SessionId`, `ParticipantId`, `MoneyCents`.
-- `ParticipantPreferences`: `foodPreferences`, `dietaryRestrictions` (restrição dura, de saúde), `avoids` (rejeição de gosto) e `budgetCents` (privado).
+- `ParticipantPreferences`: `foodPreferences` (gosto e atributos), `wishes` (itens a receber, um por entrada: "um lanche e um bolo" → 2 itens, até 3), `dietaryRestrictions` (restrição dura, de saúde), `avoids` (rejeição de gosto) e `budgetCents` (privado).
 - `SessionStatus`: `collecting`, `reviewing`, `awaiting_confirmation`, `closed`, `cancelled`.
 - `IncomingMessage`, `CoreAction`.
 - Catálogo e proposta: `Store`, `MenuItem`, `ProposedItem` (com `isSubstitute?`), `StoreOrder`, `ParticipantShare`, `Split`, `Proposal`.

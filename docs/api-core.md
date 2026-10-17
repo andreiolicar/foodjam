@@ -124,7 +124,8 @@ interface Resposta {
 - Dinheiro vem em **centavos inteiros**: `2590` → `R$ 25,90` (`(c / 100).toFixed(2).replace('.', ',')`). Nunca some valores no bot: use `subtotalCents`, `totalCents` e `split`.
 - Por loja (`proposal.orders`): nome da loja (via catálogo), itens por pessoa, entrega, total.
 - Rateio (`proposal.split.shares`): quanto cada pessoa paga (itens + parte da entrega).
-- `item.isSubstitute`: marcar como "sugestão parecida".
+- Uma pessoa pode ter **mais de um item** ("um lanche e um bolo de cenoura"): agrupe por `participantId`. No rateio ela aparece uma vez, com a soma dos itens e uma parte da entrega de cada loja em que pediu.
+- `item.isSubstitute`: marcar como "sugestão parecida" (vale por item).
 - `proposal.uncoveredParticipantIds`: quem ficou sem item.
 - `proposal.justification`: texto curto da Íris, pode ir no topo.
 - **Nunca mostre `preferences.budgetCents` no grupo**: o orçamento é privado.
