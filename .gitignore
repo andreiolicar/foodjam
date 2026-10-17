@@ -27,3 +27,10 @@ tmp/
 .DS_Store
 .idea/
 .vscode/
+
+# Caches de ferramentas
+.eslintcache
+.vite/
+
+# Claude Code: configurações locais de cada pessoa (CLAUDE.md é versionado)
+.claude/settings.local.json
