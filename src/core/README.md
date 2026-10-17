@@ -1,4 +1,4 @@
-# Core / Agente IA — Desenvolvedor 3
+# Core / Agente IA — Ana Paula
 
 Branch: `feat/core-agent`.
 
