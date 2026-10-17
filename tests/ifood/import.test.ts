@@ -1,0 +1,26 @@
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { expect, it } from 'vitest';
+
+it('importa API e CLI sem ambiente, rede, listener, processo ou saída automática', () => {
+  const api = fileURLToPath(new URL('../../src/ifood/index.ts', import.meta.url));
+  const cli = fileURLToPath(new URL('../../src/ifood/cli.ts', import.meta.url));
+  const script = `
+    import http from 'node:http';
+    import childProcess from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { pathToFileURL } from 'node:url';
+    const unexpected = () => { throw new Error('Efeito colateral durante importação'); };
+    globalThis.fetch = unexpected;
+    http.createServer = unexpected;
+    childProcess.execFile = unexpected;
+    syncBuiltinESMExports();
+    const api = await import(pathToFileURL(process.argv[1]).href);
+    await import(pathToFileURL(process.argv[2]).href);
+    console.log(Object.keys(api).sort().join(','));
+  `;
+  const output = execFileSync(process.execPath, [
+    '--import', import.meta.resolve('tsx'), '--input-type=module', '-e', script, api, cli,
+  ], { env: {}, encoding: 'utf8', timeout: 10_000 });
+  expect(output.trim()).toBe('createIfoodMcpClient,readIfoodMcpConfig');
+});
