@@ -5,37 +5,119 @@ export type ResponseMode = 'json_schema' | 'json_object' | 'none';
 const MODOS: readonly ResponseMode[] = ['json_schema', 'json_object', 'none'];
 
 export interface OpenAiCompatOptions {
-  /** Ex.: https://opencode.ai/zen/v1 (sem /chat/completions). */
+  /** Ex.: https://generativelanguage.googleapis.com/v1beta/openai (sem /chat/completions). */
   baseUrl: string;
   apiKey?: string;
   models: Record<LlmTier, string>;
   /** Injetável para testes; padrão: fetch global. */
   fetch?: typeof fetch;
+  /** Novas tentativas em 429 de limite por minuto. Padrão: 3. */
+  maxRateLimitRetries?: number;
+  /** Espera máxima aceitável num 429; se o provedor pedir mais, desiste. Padrão: 10 s. */
+  maxRateLimitWaitMs?: number;
+  /** Injetável para testes; padrão: setTimeout que respeita o AbortSignal. */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
+/**
+ * Tipo do erro HTTP do provedor:
+ * - auth: chave ausente, inválida ou sem permissão (401, 403, "API key not valid").
+ * - plan_or_quota: plano/cobrança (402, FreeTier) ou cota diária esgotada.
+ * - rate_limit: limite por minuto (429 comum), resolve esperando.
+ * - unavailable: provedor sobrecarregado (502, 503, 504), resolve esperando.
+ * - other: demais erros.
+ * auth e plan_or_quota são fatais: tentar de novo não adianta.
+ */
+export type LlmErrorKind = 'auth' | 'plan_or_quota' | 'rate_limit' | 'unavailable' | 'other';
+
 export class LlmHttpError extends Error {
+  readonly kind: LlmErrorKind;
+  /** Mensagem do provedor (corpo da resposta), sem a chave. */
+  readonly providerMessage: string;
+
   constructor(
     readonly status: number,
     body: string,
   ) {
-    super(`provedor respondeu HTTP ${status}: ${body.slice(0, 300)}`);
+    const providerMessage = body.replace(/\s+/g, ' ').trim().slice(0, 1000);
+    super(`provedor respondeu HTTP ${status}: ${providerMessage}`);
     this.name = 'LlmHttpError';
+    this.kind = classificarErro(status, body);
+    this.providerMessage = providerMessage;
+  }
+
+  /** Erro que não melhora com nova tentativa (lido por gerarEstruturado). */
+  get fatal(): boolean {
+    return this.kind === 'auth' || this.kind === 'plan_or_quota';
   }
 }
 
+const CHAVE_INVALIDA = /api[ _-]?key not valid|API_KEY_INVALID|invalid api key|invalid_api_key|unauthenticated/i;
+const PLANO = /free ?tier|freetiererror|billing|payment|insufficient_quota|credit/i;
+const COTA_DIARIA = /per ?day|perday|daily|requests per day|tokens per day|\bRPD\b|\bTPD\b/i;
+
+export function classificarErro(status: number, body: string): LlmErrorKind {
+  if (status === 401 || CHAVE_INVALIDA.test(body)) return 'auth';
+  if (status === 402) return 'plan_or_quota';
+  if (status === 403) return PLANO.test(body) ? 'plan_or_quota' : 'auth';
+  if (status === 429) {
+    // O Gemini cita "plan and billing" até no limite por minuto: o que decide é o quotaId.
+    if (/PerMinute|per ?minute|\bRPM\b|\bTPM\b/i.test(body)) return 'rate_limit';
+    return COTA_DIARIA.test(body) || /insufficient_quota/i.test(body) ? 'plan_or_quota' : 'rate_limit';
+  }
+  if (status === 502 || status === 503 || status === 504) return 'unavailable';
+  return 'other';
+}
+
+/**
+ * Quanto esperar num 429, em ms: header Retry-After, "retryDelay": "23s"
+ * (Gemini) ou "try again in 1m2.5s" / "in 450ms" (Groq/OpenAI).
+ */
+export function tempoDeEspera(headers: Headers, body: string): number | undefined {
+  const header = headers.get('retry-after');
+  if (header && /^\d+(\.\d+)?$/.test(header.trim())) return Math.ceil(Number(header) * 1000);
+
+  const retryDelay = /retry_?delay"?\s*:\s*"(\d+(?:\.\d+)?)s"/i.exec(body);
+  if (retryDelay?.[1]) return Math.ceil(Number(retryDelay[1]) * 1000);
+
+  const tryAgain = /(?:try again|retry) in (?:(\d+)m)?(\d+(?:\.\d+)?)(ms|s)\b/i.exec(body);
+  if (tryAgain?.[2]) {
+    const minutos = Number(tryAgain[1] ?? 0);
+    const valor = Number(tryAgain[2]);
+    return Math.ceil(minutos * 60_000 + (tryAgain[3] === 'ms' ? valor : valor * 1000));
+  }
+  return undefined;
+}
+
+const dormir = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    });
+  });
+
 /**
  * Adaptador para APIs compatíveis com OpenAI (/chat/completions), via fetch,
- * sem SDK. Tenta response_format json_schema; se o provedor recusar (HTTP 400
- * ou 422), cai para json_object e depois para nenhum, lembrando o modo que
- * funcionou. O schema também vai no prompt de sistema, e a validação Zod +
- * nova tentativa continua no core (gerarEstruturado).
+ * sem SDK. Funciona com Gemini (AI Studio), Groq, OpenAI, OpenRouter, Ollama...
+ *
+ * - Formato: tenta response_format json_schema; se o provedor recusar (400/422),
+ *   cai para json_object e depois para nenhum, lembrando o modo que funcionou.
+ * - 429 por minuto e 502/503/504: espera (Retry-After/retryDelay ou 1 s, 2 s, 4 s) e tenta de novo.
+ * - Chave, plano ou cota diária: LlmHttpError fatal, sem nova tentativa.
+ *
+ * O schema também vai no prompt de sistema; a validação Zod fica no core.
  */
 export class OpenAiCompatLlm implements LlmPort {
   private modeIndex = 0;
   private readonly fetchFn: typeof fetch;
+  private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 
   constructor(private readonly options: OpenAiCompatOptions) {
     this.fetchFn = options.fetch ?? fetch;
+    this.sleep = options.sleep ?? dormir;
   }
 
   get mode(): ResponseMode {
@@ -43,14 +125,29 @@ export class OpenAiCompatLlm implements LlmPort {
   }
 
   async generate(request: LlmRequest): Promise<unknown> {
+    const maxRetries = this.options.maxRateLimitRetries ?? 3;
+    const maxWait = this.options.maxRateLimitWaitMs ?? 10_000;
+    let rateLimitRetries = 0;
+
     for (;;) {
       const response = await this.post(request, this.mode);
       if (response.ok) {
         return extrairJson(await response.json());
       }
       const body = await response.text();
+      const error = new LlmHttpError(response.status, body);
+      if (error.fatal) throw error;
+
+      if (error.kind === 'rate_limit' || error.kind === 'unavailable') {
+        const espera = tempoDeEspera(response.headers, body) ?? 1000 * 2 ** rateLimitRetries;
+        if (rateLimitRetries >= maxRetries || espera > maxWait) throw error;
+        rateLimitRetries++;
+        await this.sleep(espera, request.signal);
+        continue;
+      }
+
       const recusouFormato = (response.status === 400 || response.status === 422) && this.mode !== 'none';
-      if (!recusouFormato) throw new LlmHttpError(response.status, body);
+      if (!recusouFormato) throw error;
       this.modeIndex++;
     }
   }

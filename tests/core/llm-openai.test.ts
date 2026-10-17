@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LlmHttpError, OpenAiCompatLlm, extrairJson, listarModelos } from '../../src/core/llm-openai.js';
+import { LlmHttpError, OpenAiCompatLlm, classificarErro, extrairJson, listarModelos, tempoDeEspera } from '../../src/core/llm-openai.js';
 import type { LlmRequest } from '../../src/core/ports.js';
 
 const request: LlmRequest = {
@@ -142,5 +142,137 @@ describe('listarModelos', () => {
 
     const estranho = (async () => new Response(JSON.stringify({ models: 'x' }))) as typeof fetch;
     await expect(listarModelos({ baseUrl: 'https://exemplo.test', fetch: estranho })).rejects.toThrow(/sem lista de modelos/);
+  });
+});
+
+describe('classificarErro', () => {
+  it.each([
+    [401, 'unauthorized', 'auth'],
+    [400, '{"error":{"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}', 'auth'],
+    [403, 'permission denied', 'auth'],
+    [403, '{"error":{"type":"FreeTierError"}}', 'plan_or_quota'],
+    [402, 'payment required', 'plan_or_quota'],
+    [429, '{"error":{"code":"insufficient_quota"}}', 'plan_or_quota'],
+    [429, 'quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier', 'plan_or_quota'],
+    [429, 'Rate limit reached on tokens per day (TPD)', 'plan_or_quota'],
+    [429, 'quotaId: GenerateRequestsPerMinutePerProjectPerModel-FreeTier, "retryDelay": "7s"', 'rate_limit'],
+    [429, 'Rate limit reached on requests per minute (RPM). Please try again in 1.2s', 'rate_limit'],
+    [400, 'response_format json_schema not supported', 'other'],
+    [500, 'internal', 'other'],
+  ] as const)('HTTP %i %j → %s', (status, body, kind) => {
+    expect(classificarErro(status, body)).toBe(kind);
+  });
+});
+
+describe('tempoDeEspera', () => {
+  it.each([
+    [{ 'retry-after': '3' }, '', 3000],
+    [{}, '{"details":[{"retryDelay": "23s"}]}', 23_000],
+    [{}, 'Please try again in 1.5s.', 1500],
+    [{}, 'Please try again in 2m3s.', 123_000],
+    [{}, 'Please try again in 450ms.', 450],
+    [{}, 'slow down', undefined],
+  ])('%j %j → %s', (headers, body, ms) => {
+    expect(tempoDeEspera(new Headers(headers), body)).toBe(ms);
+  });
+});
+
+describe('OpenAiCompatLlm: erros do provedor', () => {
+  const comEspera = (fn: typeof fetch, extra: Partial<ConstructorParameters<typeof OpenAiCompatLlm>[0]> = {}) => {
+    const esperas: number[] = [];
+    const llm = new OpenAiCompatLlm({
+      baseUrl: 'https://exemplo.test/v1',
+      models: { fast: 'f', capable: 'c' },
+      fetch: fn,
+      sleep: async (ms) => {
+        esperas.push(ms);
+      },
+      ...extra,
+    });
+    return { llm, esperas };
+  };
+
+  it('429 por minuto: espera o que o provedor pediu e tenta de novo', async () => {
+    const { fn, chamadas } = fetchFalso([
+      { status: 429, body: 'Rate limit reached (RPM). Please try again in 1.5s' },
+      { status: 429, body: '{"retryDelay": "2s"}' },
+      { status: 200, body: resposta('{"ok":1}') },
+    ]);
+    const { llm, esperas } = comEspera(fn);
+    await expect(llm.generate(request)).resolves.toEqual({ ok: 1 });
+    expect(esperas).toEqual([1500, 2000]);
+    expect(chamadas).toHaveLength(3);
+  });
+
+  it('429 sem tempo informado: backoff 1 s, 2 s, 4 s e desiste', async () => {
+    const { fn, chamadas } = fetchFalso(Array.from({ length: 4 }, () => ({ status: 429, body: 'too many requests' })));
+    const { llm, esperas } = comEspera(fn);
+    const erro = await llm.generate(request).catch((e: unknown) => e);
+    expect(esperas).toEqual([1000, 2000, 4000]);
+    expect(chamadas).toHaveLength(4);
+    expect(erro).toMatchObject({ kind: 'rate_limit', fatal: false });
+  });
+
+  it('429 pedindo espera longa demais: desiste sem esperar', async () => {
+    const { fn } = fetchFalso([{ status: 429, body: '{"retryDelay": "45s"}' }]);
+    const { llm, esperas } = comEspera(fn, { maxRateLimitWaitMs: 10_000 });
+    await expect(llm.generate(request)).rejects.toMatchObject({ kind: 'rate_limit' });
+    expect(esperas).toEqual([]);
+  });
+
+  it.each([
+    [401, 'invalid api key'],
+    [402, 'payment required'],
+    [403, '{"error":{"type":"FreeTierError","message":"free tier only inside OpenCode"}}'],
+    [429, 'You exceeded your current quota. quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier'],
+    [400, 'API key not valid. Please pass a valid API key.'],
+  ])('HTTP %i fatal: uma chamada só, sem trocar de formato, com a mensagem do provedor', async (status, body) => {
+    const { fn, chamadas } = fetchFalso([{ status, body }]);
+    const { llm, esperas } = comEspera(fn);
+    const erro = (await llm.generate(request).catch((e: unknown) => e)) as LlmHttpError;
+    expect(erro.fatal).toBe(true);
+    expect(erro.providerMessage).toContain(body.slice(0, 20));
+    expect(chamadas).toHaveLength(1);
+    expect(esperas).toEqual([]);
+    expect(llm.mode).toBe('json_schema');
+  });
+});
+
+describe('Gemini: respostas reais da camada gratuita', () => {
+  const geminiPorMinuto =
+    '[{ "error": { "code": 429, "message": "You exceeded your current quota, please check your plan and billing details. ' +
+    '* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 5, model: gemini-3.6-flash\n' +
+    'Please retry in 55.741306574s.", "status": "RESOURCE_EXHAUSTED", "details": [{ "quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier", "quotaValue": "5" }] } }]';
+
+  it('429 por minuto que cita "plan and billing" continua sendo rate_limit, não fatal', () => {
+    expect(classificarErro(429, geminiPorMinuto)).toBe('rate_limit');
+    expect(new LlmHttpError(429, geminiPorMinuto).fatal).toBe(false);
+  });
+
+  it('lê "Please retry in 55.7s"', () => {
+    expect(tempoDeEspera(new Headers(), geminiPorMinuto)).toBe(55_742);
+  });
+
+  it('503 "high demand" é unavailable: espera e tenta de novo', async () => {
+    const alta = '[{ "error": { "code": 503, "message": "This model is currently experiencing high demand.", "status": "UNAVAILABLE" } }]';
+    expect(classificarErro(503, alta)).toBe('unavailable');
+
+    const { fn, chamadas } = fetchFalso([
+      { status: 503, body: alta },
+      { status: 503, body: alta },
+      { status: 200, body: resposta('{"ok":1}') },
+    ]);
+    const esperas: number[] = [];
+    const llm = new OpenAiCompatLlm({
+      baseUrl: 'https://exemplo.test/v1',
+      models: { fast: 'f', capable: 'c' },
+      fetch: fn,
+      sleep: async (ms) => {
+        esperas.push(ms);
+      },
+    });
+    await expect(llm.generate(request)).resolves.toEqual({ ok: 1 });
+    expect(esperas).toEqual([1000, 2000]);
+    expect(chamadas).toHaveLength(3);
   });
 });
