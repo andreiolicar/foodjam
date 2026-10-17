@@ -9,8 +9,16 @@ export interface OpenAiCompatOptions {
   baseUrl: string;
   apiKey?: string;
   models: Record<LlmTier, string>;
+  /**
+   * Modelo reserva por nível, usado quando o principal responde 429 (cota por
+   * minuto ou por dia). O principal fica de lado pelo tempo pedido pelo
+   * provedor (padrão: 1 min; 1 h para cota diária). Use um modelo com cota separada.
+   */
+  fallbacks?: Partial<Record<LlmTier, string>>;
   /** Injetável para testes; padrão: fetch global. */
   fetch?: typeof fetch;
+  /** Relógio em ms, injetável para testes. Padrão: Date.now. */
+  now?: () => number;
   /** Novas tentativas em 429 de limite por minuto. Padrão: 3. */
   maxRateLimitRetries?: number;
   /** Espera máxima aceitável num 429; se o provedor pedir mais, desiste. Padrão: 10 s. */
@@ -28,6 +36,25 @@ export interface OpenAiCompatOptions {
  * - other: demais erros.
  * auth e plan_or_quota são fatais: tentar de novo não adianta.
  */
+export interface UsoTokens {
+  tier: LlmTier;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  /** Parte de completionTokens gasta em raciocínio (modelos como gpt-oss). */
+  reasoningTokens: number;
+  totalTokens: number;
+}
+
+export interface TrocaDeModelo {
+  tier: LlmTier;
+  de: string;
+  para: string;
+  motivo: LlmErrorKind;
+  /** Por quanto tempo o principal fica de lado. */
+  esperaMs: number;
+}
+
 export type LlmErrorKind = 'auth' | 'plan_or_quota' | 'rate_limit' | 'unavailable' | 'other';
 
 export class LlmHttpError extends Error {
@@ -80,11 +107,16 @@ export function tempoDeEspera(headers: Headers, body: string): number | undefine
   const retryDelay = /retry_?delay"?\s*:\s*"(\d+(?:\.\d+)?)s"/i.exec(body);
   if (retryDelay?.[1]) return Math.ceil(Number(retryDelay[1]) * 1000);
 
-  const tryAgain = /(?:try again|retry) in (?:(\d+)m)?(\d+(?:\.\d+)?)(ms|s)\b/i.exec(body);
-  if (tryAgain?.[2]) {
-    const minutos = Number(tryAgain[1] ?? 0);
-    const valor = Number(tryAgain[2]);
-    return Math.ceil(minutos * 60_000 + (tryAgain[3] === 'ms' ? valor : valor * 1000));
+  // "in 1.5s", "in 450ms", "in 2m3.5s", "in 7h12m0.5s", "in 3h2m"
+  const tryAgain = /(?:try again|retry) in ((?:\d+h)?(?:\d+m(?!s))?(?:\d+(?:\.\d+)?(?:ms|s))?)/i.exec(body)?.[1];
+  if (tryAgain) {
+    const parte = (re: RegExp) => Number(re.exec(tryAgain)?.[1] ?? 0);
+    const ms =
+      parte(/(\d+)h/) * 3_600_000 +
+      parte(/(\d+)m(?!s)/) * 60_000 +
+      parte(/(\d+(?:\.\d+)?)s/) * 1000 +
+      parte(/(\d+(?:\.\d+)?)ms/);
+    if (ms > 0) return Math.ceil(ms);
   }
   return undefined;
 }
@@ -107,35 +139,71 @@ const dormir = (ms: number, signal?: AbortSignal) =>
  *   cai para json_object e depois para nenhum, lembrando o modo que funcionou.
  * - 429 por minuto e 502/503/504: espera (Retry-After/retryDelay ou 1 s, 2 s, 4 s) e tenta de novo.
  * - Chave, plano ou cota diária: LlmHttpError fatal, sem nova tentativa.
+ * - Com modelo reserva no nível: 429 do principal troca para o reserva na hora.
  *
  * O schema também vai no prompt de sistema; a validação Zod fica no core.
  */
 export class OpenAiCompatLlm implements LlmPort {
-  private modeIndex = 0;
+  /** Uso de tokens de cada resposta bem-sucedida, como o provedor informou. */
+  readonly usos: UsoTokens[] = [];
+  /** Trocas para o modelo reserva, para o registro e o documento técnico. */
+  readonly trocas: TrocaDeModelo[] = [];
+  /** Índice em MODOS por modelo: cada modelo pode aceitar um formato diferente. */
+  private readonly modeIndex = new Map<string, number>();
+  /** Até quando (ms) cada modelo principal fica de lado depois de um 429. */
+  private readonly bloqueadoAte = new Map<string, number>();
   private readonly fetchFn: typeof fetch;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+  private readonly now: () => number;
 
   constructor(private readonly options: OpenAiCompatOptions) {
     this.fetchFn = options.fetch ?? fetch;
     this.sleep = options.sleep ?? dormir;
+    this.now = options.now ?? Date.now;
   }
 
+  /** Modo de saída estruturada em uso no modelo fast principal. */
   get mode(): ResponseMode {
-    return MODOS[this.modeIndex] ?? 'none';
+    return this.modoDe(this.options.models.fast);
+  }
+
+  modoDe(model: string): ResponseMode {
+    return MODOS[this.modeIndex.get(model) ?? 0] ?? 'none';
+  }
+
+  /** Modelo que a próxima chamada do nível vai usar (o reserva, se o principal estiver em espera). */
+  modeloAtual(tier: LlmTier): string {
+    const principal = this.options.models[tier];
+    const reserva = this.options.fallbacks?.[tier];
+    return reserva && (this.bloqueadoAte.get(principal) ?? 0) > this.now() ? reserva : principal;
   }
 
   async generate(request: LlmRequest): Promise<unknown> {
     const maxRetries = this.options.maxRateLimitRetries ?? 3;
     const maxWait = this.options.maxRateLimitWaitMs ?? 10_000;
+    const principal = this.options.models[request.tier];
+    const reserva = this.options.fallbacks?.[request.tier];
+    let model = this.modeloAtual(request.tier);
     let rateLimitRetries = 0;
 
     for (;;) {
-      const response = await this.post(request, this.mode);
+      const response = await this.post(request, model);
       if (response.ok) {
-        return extrairJson(await response.json());
+        const data = (await response.json()) as unknown;
+        this.registrarUso(request.tier, model, data);
+        return extrairJson(data);
       }
       const body = await response.text();
       const error = new LlmHttpError(response.status, body);
+
+      // 429 no principal (cota por minuto ou por dia) com reserva configurado: troca na hora.
+      if (response.status === 429 && reserva && model === principal) {
+        const espera = tempoDeEspera(response.headers, body) ?? (error.kind === 'plan_or_quota' ? 3_600_000 : 60_000);
+        this.bloqueadoAte.set(principal, this.now() + espera);
+        this.trocas.push({ tier: request.tier, de: principal, para: reserva, motivo: error.kind, esperaMs: espera });
+        model = reserva;
+        continue;
+      }
       if (error.fatal) throw error;
 
       if (error.kind === 'rate_limit' || error.kind === 'unavailable') {
@@ -146,16 +214,32 @@ export class OpenAiCompatLlm implements LlmPort {
         continue;
       }
 
-      const recusouFormato = (response.status === 400 || response.status === 422) && this.mode !== 'none';
+      const recusouFormato = (response.status === 400 || response.status === 422) && this.modoDe(model) !== 'none';
       if (!recusouFormato) throw error;
-      this.modeIndex++;
+      this.modeIndex.set(model, (this.modeIndex.get(model) ?? 0) + 1);
     }
   }
 
-  private post(request: LlmRequest, mode: ResponseMode): Promise<Response> {
+  private registrarUso(tier: LlmTier, model: string, data: unknown): void {
+    const u = (data as { usage?: Record<string, unknown>; model?: unknown })?.usage;
+    if (!u) return;
+    const n = (v: unknown) => (typeof v === 'number' ? v : 0);
+    const detalhes = u.completion_tokens_details as { reasoning_tokens?: unknown } | undefined;
+    this.usos.push({
+      tier,
+      model,
+      promptTokens: n(u.prompt_tokens),
+      completionTokens: n(u.completion_tokens),
+      reasoningTokens: n(detalhes?.reasoning_tokens),
+      totalTokens: n(u.total_tokens),
+    });
+  }
+
+  private post(request: LlmRequest, model: string): Promise<Response> {
+    const mode = this.modoDe(model);
     const system = `${request.system}\n\nResponda SOMENTE com um objeto JSON válido que siga este JSON Schema, sem texto fora do JSON:\n${JSON.stringify(request.outputSchema)}`;
     const body: Record<string, unknown> = {
-      model: this.options.models[request.tier],
+      model,
       temperature: 0,
       messages: [
         { role: 'system', content: system },

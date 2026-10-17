@@ -171,6 +171,9 @@ describe('tempoDeEspera', () => {
     [{}, 'Please try again in 1.5s.', 1500],
     [{}, 'Please try again in 2m3s.', 123_000],
     [{}, 'Please try again in 450ms.', 450],
+    [{}, 'Please try again in 3h2m.', 10_920_000],
+    [{}, 'Please try again in 7h12m0.5s.', 25_920_500],
+    [{}, 'Please retry in 1h32m46.3s.', 5_566_300],
     [{}, 'slow down', undefined],
   ])('%j %j → %s', (headers, body, ms) => {
     expect(tempoDeEspera(new Headers(headers), body)).toBe(ms);
@@ -297,5 +300,123 @@ describe('consultarModelos', () => {
       { id: 'modelo-b', ownedBy: 'Meta', contextWindow: 131072, maxCompletionTokens: 32768, active: true },
     ]);
     expect(r.limites).toEqual({ 'x-ratelimit-limit-requests': '1000', 'x-ratelimit-remaining-requests': '999' });
+  });
+});
+
+describe('OpenAiCompatLlm: modelo reserva', () => {
+  function criarComReserva(respostas: { status: number; body: unknown }[]) {
+    const { fn, chamadas } = fetchFalso(respostas);
+    const esperas: number[] = [];
+    let agora = 1_000_000;
+    const llm = new OpenAiCompatLlm({
+      baseUrl: 'https://exemplo.test/v1',
+      models: { fast: 'principal', capable: 'forte' },
+      fallbacks: { fast: 'reserva' },
+      fetch: fn,
+      now: () => agora,
+      sleep: async (ms) => {
+        esperas.push(ms);
+      },
+    });
+    const avancar = (ms: number) => {
+      agora += ms;
+    };
+    return { llm, chamadas, esperas, avancar };
+  }
+  const modelos = (chamadas: { body: Record<string, unknown> }[]) => chamadas.map((c) => c.body.model);
+  const porMinuto = 'Rate limit reached on requests per minute (RPM). Please try again in 7s';
+  const porDia = 'Rate limit reached on tokens per day (TPD). Please try again in 3h2m';
+
+  it('429 por minuto no principal: troca na hora, sem esperar, e registra a troca', async () => {
+    const { llm, chamadas, esperas } = criarComReserva([
+      { status: 429, body: porMinuto },
+      { status: 200, body: { ...resposta('{"ok":1}'), usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } } },
+    ]);
+    await expect(llm.generate(request)).resolves.toEqual({ ok: 1 });
+    expect(modelos(chamadas)).toEqual(['principal', 'reserva']);
+    expect(esperas).toEqual([]);
+    expect(llm.usos[0]).toMatchObject({ model: 'reserva', totalTokens: 12 });
+    expect(llm.trocas).toEqual([{ tier: 'fast', de: 'principal', para: 'reserva', motivo: 'rate_limit', esperaMs: 7000 }]);
+  });
+
+  it('enquanto o principal está de lado, vai direto ao reserva; depois volta ao principal', async () => {
+    const { llm, chamadas, avancar } = criarComReserva([
+      { status: 429, body: porMinuto },
+      { status: 200, body: resposta('{}') },
+      { status: 200, body: resposta('{}') },
+      { status: 200, body: resposta('{}') },
+    ]);
+    await llm.generate(request);
+    await llm.generate(request);
+    expect(llm.modeloAtual('fast')).toBe('reserva');
+    avancar(7001);
+    expect(llm.modeloAtual('fast')).toBe('principal');
+    await llm.generate(request);
+    expect(modelos(chamadas)).toEqual(['principal', 'reserva', 'reserva', 'principal']);
+  });
+
+  it('cota diária (429) no principal não é fatal quando há reserva', async () => {
+    const { llm, chamadas } = criarComReserva([
+      { status: 429, body: porDia },
+      { status: 200, body: resposta('{"ok":1}') },
+    ]);
+    await expect(llm.generate(request)).resolves.toEqual({ ok: 1 });
+    expect(modelos(chamadas)).toEqual(['principal', 'reserva']);
+    expect(llm.trocas[0]).toMatchObject({ motivo: 'plan_or_quota', esperaMs: 10_920_000 });
+  });
+
+  it('cota diária sem tempo informado deixa o principal de lado por 1 h', async () => {
+    const { llm, avancar } = criarComReserva([
+      { status: 429, body: 'insufficient_quota' },
+      { status: 200, body: resposta('{}') },
+    ]);
+    await llm.generate(request);
+    avancar(3_599_000);
+    expect(llm.modeloAtual('fast')).toBe('reserva');
+    avancar(2_000);
+    expect(llm.modeloAtual('fast')).toBe('principal');
+  });
+
+  it('reserva também em 429 por minuto: espera e tenta de novo no reserva', async () => {
+    const { llm, chamadas, esperas } = criarComReserva([
+      { status: 429, body: porMinuto },
+      { status: 429, body: 'Please try again in 1.5s' },
+      { status: 200, body: resposta('{"ok":1}') },
+    ]);
+    await expect(llm.generate(request)).resolves.toEqual({ ok: 1 });
+    expect(modelos(chamadas)).toEqual(['principal', 'reserva', 'reserva']);
+    expect(esperas).toEqual([1500]);
+  });
+
+  it('erro de chave (401) não usa o reserva: continua fatal', async () => {
+    const { llm, chamadas } = criarComReserva([{ status: 401, body: 'invalid api key' }]);
+    await expect(llm.generate(request)).rejects.toMatchObject({ fatal: true });
+    expect(modelos(chamadas)).toEqual(['principal']);
+  });
+
+  it('nível sem reserva mantém o comportamento antigo', async () => {
+    const { llm, chamadas, esperas } = criarComReserva([
+      { status: 429, body: porMinuto },
+      { status: 200, body: resposta('{}') },
+    ]);
+    await llm.generate({ ...request, tier: 'capable' });
+    expect(modelos(chamadas)).toEqual(['forte', 'forte']);
+    expect(esperas).toEqual([7000]);
+  });
+
+  it('o formato aceito é guardado por modelo: o reserva recusar json_schema não muda o principal', async () => {
+    const { llm, chamadas } = criarComReserva([
+      { status: 429, body: porMinuto },
+      { status: 400, body: 'response_format json_schema not supported' },
+      { status: 200, body: resposta('{}') },
+    ]);
+    await llm.generate(request);
+    expect(chamadas.map((c) => [c.body.model, (c.body.response_format as { type?: string } | undefined)?.type])).toEqual([
+      ['principal', 'json_schema'],
+      ['reserva', 'json_schema'],
+      ['reserva', 'json_object'],
+    ]);
+    expect(llm.modoDe('principal')).toBe('json_schema');
+    expect(llm.modoDe('reserva')).toBe('json_object');
   });
 });

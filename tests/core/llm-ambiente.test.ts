@@ -37,3 +37,17 @@ describe('criarLlmDoAmbiente: openai-compat', () => {
     expect(temProvedorReal({ AI_API_KEY: 'k' })).toBe(false);
   });
 });
+
+describe('criarLlmDoAmbiente: modelo reserva', () => {
+  it('lê AI_MODEL_FAST_FALLBACK e AI_MODEL_CAPABLE_FALLBACK; ignora reserva igual ao principal', async () => {
+    const { OpenAiCompatLlm } = await import('../../src/core/llm-openai.js');
+    const base = { AI_PROVIDER: 'openai-compat', AI_BASE_URL: 'https://x.test', AI_MODEL_FAST: 'a', AI_MODEL_CAPABLE: 'b' };
+
+    const com = criarLlmDoAmbiente({ ...base, AI_MODEL_FAST_FALLBACK: 'c', AI_MODEL_CAPABLE_FALLBACK: 'b' });
+    expect(com).toBeInstanceOf(OpenAiCompatLlm);
+    expect((com as InstanceType<typeof OpenAiCompatLlm>).modeloAtual('fast')).toBe('a');
+
+    const sem = criarLlmDoAmbiente(base) as InstanceType<typeof OpenAiCompatLlm>;
+    expect(sem.modeloAtual('capable')).toBe('b');
+  });
+});
