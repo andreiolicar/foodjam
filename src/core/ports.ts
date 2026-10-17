@@ -1,4 +1,24 @@
-import type { MenuItem, Store, StoreId } from './contracts.js';
+import type { MenuItem, SessionId, Store, StoreId } from './contracts.js';
+import type { TimedCatalogSnapshot } from './regras/validar-escolhas.js';
+import type { CoreSession } from './sessao.js';
+
+/** Tudo que o agente guarda por sessão (chat). */
+export interface SessionRecord {
+  session: CoreSession;
+  /** Retrato do catálogo usado na proposta atual (para ajustes e fechamento). */
+  catalog?: TimedCatalogSnapshot;
+  /** Quantas propostas já foram geradas (para ids previsíveis). */
+  proposalCount: number;
+}
+
+/**
+ * Onde o agente guarda as sessões. Assíncrona para permitir trocar a versão
+ * em memória por persistência sem mudar o agente.
+ */
+export interface SessionStore {
+  get(sessionId: SessionId): Promise<SessionRecord | undefined>;
+  set(record: SessionRecord): Promise<void>;
+}
 
 /**
  * Leitura do catálogo no vocabulário do core. O módulo iFood implementa esta

@@ -42,12 +42,19 @@ qualquer fase não final ──cancelar──▶ cancelada
 - Só portas de leitura de catálogo; não existe ferramenta de pedido para o modelo.
 - Cada chamada é registrada (fase, nível, tentativa, duração, sucesso) via `registrar`.
 
+## Como o bot usa o core
+
+Sem HTTP: o Telegram importa o core e chama a fachada `criarAgente` (`agente.ts`), no mesmo processo. Ela guarda as sessões (`SessionStore`, em memória por padrão), decide o que fazer com cada mensagem pela fase, processa um chat por vez e transforma erros esperados em `outcome`. API e tabela de outcomes para o bot: [`docs/api-core.md`](../../docs/api-core.md).
+
 ## Mapa dos arquivos
 
 | Caminho | Conteúdo |
 |---|---|
+| `index.ts` | API pública: `criarAgente`, `SessoesEmMemoria`, tipos, fakes e `criarLlmDoAmbiente`. |
+| `agente.ts` | Fachada para a interface: iniciar, mensagem, propor, reabrirColeta, fechar, cancelar, obter. |
+| `sessoes.ts` | `SessoesEmMemoria` (implementação da `SessionStore`). |
 | `contracts.ts` | Tipos compartilhados com o time (ver abaixo). |
-| `ports.ts` | `CatalogPort` (só leitura) e `LlmPort` (níveis `fast`/`capable`). |
+| `ports.ts` | `CatalogPort` (só leitura), `LlmPort` (níveis `fast`/`capable`) e `SessionStore`. |
 | `schemas.ts` | Schemas Zod do domínio e das saídas do modelo (coleta, proposta, ajuste). |
 | `sessao.ts` | Máquina de estados, confirmação idempotente, `CoreSession` (proposta, fechamento, perguntas). |
 | `llm.ts` | `gerarEstruturado`: chamada + Zod + nova tentativa + timeout + registro. |
@@ -71,7 +78,7 @@ Alterações aqui são mínimas e combinadas com o time; consuma com `import typ
 
 ## Configuração do modelo
 
-Variáveis (ver `.env.example`): `AI_PROVIDER` (`openai-compat` ou vazio/`fake`), `AI_BASE_URL`, `AI_MODEL` (ou `AI_MODEL_FAST` e `AI_MODEL_CAPABLE`) e `AI_API_KEY`. Sem chave, o simulador usa o modelo fake heurístico. Testes nunca chamam rede.
+Variáveis (ver `.env.example`): `AI_PROVIDER` (`openai-compat` ou vazio/`fake`), `AI_BASE_URL` (ex.: `https://opencode.ai/zen/v1`), `AI_MODEL` (ou `AI_MODEL_FAST` e `AI_MODEL_CAPABLE`) e `AI_API_KEY`. Não há modelo padrão no código: rode `npm run listar:modelos` e copie o id exato. Sem chave, o simulador usa o modelo fake heurístico. Testes nunca chamam rede.
 
 ## Como rodar
 
@@ -79,11 +86,13 @@ Variáveis (ver `.env.example`): `AI_PROVIDER` (`openai-compat` ou vazio/`fake`)
 npm run check            # lint + tipos (inclui scripts/) + testes
 npm run simular          # grupo no terminal: "Pedro: algo leve", /propor, /ajustar, /fechar
 npm run avaliar:coleta   # avalia o prompt de coleta no modelo configurado (acerto e latência)
+npm run listar:modelos   # GET {AI_BASE_URL}/models: ids exatos para AI_MODEL
 ```
 
 ## Pendências
 
 - Medir o modelo real com `npm run avaliar:coleta` (o 100% atual é do fake heurístico).
 - `getStore(storeId)` na `CatalogPort`: proposta em `docs/proposta-catalog-getstore.md`, a combinar com o módulo iFood.
-- Integração com o Telegram e com a `CatalogPort` real em `src/index.ts`.
-- Regras de restrição são palavras-chave conservadoras; itens sem descrição saem como `uncertain` para confirmar.
+- Integração com o Telegram e com a `CatalogPort` real em `src/index.ts` (a fachada já está pronta; falta a ligação).
+- Sessões só em memória: reiniciar o processo perde os pedidos em andamento.
+- Regras de restrição são palavras-chave conservadoras, casadas como palavras inteiras (`mel` não casa "caramelo"; radicais explícitos como `bovin*`); itens sem descrição saem como `uncertain` para confirmar.
