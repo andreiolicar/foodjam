@@ -154,21 +154,46 @@ export const MAX_CLARIFICATION_LENGTH = 200;
 
 const PreferenceListSchema = z.array(z.string().trim().min(1).max(MAX_PREFERENCE_LENGTH)).max(MAX_PREFERENCE_ITEMS);
 
-export const ColetaOutputSchema = z
-  .strictObject({
-    kind: z.enum(['preference', 'question', 'irrelevant', 'ambiguous']),
-    foodPreferences: PreferenceListSchema,
-    dietaryRestrictions: PreferenceListSchema,
-    avoids: PreferenceListSchema,
-    budgetText: z.string().trim().min(1).max(40).nullable(),
-    clarification: z.string().trim().min(1).max(MAX_CLARIFICATION_LENGTH).nullable(),
-  })
-  .refine((output) => output.kind !== 'ambiguous' || output.clarification !== null, {
-    message: 'kind "ambiguous" exige clarification',
-    path: ['clarification'],
-  });
+const COLETA_CAMPOS = {
+  kind: z.enum(['preference', 'question', 'irrelevant', 'ambiguous']),
+  foodPreferences: PreferenceListSchema,
+  dietaryRestrictions: PreferenceListSchema,
+  avoids: PreferenceListSchema,
+  wishes: PreferenceListSchema,
+  budgetText: z.string().trim().min(1).max(40).nullable(),
+  clarification: z.string().trim().min(1).max(MAX_CLARIFICATION_LENGTH).nullable(),
+};
+const ambiguoExigePergunta = (o: { kind: string; clarification: string | null }) =>
+  o.kind !== 'ambiguous' || o.clarification !== null;
+
+export const ColetaOutputSchema = z.strictObject(COLETA_CAMPOS).refine(ambiguoExigePergunta, {
+  message: 'kind "ambiguous" exige clarification',
+  path: ['clarification'],
+});
 
 export type ColetaOutput = z.infer<typeof ColetaOutputSchema>;
+
+/**
+ * Saída da coleta em lote: um resultado por participante do lote, cada um
+ * com o participantId exato. O schema é montado por chamada, com os ids do
+ * lote, para o modelo não inventar nem esquecer ninguém (fora disso: nova tentativa).
+ */
+export function criarColetaLoteSchema(participantIds: readonly string[]) {
+  const [primeiro, ...resto] = participantIds;
+  if (primeiro === undefined) throw new Error('lote vazio');
+  const item = z
+    .strictObject({ participantId: z.enum([primeiro, ...resto]), ...COLETA_CAMPOS })
+    .refine(ambiguoExigePergunta, { message: 'kind "ambiguous" exige clarification', path: ['clarification'] });
+
+  return z.strictObject({ resultados: z.array(item) }).refine(
+    (o) =>
+      o.resultados.length === participantIds.length &&
+      new Set(o.resultados.map((r) => r.participantId)).size === participantIds.length,
+    { message: `devolva exatamente um resultado para cada participante: ${participantIds.join(', ')}`, path: ['resultados'] },
+  );
+}
+
+export type ColetaLoteOutput = z.infer<ReturnType<typeof criarColetaLoteSchema>>;
 
 // ---------------------------------------------------------------------------
 // Saída do modelo ao interpretar um pedido de ajuste ("troca o meu por um café").
@@ -190,3 +215,44 @@ export const AjusteOutputSchema = z
   });
 
 export type AjusteOutput = z.infer<typeof AjusteOutputSchema>;
+
+// ---------------------------------------------------------------------------
+// Proposta: o modelo só faz o casamento semântico. Para cada pessoa e cada
+// desejo dela (na ordem), lista ids que atendem e ids substitutos, do melhor
+// para o pior; o que não aparece "não serve". Quem monta lojas, preços,
+// pedido mínimo, orçamento e rateio é o código.
+// ---------------------------------------------------------------------------
+
+export const MAX_IDS_POR_CLASSE = 8;
+
+/** Schema montado por chamada: ids e número de desejos de cada pessoa. */
+export function criarClassificacaoSchema(desejosPorPessoa: ReadonlyMap<string, number>) {
+  const ids = [...desejosPorPessoa.keys()];
+  const [primeiro, ...resto] = ids;
+  if (primeiro === undefined) throw new Error('nenhuma pessoa para classificar');
+  const lista = z.array(IdSchema).max(MAX_IDS_POR_CLASSE);
+
+  return z
+    .strictObject({
+      pessoas: z.array(
+        z.strictObject({
+          participantId: z.enum([primeiro, ...resto]),
+          desejos: z.array(z.strictObject({ atende: lista, substitutos: lista })),
+        }),
+      ),
+    })
+    .refine(
+      (o) =>
+        o.pessoas.length === ids.length &&
+        new Set(o.pessoas.map((p) => p.participantId)).size === ids.length &&
+        o.pessoas.every((p) => p.desejos.length === desejosPorPessoa.get(p.participantId)),
+      {
+        message: `um item por pessoa (${ids.join(', ')}) e um item em "desejos" para cada desejo dela, na ordem`,
+        path: ['pessoas'],
+      },
+    );
+}
+
+export type ClassificacaoOutput = z.infer<ReturnType<typeof criarClassificacaoSchema>>;
+
+export const JustificativaSchema = z.strictObject({ justification: JustificationSchema });

@@ -29,8 +29,8 @@ qualquer fase não final ──cancelar──▶ cancelada
 
 | Fase | Arquivo | Modelo | O que faz |
 |---|---|---|---|
-| Coleta | `coleta.ts` | `fast`, sem ferramentas | Filtro barato (descarta vazias e só emoji), extrai `foodPreferences`, `dietaryRestrictions`, `avoids` e o trecho de orçamento (convertido em código). Perguntas ficam em `pendingQuestions`. |
-| Proposta | `proposta.ts` | `capable`, sem tool calling | Busca lojas em código (`catalogo.ts`), filtra itens elegíveis por pessoa (`regras/elegibilidade.ts`), o modelo escolhe ids, o código valida, recalcula e escolhe a melhor opção. |
+| Coleta | `coleta.ts` | `fast`, sem ferramentas | Filtro barato (descarta vazias e só emoji), extrai `foodPreferences`, `dietaryRestrictions`, `avoids` e o trecho de orçamento (convertido em código). Perguntas ficam em `pendingQuestions`. `coletarLote` faz o mesmo para até 10 pessoas numa chamada, com schema montado com os ids do lote. |
+| Proposta | `proposta.ts` | `capable` (classificação) + `fast` (justificativa) | Busca lojas em código (`catalogo.ts`) e filtra itens elegíveis por pessoa (`regras/elegibilidade.ts`). O modelo só classifica, por desejo de cada pessoa, os itens em "atende", "substituto" ou "não serve". O código (`regras/combinacoes.ts`) enumera todas as combinações de 1 e 2 lojas, escolhe o melhor item por desejo, confere pedido mínimo e orçamento e escolhe: mais atendidos > menos desejos sem item > menos substitutos > menos lojas > menor total. O modelo só escreve a justificativa da opção escolhida. |
 | Ajuste | `ajuste.ts` | `fast` | `interpretarAjuste` converte texto em troca estruturada; `ajustar` troca o item da pessoa e recalcula. A pessoa só troca o próprio item. |
 | Fechamento | `fechamento.ts` | nenhum | Exige organizador e catálogo consultado há no máximo 60 s; revalida tudo e devolve `AuthorizedOrder`. |
 
@@ -40,7 +40,11 @@ qualquer fase não final ──cancelar──▶ cancelada
 - Saída validada com Zod (`schemas.ts`); schemas estritos: campo extra (ex.: preço) reprova. Fora do schema → uma nova tentativa com o erro → fallback (`llm.ts`).
 - O modelo só escolhe entre ids permitidos para cada pessoa; escolha fora disso é descartada com motivo.
 - Só portas de leitura de catálogo; não existe ferramenta de pedido para o modelo.
-- Cada chamada é registrada (fase, nível, tentativa, duração, sucesso) via `registrar`.
+- Cada chamada é registrada (fase, nível, tentativa, duração, sucesso, erro fatal) via `registrar`.
+- Modelo reserva opcional por nível (`AI_MODEL_FAST_FALLBACK`, `AI_MODEL_CAPABLE_FALLBACK`): um 429 do principal troca na hora para o reserva, e o principal fica de lado pelo tempo pedido pelo provedor.
+- Erros do provedor: chave inválida, plano ou cota diária (401, 402, 403, `FreeTierError`, `PerDay`) são **fatais**, sem nova tentativa; 429 de limite por minuto espera (`Retry-After`, `retryDelay`, "try again in") e repete até 3 vezes.
+
+Decisões, provedor escolhido e números medidos (acerto, latência, tokens): [`docs/core-decisoes.md`](../../docs/core-decisoes.md).
 
 ## Como o bot usa o core
 
@@ -51,7 +55,8 @@ Sem HTTP: o Telegram importa o core e chama a fachada `criarAgente` (`agente.ts`
 | Caminho | Conteúdo |
 |---|---|
 | `index.ts` | API pública: `criarAgente`, `SessoesEmMemoria`, tipos, fakes e `criarLlmDoAmbiente`. |
-| `agente.ts` | Fachada para a interface: iniciar, mensagem, propor, reabrirColeta, fechar, cancelar, obter. |
+| `agente.ts` | Fachada para a interface: iniciar, mensagem, mensagens (lote), propor, reabrirColeta, fechar, cancelar, obter. |
+| `agrupador.ts` | `criarAgrupador`: debounce por chat; mensagens quase simultâneas viram um lote (uma chamada ao modelo para até 10 pessoas). |
 | `sessoes.ts` | `SessoesEmMemoria` (implementação da `SessionStore`). |
 | `contracts.ts` | Tipos compartilhados com o time (ver abaixo). |
 | `ports.ts` | `CatalogPort` (só leitura), `LlmPort` (níveis `fast`/`capable`) e `SessionStore`. |
@@ -68,7 +73,7 @@ Sem HTTP: o Telegram importa o core e chama a fachada `criarAgente` (`agente.ts`
 ## Contratos compartilhados (`contracts.ts`)
 
 - `SessionId`, `ParticipantId`, `MoneyCents`.
-- `ParticipantPreferences`: `foodPreferences`, `dietaryRestrictions` (restrição dura, de saúde), `avoids` (rejeição de gosto) e `budgetCents` (privado).
+- `ParticipantPreferences`: `foodPreferences` (gosto e atributos), `wishes` (itens a receber, um por entrada: "um lanche e um bolo" → 2 itens, até 3), `dietaryRestrictions` (restrição dura, de saúde), `avoids` (rejeição de gosto) e `budgetCents` (privado).
 - `SessionStatus`: `collecting`, `reviewing`, `awaiting_confirmation`, `closed`, `cancelled`.
 - `IncomingMessage`, `CoreAction`.
 - Catálogo e proposta: `Store`, `MenuItem`, `ProposedItem` (com `isSubstitute?`), `StoreOrder`, `ParticipantShare`, `Split`, `Proposal`.
@@ -78,7 +83,9 @@ Alterações aqui são mínimas e combinadas com o time; consuma com `import typ
 
 ## Configuração do modelo
 
-Variáveis (ver `.env.example`): `AI_PROVIDER` (`openai-compat` ou vazio/`fake`), `AI_BASE_URL` (ex.: `https://opencode.ai/zen/v1`), `AI_MODEL` (ou `AI_MODEL_FAST` e `AI_MODEL_CAPABLE`) e `AI_API_KEY`. Não há modelo padrão no código: rode `npm run listar:modelos` e copie o id exato. Sem chave, o simulador usa o modelo fake heurístico. Testes nunca chamam rede.
+Provedor principal: **Google Gemini** pelo endpoint compatível com OpenAI (camada gratuita do AI Studio); plano B: **Groq**. Os dois endereços estão comentados no `.env.example`.
+
+Variáveis: `AI_PROVIDER` (`openai-compat` ou vazio/`fake`), `AI_BASE_URL`, `AI_MODEL` (ou `AI_MODEL_FAST` e `AI_MODEL_CAPABLE`) e `AI_API_KEY`. Não há modelo padrão no código: rode `npm run listar:modelos` e copie o id exato. Sem chave, o simulador usa o modelo fake heurístico. Testes nunca chamam rede.
 
 ## Como rodar
 
@@ -86,6 +93,7 @@ Variáveis (ver `.env.example`): `AI_PROVIDER` (`openai-compat` ou vazio/`fake`)
 npm run check            # lint + tipos (inclui scripts/) + testes
 npm run simular          # grupo no terminal: "Pedro: algo leve", /propor, /ajustar, /fechar
 npm run avaliar:coleta   # avalia o prompt de coleta no modelo configurado (acerto e latência)
+npm run avaliar:coleta -- --intervalo 4000   # ms entre chamadas, para camadas gratuitas
 npm run listar:modelos   # GET {AI_BASE_URL}/models: ids exatos para AI_MODEL
 ```
 

@@ -91,3 +91,23 @@ describe('FakeLlm', () => {
     ).rejects.toThrow(/sem resposta roteirizada/);
   });
 });
+
+describe('gerarEstruturado: erro fatal do provedor', () => {
+  it('não tenta de novo, marca o registro como fatal e lança LlmSaidaInvalidaError com fatal = true', async () => {
+    const registros: LlmCallRecord[] = [];
+    const fatal = Object.assign(new Error('provedor respondeu HTTP 403: FreeTierError'), { fatal: true });
+    const llm = new FakeLlm([fatal, { resposta: 'nunca chega aqui' }]);
+
+    const erro = (await gerarEstruturado(opcoes(llm, registros)).catch((e: unknown) => e)) as LlmSaidaInvalidaError;
+    expect(erro).toBeInstanceOf(LlmSaidaInvalidaError);
+    expect(erro.fatal).toBe(true);
+    expect(erro.attempts).toBe(1);
+    expect(llm.requests).toHaveLength(1);
+    expect(registros).toEqual([expect.objectContaining({ ok: false, fatal: true, error: expect.stringContaining('FreeTierError') })]);
+  });
+
+  it('erro comum continua com nova tentativa', async () => {
+    const llm = new FakeLlm([new Error('503'), { resposta: 'ok' }]);
+    await expect(gerarEstruturado(opcoes(llm))).resolves.toEqual({ resposta: 'ok' });
+  });
+});

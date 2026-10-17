@@ -31,7 +31,7 @@ Todas devolvem `Promise<Resposta>` e **não lançam exceção** para casos esper
 | Evento no Telegram | Chamada |
 |---|---|
 | Alguém menciona o bot | `iris.iniciar(chatId, { id, displayName })` — quem mencionou vira organizador |
-| Mensagem no grupo durante o pedido | `iris.mensagem({ sessionId, participantId, text }, displayName)` |
+| Mensagem no grupo durante o pedido | `agrupador.adicionar(...)` (recomendado, ver "Mensagens em lote") ou `iris.mensagem({ sessionId, participantId, text }, displayName)` |
 | Botão "Montar pedido" | `iris.propor(chatId, quemClicou)` |
 | Botão "Confirmar pedido" | `iris.fechar(chatId, quemClicou)` |
 | Botão "Voltar para a coleta" | `iris.reabrirColeta(chatId, quemClicou)` |
@@ -41,6 +41,42 @@ Todas devolvem `Promise<Resposta>` e **não lançam exceção** para casos esper
 Não precisa checar se quem clicou é o organizador: o core recusa com `outcome: 'not_authorized'` e já devolve a mensagem privada. Mensagens de pessoas diferentes no mesmo grupo podem chegar ao mesmo tempo: o core processa uma de cada vez por grupo.
 
 `mensagem` decide sozinha o que fazer pela fase: na coleta registra preferências; com proposta na mesa interpreta pedidos de troca ("troca o meu por um café").
+
+## Mensagens em lote (use isto no grupo)
+
+O provedor gratuito limita tokens por minuto. Se 10 pessoas mandarem mensagem quase juntas, `iris.mensagem` faria 10 chamadas ao modelo. Com o **agrupador**, elas viram **uma** chamada (até 10 pessoas por chamada):
+
+```ts
+import { criarAgrupador } from './core/index.js';
+
+const agrupador = criarAgrupador(iris, {
+  esperaMs: 2000,     // envia 2 s depois da última mensagem (debounce)
+  esperaMaxMs: 6000,  // ...ou no máximo 6 s depois da primeira, mesmo com gente digitando
+  maxLote: 10,        // ...ou na hora, ao juntar 10 mensagens
+  aoResponder: async (chatId, resposta) => {
+    // mesmas regras de sempre: envie resposta.actions, desenhe resposta.proposal se vier
+  },
+  onError: (e) => console.error(e),
+});
+
+bot.on('message:text', (ctx) => {
+  agrupador.adicionar(
+    { sessionId: String(ctx.chat.id), participantId: String(ctx.from.id), text: ctx.message.text },
+    ctx.from.first_name,
+  );
+});
+
+// Antes de propor, fechar, cancelar ou reabrir, envie o que estiver pendente:
+await agrupador.esvaziar(chatId);
+await iris.propor(chatId, quemClicou);
+```
+
+- `adicionar` não espera o modelo; a resposta chega em `aoResponder`, uma vez por lote.
+- Mensagens da mesma pessoa no mesmo lote são lidas juntas, em ordem (a última vale se ela mudou de ideia).
+- Na proposta, o lote é processado como ajustes, um por mensagem, em ordem.
+- `resposta.resultados` traz o outcome de cada pessoa (`{ participantId, outcome }[]`), útil para reagir à mensagem certa (ex.: 👍).
+- Sem o agrupador, dá para chamar direto `iris.mensagens(chatId, [{ participantId, text, displayName }, ...])`.
+- Ao desligar o bot: `await agrupador.esvaziarTudo()`.
 
 ## `Resposta`
 
@@ -68,6 +104,8 @@ interface Resposta {
 | outcome | O que o bot faz |
 |---|---|
 | `started` / `already_active` | Avisar que o pedido começou / já está em andamento |
+| `batch` | Lote processado: envie as actions; o outcome de cada pessoa está em `resultados` |
+| `empty` | Lote vazio; nada a fazer |
 | `preference_updated` | Opcional: reagir à mensagem (ex.: 👍) |
 | `question` | Já há mensagem privada de confirmação nas actions |
 | `clarification` | Já há pergunta privada nas actions |
@@ -86,7 +124,8 @@ interface Resposta {
 - Dinheiro vem em **centavos inteiros**: `2590` → `R$ 25,90` (`(c / 100).toFixed(2).replace('.', ',')`). Nunca some valores no bot: use `subtotalCents`, `totalCents` e `split`.
 - Por loja (`proposal.orders`): nome da loja (via catálogo), itens por pessoa, entrega, total.
 - Rateio (`proposal.split.shares`): quanto cada pessoa paga (itens + parte da entrega).
-- `item.isSubstitute`: marcar como "sugestão parecida".
+- Uma pessoa pode ter **mais de um item** ("um lanche e um bolo de cenoura"): agrupe por `participantId`. No rateio ela aparece uma vez, com a soma dos itens e uma parte da entrega de cada loja em que pediu.
+- `item.isSubstitute`: marcar como "sugestão parecida" (vale por item).
 - `proposal.uncoveredParticipantIds`: quem ficou sem item.
 - `proposal.justification`: texto curto da Íris, pode ir no topo.
 - **Nunca mostre `preferences.budgetCents` no grupo**: o orçamento é privado.

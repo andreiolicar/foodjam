@@ -3,6 +3,9 @@ export type * from './contracts.js';
 
 export { criarAgente, TEXTOS } from './agente.js';
 export type { Agente, AgenteDeps, Organizador, Resposta } from './agente.js';
+export { criarAgrupador } from './agrupador.js';
+export type { Agrupador, AgrupadorOptions } from './agrupador.js';
+export type { ItemLote } from './coleta.js';
 export { SessoesEmMemoria } from './sessoes.js';
 export type { CatalogPort, LlmPort, LlmRequest, LlmTier, SessionRecord, SessionStore } from './ports.js';
 export { StoreNotFoundError } from './ports.js';

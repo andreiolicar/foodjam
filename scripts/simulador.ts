@@ -17,6 +17,7 @@ import { FakeLlm, responderHeuristico } from '../src/core/fakes/llm-fake.js';
 import { fechar } from '../src/core/fechamento.js';
 import type { LlmCallRecord } from '../src/core/llm.js';
 import { criarLlmDoAmbiente, temProvedorReal } from '../src/core/llm-ambiente.js';
+import { OpenAiCompatLlm } from '../src/core/llm-openai.js';
 import { propor } from '../src/core/proposta.js';
 import type { TimedCatalogSnapshot } from '../src/core/regras/validar-escolhas.js';
 import type { CoreSession } from '../src/core/sessao.js';
@@ -33,7 +34,8 @@ const AJUDA = `Comandos:
   /sessao             mostra a sessão
   /buscar termo       busca lojas no catálogo fake
   /cardapio lojaId    mostra o cardápio de uma loja
-  /log                chamadas ao modelo
+  /log                chamadas ao modelo (e tokens, com modelo real)
+  /tokens             tokens gastos por nível (modelo real)
   /cancelar           organizador cancela a sessão
   /ajuda              esta ajuda
   /sair               encerra`;
@@ -66,6 +68,24 @@ const nomeDe = (id: string) => sessao.participants.find((p) => p.id === id)?.dis
 const nomeItem = (id: string) => catalogoProposta?.menuItems.find((i) => i.id === id)?.name ?? id;
 const nomeLoja = (id: string) => catalogoProposta?.stores.find((s) => s.id === id)?.name ?? id;
 
+/** Uso de tokens informado pelo provedor (só com o adaptador real). */
+const usos = () => (llm instanceof OpenAiCompatLlm ? llm.usos : []);
+
+function mostrarTokens(desde: number): void {
+  const lista = usos().slice(desde);
+  if (lista.length === 0) return;
+  for (const tier of ['fast', 'capable'] as const) {
+    const doNivel = lista.filter((u) => u.tier === tier);
+    if (doNivel.length === 0) continue;
+    const soma = (f: (u: (typeof doNivel)[number]) => number) => doNivel.reduce((t, u) => t + f(u), 0);
+    console.log(
+      `  tokens ${tier} (${doNivel[0]?.model}): ${doNivel.length} chamada(s) · entrada ${soma((u) => u.promptTokens)}` +
+        ` · saída ${soma((u) => u.completionTokens)} (raciocínio ${soma((u) => u.reasoningTokens)}) · total ${soma((u) => u.totalTokens)}`,
+    );
+  }
+  if (llm instanceof OpenAiCompatLlm) console.log(`  modo de saída estruturada: ${llm.mode}`);
+}
+
 function mostrarSessao(): void {
   console.log(`\nSessão ${sessao.id} · fase: ${sessao.status} · organizador: ${sessao.organizerId}`);
   for (const p of sessao.participants) {
@@ -74,6 +94,7 @@ function mostrarSessao(): void {
     console.log(`      quer: ${foodPreferences.join(', ') || '—'}`);
     console.log(`      restrições: ${dietaryRestrictions.join(', ') || '—'}`);
     console.log(`      evita: ${avoids.join(', ') || '—'}`);
+    console.log(`      itens a receber: ${(p.preferences.wishes ?? []).join(', ') || '—'}`);
     console.log(`      orçamento (privado): ${budgetCents === undefined ? '—' : brl(budgetCents)}`);
   }
   for (const q of sessao.pendingQuestions ?? []) {
@@ -149,6 +170,10 @@ async function executar(linha: string): Promise<boolean> {
       return true;
     case '/log':
       console.table(chamadas.map((c) => ({ ...c, durationMs: Math.round(c.durationMs) })));
+      mostrarTokens(0);
+      return true;
+    case '/tokens':
+      mostrarTokens(0);
       return true;
     case '/buscar':
       for (const loja of await catalogo.searchStores(argumento)) {
@@ -169,7 +194,11 @@ async function executar(linha: string): Promise<boolean> {
       console.log('  de volta à coleta');
       return true;
     case '/propor': {
+      const usosAntes = usos().length;
+      const inicio = performance.now();
       const result = await propor(sessao, { catalog: catalogo, llm, now: agora(), proposalId: `p${++numeroProposta}`, registrar });
+      console.log(`  (proposta em ${Math.round(performance.now() - inicio)} ms)`);
+      mostrarTokens(usosAntes);
       if (result.catalog) catalogoProposta = result.catalog;
       if (!result.ok) {
         console.log(`  não foi possível propor: ${result.reason}`);
@@ -178,6 +207,11 @@ async function executar(linha: string): Promise<boolean> {
       }
       sessao = result.session;
       mostrarProposta(result.proposal);
+      const m = result.metricas;
+      console.log(
+        `  ${result.combinacoesAvaliadas} combinações avaliadas · escolhida: ${m.atendidos} atendido(s) com o que pediram,` +
+          ` ${m.faltando} desejo(s) sem item, ${m.substitutos} substituto(s), ${m.lojas} loja(s)`,
+      );
       for (const d of result.discarded) console.log(`  descartado: ${nomeDe(d.participantId)} → ${d.menuItemId} (${d.reason})`);
       for (const u of result.uncertain) console.log(`  ⚠ confirmar ingredientes: ${nomeDe(u.participantId)} → ${nomeItem(u.menuItemId)}`);
       return true;
@@ -243,10 +277,29 @@ async function executar(linha: string): Promise<boolean> {
 const modo = usaModeloReal ? `modelo real (${process.env.AI_MODEL ?? '?'})` : 'modelo fake heurístico (sem AI_API_KEY)';
 console.log(`FoodJam · simulador · catálogo fake · ${modo}. Organizador: ${organizador}.\n${AJUDA}\n`);
 const rl = createInterface({ input: stdin, output: stdout, prompt: '> ' });
+// Fila própria: as linhas são lidas assim que chegam (colar várias ou usar pipe
+// funciona) e processadas em ordem, mesmo depois de a entrada fechar.
+const fila: string[] = [];
+let entradaFechada = false;
+let acordar: (() => void) | undefined;
+rl.on('line', (linha) => {
+  fila.push(linha);
+  acordar?.();
+});
+rl.on('close', () => {
+  entradaFechada = true;
+  acordar?.();
+});
+
 rl.prompt();
-// for await enfileira as linhas, então colar várias de uma vez também funciona.
-for await (const entrada of rl) {
-  const linha = entrada.trim();
+for (;;) {
+  if (fila.length === 0) {
+    if (entradaFechada) break;
+    await new Promise<void>((resolve) => (acordar = resolve));
+    acordar = undefined;
+    continue;
+  }
+  const linha = (fila.shift() ?? '').trim();
   if (linha) {
     if (!stdin.isTTY) console.log(linha);
     try {
@@ -255,6 +308,6 @@ for await (const entrada of rl) {
       console.log(`  erro: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  rl.prompt();
+  if (!entradaFechada) rl.prompt();
 }
 rl.close();
