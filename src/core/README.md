@@ -40,7 +40,8 @@ qualquer fase não final ──cancelar──▶ cancelada
 - Saída validada com Zod (`schemas.ts`); schemas estritos: campo extra (ex.: preço) reprova. Fora do schema → uma nova tentativa com o erro → fallback (`llm.ts`).
 - O modelo só escolhe entre ids permitidos para cada pessoa; escolha fora disso é descartada com motivo.
 - Só portas de leitura de catálogo; não existe ferramenta de pedido para o modelo.
-- Cada chamada é registrada (fase, nível, tentativa, duração, sucesso) via `registrar`.
+- Cada chamada é registrada (fase, nível, tentativa, duração, sucesso, erro fatal) via `registrar`.
+- Erros do provedor: chave inválida, plano ou cota diária (401, 402, 403, `FreeTierError`, `PerDay`) são **fatais**, sem nova tentativa; 429 de limite por minuto espera (`Retry-After`, `retryDelay`, "try again in") e repete até 3 vezes.
 
 ## Como o bot usa o core
 
@@ -78,7 +79,9 @@ Alterações aqui são mínimas e combinadas com o time; consuma com `import typ
 
 ## Configuração do modelo
 
-Variáveis (ver `.env.example`): `AI_PROVIDER` (`openai-compat` ou vazio/`fake`), `AI_BASE_URL` (ex.: `https://opencode.ai/zen/v1`), `AI_MODEL` (ou `AI_MODEL_FAST` e `AI_MODEL_CAPABLE`) e `AI_API_KEY`. Não há modelo padrão no código: rode `npm run listar:modelos` e copie o id exato. Sem chave, o simulador usa o modelo fake heurístico. Testes nunca chamam rede.
+Provedor principal: **Google Gemini** pelo endpoint compatível com OpenAI (camada gratuita do AI Studio); plano B: **Groq**. Os dois endereços estão comentados no `.env.example`.
+
+Variáveis: `AI_PROVIDER` (`openai-compat` ou vazio/`fake`), `AI_BASE_URL`, `AI_MODEL` (ou `AI_MODEL_FAST` e `AI_MODEL_CAPABLE`) e `AI_API_KEY`. Não há modelo padrão no código: rode `npm run listar:modelos` e copie o id exato. Sem chave, o simulador usa o modelo fake heurístico. Testes nunca chamam rede.
 
 ## Como rodar
 
@@ -86,6 +89,7 @@ Variáveis (ver `.env.example`): `AI_PROVIDER` (`openai-compat` ou vazio/`fake`)
 npm run check            # lint + tipos (inclui scripts/) + testes
 npm run simular          # grupo no terminal: "Pedro: algo leve", /propor, /ajustar, /fechar
 npm run avaliar:coleta   # avalia o prompt de coleta no modelo configurado (acerto e latência)
+npm run avaliar:coleta -- --intervalo 4000   # ms entre chamadas, para camadas gratuitas
 npm run listar:modelos   # GET {AI_BASE_URL}/models: ids exatos para AI_MODEL
 ```
 
