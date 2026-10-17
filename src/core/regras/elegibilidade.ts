@@ -7,14 +7,37 @@ export const normalizar = (text: string) =>
     .replace(/\p{Diacritic}/gu, '')
     .toLowerCase();
 
-// Palavras (sem acento) que indicam ingrediente proibido em cada restrição.
-const CARNES = ['carne', 'bovin', 'frango', 'bacon', 'presunto', 'salmao', 'peixe', 'atum', 'camarao', 'calabresa', 'linguica', 'peru', 'sashimi', 'sushi'];
+/** Palavras do texto, sem acento e em minúsculas. */
+export const palavras = (text: string) => normalizar(text).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+
+/**
+ * Casa um termo com palavras inteiras do texto (já em palavras()).
+ * - "mel": só a palavra "mel" (ou plural simples "meis"/"meles"); não casa "caramelo" nem "melancia".
+ * - "bovin*": radical explícito, casa palavras que começam com "bovin" (bovino, bovina).
+ * - "creme de leite": sequência de palavras; o "*" vale para a última.
+ */
+export function contemTermo(textoPalavras: readonly string[], termo: string): boolean {
+  const radical = termo.endsWith('*');
+  const partes = (radical ? termo.slice(0, -1) : termo).split(' ').filter(Boolean);
+  const casa = (palavra: string, parte: string, ultima: boolean) =>
+    ultima && radical ? palavra.startsWith(parte) : palavra === parte || palavra === `${parte}s` || palavra === `${parte}es`;
+
+  return textoPalavras.some((_, inicio) =>
+    partes.every((parte, j) => {
+      const palavra = textoPalavras[inicio + j];
+      return palavra !== undefined && casa(palavra, parte, j === partes.length - 1);
+    }),
+  );
+}
+
+// Termos (sem acento) que indicam ingrediente proibido em cada restrição. "*" = radical.
+const CARNES = ['carne', 'bovin*', 'frango', 'bacon', 'presunto', 'salmao', 'peixe', 'atum', 'camarao', 'calabresa', 'linguica', 'peru', 'sashimi', 'sushi'];
 const LATICINIOS = ['queijo', 'leite', 'requeijao', 'manteiga', 'creme de leite', 'iogurte', 'mussarela', 'chocolate', 'brigadeiro'];
 const OVOS_MEL = ['ovo', 'mel', 'maionese'];
-const GLUTEN = ['pao', 'trigo', 'massa', 'bolo', 'lanche', 'wrap', 'empanad', 'torta', 'pizza', 'misto'];
+const GLUTEN = ['pao', 'paes', 'trigo', 'massa', 'bolo', 'lanche', 'wrap', 'empanad*', 'torta', 'pizza', 'misto'];
 
 interface RegraRestricao {
-  /** Fragmentos (sem acento) que identificam a restrição no texto da pessoa. */
+  /** Termos que identificam a restrição no texto da pessoa. */
   match: string[];
   proibidos: string[];
   /** Termos que confirmam o item como seguro mesmo citando algo da lista (ex.: "vegano"). */
@@ -22,31 +45,30 @@ interface RegraRestricao {
 }
 
 const REGRAS: RegraRestricao[] = [
-  { match: ['vegan'], proibidos: [...CARNES, ...LATICINIOS, ...OVOS_MEL], seguros: ['vegan'] },
-  { match: ['vegetarian'], proibidos: CARNES, seguros: ['vegetarian', 'vegan'] },
-  { match: ['lactose', 'laticinio', 'leite'], proibidos: LATICINIOS, seguros: ['sem lactose', 'vegan'] },
-  { match: ['gluten', 'celiac'], proibidos: GLUTEN, seguros: ['sem gluten'] },
+  { match: ['vegan*'], proibidos: [...CARNES, ...LATICINIOS, ...OVOS_MEL], seguros: ['vegan*'] },
+  { match: ['vegetarian*'], proibidos: CARNES, seguros: ['vegetarian*', 'vegan*'] },
+  { match: ['lactose', 'laticinio*', 'leite'], proibidos: LATICINIOS, seguros: ['sem lactose', 'vegan*'] },
+  { match: ['gluten', 'celiac*'], proibidos: GLUTEN, seguros: ['sem gluten'] },
 ];
 
 // Sinônimos para rejeições de gosto ("sem japonês" também evita sushi).
+const JAPONES = ['japon*', 'japa', 'sushi', 'sashimi', 'temaki'];
+const HAMBURGUER = ['hamburg*', 'burger*'];
 const SINONIMOS: Record<string, string[]> = {
-  japon: ['japon', 'japa', 'sushi', 'sashimi', 'temaki'],
-  japa: ['japon', 'japa', 'sushi', 'sashimi', 'temaki'],
-  hamburg: ['hamburg', 'burger'],
-  burger: ['hamburg', 'burger'],
+  japon: JAPONES,
+  japa: JAPONES,
+  hamburg: HAMBURGUER,
+  burger: HAMBURGUER,
   doce: ['doce', 'bolo', 'brigadeiro', 'torta'],
 };
 
 const PALAVRAS_VAZIAS = new Set(['sem', 'alergia', 'alergico', 'alergica', 'a', 'de', 'ao', 'intolerancia', 'restricao', 'nada']);
 
-const textoDoItem = (item: MenuItem, store: Store | undefined) =>
-  normalizar(`${store?.name ?? ''} ${item.name} ${item.description ?? ''}`);
+const palavrasDoItem = (item: MenuItem, store: Store | undefined) =>
+  palavras(`${store?.name ?? ''} ${item.name} ${item.description ?? ''}`);
 
 /** Palavras significativas de uma restrição sem regra conhecida ("alergia a amendoim" → ["amendoim"]). */
-const palavrasChave = (texto: string) =>
-  normalizar(texto)
-    .split(/[^\p{L}]+/u)
-    .filter((w) => w.length >= 3 && !PALAVRAS_VAZIAS.has(w));
+const palavrasChave = (texto: string) => palavras(texto).filter((w) => w.length >= 3 && !PALAVRAS_VAZIAS.has(w));
 
 /**
  * Restrição dura. Para restrições conhecidas, usa listas de ingredientes;
@@ -55,14 +77,14 @@ const palavrasChave = (texto: string) =>
  */
 export function violaRestricao(item: MenuItem, restricao: string): boolean {
   // Só o texto do item: o nome da loja ("Padaria Pão Quente") não diz o que o item contém.
-  const texto = textoDoItem(item, undefined);
-  const r = normalizar(restricao);
-  const regra = REGRAS.find((rg) => rg.match.some((m) => r.includes(m)));
+  const texto = palavrasDoItem(item, undefined);
+  const r = palavras(restricao);
+  const regra = REGRAS.find((rg) => rg.match.some((m) => contemTermo(r, m)));
   if (regra) {
-    if (regra.seguros.some((s) => texto.includes(s))) return false;
-    return regra.proibidos.some((p) => texto.includes(p));
+    if (regra.seguros.some((s) => contemTermo(texto, s))) return false;
+    return regra.proibidos.some((p) => contemTermo(texto, p));
   }
-  return palavrasChave(restricao).some((p) => texto.includes(p));
+  return palavrasChave(restricao).some((p) => contemTermo(texto, p));
 }
 
 /** Item que passou nas regras, mas sem descrição que confirme a restrição: sinalizar. */
@@ -72,10 +94,10 @@ export function itemIncerto(item: MenuItem, restricoes: readonly string[]): bool
 
 /** Rejeição de gosto: barra itens cuja loja ou texto citem o termo (ou sinônimo). */
 export function evitado(item: MenuItem, store: Store | undefined, avoid: string): boolean {
-  const texto = textoDoItem(item, store);
+  const texto = palavrasDoItem(item, store);
   return palavrasChave(avoid).some((palavra) => {
     const chave = Object.keys(SINONIMOS).find((k) => palavra.startsWith(k));
-    return (chave ? (SINONIMOS[chave] ?? []) : [palavra]).some((s) => texto.includes(s));
+    return (chave ? (SINONIMOS[chave] ?? []) : [palavra]).some((s) => contemTermo(texto, s));
   });
 }
 
