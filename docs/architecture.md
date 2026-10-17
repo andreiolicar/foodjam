@@ -1,4 +1,4 @@
-# Arquitetura da Íris
+# Arquitetura do foodjam
 
 ## Escopo desta entrega
 

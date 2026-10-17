@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-describe('bootstrap da Íris', () => {
+describe('bootstrap do foodjam', () => {
   it.each([
     ['telegram', () => import('../src/telegram/index.js')],
     ['core', () => import('../src/core/index.js')],
@@ -15,7 +15,7 @@ describe('bootstrap da Íris', () => {
   });
 
   it('executa o ponto de entrada sem arquivo .env ou credenciais', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'iris-smoke-'));
+    const directory = mkdtempSync(join(tmpdir(), 'foodjam-smoke-'));
 
     try {
       const output = execFileSync(
@@ -33,7 +33,7 @@ describe('bootstrap da Íris', () => {
         },
       );
 
-      expect(output.trim()).toBe('Íris: bootstrap inicializado.');
+      expect(output.trim()).toBe('foodjam: bootstrap inicializado.');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
