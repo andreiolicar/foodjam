@@ -1,8 +1,8 @@
 {
-  "name": "iris",
+  "name": "foodjam",
   "version": "0.1.0",
   "private": true,
-  "description": "Fundação da Íris, agente para pedidos coletivos no Telegram com integração MCP do iFood.",
+  "description": "Base do foodjam, agente para pedidos coletivos no Telegram com integração MCP do iFood.",
   "type": "module",
   "engines": {
     "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
