@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { DevelopmentOAuthProvider, openSystemBrowser } from './auth.js';
 import type { OpenBrowser } from './auth.js';
 import { readIfoodMcpConfig } from './config.js';
@@ -10,6 +11,9 @@ import { diagnosticError, reportDiagnostic } from './diagnostics.js';
 import type { DiagnosticListener, IfoodMcpDiagnostic, IfoodMcpStage } from './diagnostics.js';
 import { assertApprovedReadTool, findReadTool, snapshotReadArguments, validateReadResult, validateReadSchema } from './read-tools.js';
 import type { IfoodMcpReadResult } from './read-tools.js';
+import { assertApprovedCartTool, findCartTool } from './cart-tools.js';
+import type { IfoodMcpCartResult } from './cart-tools.js';
+import { snapshotToolArguments, validateToolResult, validateToolSchema } from './tool-validation.js';
 
 /** Metadados preservados de tools/list; não representa permissão de execução. */
 export interface IfoodMcpTool {
@@ -28,20 +32,30 @@ export interface IfoodMcpClient {
   connect(): Promise<IfoodMcpServer | undefined>;
   listTools(): Promise<IfoodMcpTool[]>;
   callReadTool(name: string, args: Record<string, unknown>): Promise<IfoodMcpReadResult>;
+  callCartTool(name: string, args: Record<string, unknown>): Promise<IfoodMcpCartResult>;
   /** Terminal e idempotente. Cancele e crie outro cliente para autenticar novamente. */
   close(): Promise<void>;
+}
+
+export interface IfoodMcpClientOptions {
+  openBrowser?: OpenBrowser;
+  onDiagnostic?: DiagnosticListener;
+  /** Decisão da aplicação confiável, nunca derivada de argumentos/saída do LLM. */
+  allowCartMutations?: boolean;
 }
 
 /** Criar/importar não abre rede, callback, navegador nem lê process.env. */
 export function createIfoodMcpClient(
   config: IfoodMcpConfig,
-  options: { openBrowser?: OpenBrowser; onDiagnostic?: DiagnosticListener } = {},
+  options: IfoodMcpClientOptions = {},
 ): IfoodMcpClient {
   // Valida também configuração fornecida diretamente, sem depender de process.env.
   const validated = readIfoodMcpConfig({
     IFOOD_MCP_ENDPOINT: config.endpoint, IFOOD_MCP_CLIENT_ID: config.clientId,
     IFOOD_MCP_CLIENT_SECRET: config.clientSecret, IFOOD_MCP_CALLBACK_URL: config.callbackUrl,
   });
+  // Snapshot: alterações posteriores no objeto de opções não habilitam escrita.
+  const allowCartMutations = options.allowCartMutations === true;
   let client: Client | undefined;
   let transport: StreamableHTTPClientTransport | undefined;
   let provider: DevelopmentOAuthProvider | undefined;
@@ -193,6 +207,40 @@ export function createIfoodMcpClient(
         return result;
       } catch (error) {
         const failure = diagnosticError('tools_read', error, httpContext.get('tools_read'));
+        reportDiagnostic(options.onDiagnostic, failure.diagnostic);
+        throw failure;
+      }
+    },
+    async callCartTool(name, args) {
+      const current = client;
+      try {
+        if (!connected || closed || !current) throw diagnosticError('tools_cart', undefined, { reason: 'cart_client_disconnected' });
+        if (!provider?.tokens()?.access_token) throw diagnosticError('tools_cart', undefined, { reason: 'cart_not_authenticated' });
+        assertApprovedCartTool(name, allowCartMutations);
+        const argumentsSnapshot = snapshotToolArguments(args, 'cart');
+        if (!catalog) await api.listTools();
+        if (!connected || closed || client !== current) throw diagnosticError('tools_cart', undefined, { reason: 'cart_client_disconnected' });
+        const tool = findCartTool(name, catalog ?? [], options.onDiagnostic);
+        startStage('tools_cart');
+        if (tool.execution && typeof tool.execution === 'object' && 'taskSupport' in tool.execution
+          && tool.execution.taskSupport === 'required') {
+          throw diagnosticError('tools_cart', undefined, { reason: 'cart_execution_unsupported' });
+        }
+        validateToolSchema(tool.inputSchema, argumentsSnapshot, 'input', 'cart');
+        if (!connected || closed || client !== current) throw diagnosticError('tools_cart', undefined, { reason: 'cart_client_disconnected' });
+        // SDK 1.32.1 callTool valida structuredContent até em isError=true.
+        // request preserva esse envelope; a validação de sucesso usa o catálogo
+        // completo abaixo, sem duplicar autenticação, transporte ou protocolo.
+        const result = validateToolResult(tool, await current.request({
+          method: 'tools/call', params: { name, arguments: argumentsSnapshot },
+        }, CallToolResultSchema), 'cart');
+        if (result.isError) reportDiagnostic(options.onDiagnostic, {
+          stage: 'tools_cart', event: 'failed', reason: 'cart_tool_failed',
+        });
+        else reportDiagnostic(options.onDiagnostic, { stage: 'tools_cart', event: 'succeeded' });
+        return result;
+      } catch (error) {
+        const failure = diagnosticError('tools_cart', error, httpContext.get('tools_cart'));
         reportDiagnostic(options.onDiagnostic, failure.diagnostic);
         throw failure;
       }

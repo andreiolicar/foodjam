@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createIfoodMcpClient, readIfoodMcpConfig } from '../../src/ifood/index.js';
-import type { IfoodMcpDiagnostic } from '../../src/ifood/index.js';
+import type { IfoodMcpDiagnostic, IfoodMcpTool } from '../../src/ifood/index.js';
 
 const endpoint = 'https://consumer-mcp.ifood.com.br/marketplace';
 const resourceMetadata = 'https://consumer-mcp.ifood.com.br/.well-known/oauth-protected-resource/marketplace';
@@ -23,6 +23,7 @@ function mockServer(options: {
   tokenFailure?: boolean; invalidTools?: boolean; alternateIssuer?: boolean;
   reconnectFailure?: boolean; malformedTokens?: boolean; requirePost?: boolean; clientFailure?: boolean;
   readCatalog?: boolean; readResult?: unknown;
+  cartCatalog?: IfoodMcpTool[]; cartResult?: unknown;
 } = {}) {
   const requests: { url: string; init: RequestInit | undefined }[] = [];
   const methods: string[] = [];
@@ -65,6 +66,12 @@ function mockServer(options: {
     const message = JSON.parse(String(init?.body)) as { id?: number; method: string; params?: { cursor?: string } };
     methods.push(message.method);
     if (message.method === 'notifications/initialized') return new Response(null, { status: 202 });
+    if (options.cartCatalog && message.method === 'tools/list') {
+      return Response.json({ jsonrpc: '2.0', id: message.id, result: { tools: options.cartCatalog } });
+    }
+    if (options.cartCatalog && message.method === 'tools/call') {
+      return Response.json({ jsonrpc: '2.0', id: message.id, result: options.cartResult });
+    }
     if (options.readCatalog && message.method === 'tools/list') {
       const result = message.params?.cursor ? { tools: [] } : {
         tools: [{
@@ -90,6 +97,80 @@ function mockServer(options: {
 afterEach(() => vi.restoreAllMocks());
 
 describe('SDK v1 real com HTTP externo simulado', () => {
+  // Schemas fictícios, não são contratos oficiais de carrinho.
+  const cartCatalog: IfoodMcpTool[] = [
+    { name: 'getCart', inputSchema: { type: 'object', properties: { cartId: { type: 'string' } }, required: ['cartId'], additionalProperties: false },
+      outputSchema: { type: 'object', properties: { total: { type: 'integer' } }, required: ['total'] } },
+    { name: 'createCart', inputSchema: { type: 'object', properties: { fixtureItems: { type: 'array', items: { type: 'string' } } }, required: ['fixtureItems'], additionalProperties: false },
+      outputSchema: { type: 'object', properties: { cartId: { type: 'string' } }, required: ['cartId'] } },
+  ];
+
+  it('executa getCart com SDK real em modo leitura mesmo com readOnlyHint false', async () => {
+    const callbackUrl = await localCallbackUrl();
+    const cartResult = { content: [], structuredContent: { total: 5779 }, _meta: { requestId: 'private-audit' } };
+    const remote = mockServer({
+      cartCatalog: [{ ...cartCatalog[0]!, annotations: { readOnlyHint: false, title: 'private-title' } }], cartResult,
+    });
+    const events: IfoodMcpDiagnostic[] = [];
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), {
+      onDiagnostic: (event) => events.push(event),
+      openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); },
+    });
+    try {
+      await client.connect();
+      await expect(client.callCartTool('getCart', { cartId: 'remote-cart' })).resolves.toEqual(cartResult);
+      expect(remote.methods).toEqual(['initialize', 'notifications/initialized', 'tools/list', 'tools/call']);
+      expect(events.filter((event) => event.event === 'annotation_mismatch')).toEqual([{ stage: 'tools_cart', event: 'annotation_mismatch' }]);
+      expect(JSON.stringify(events)).not.toMatch(/private-|remote-cart|test-secret|test-code|test-access-token/);
+    } finally { await client.close(); }
+  });
+
+  it.each([
+    ['getCart', { cartId: 'remote-cart' }, false, { content: [], structuredContent: { total: 5779, benefits: [{ amount: 1000 }], discounts: 0 }, _meta: { requestId: 'private-audit' } }],
+    ['createCart', { fixtureItems: ['remote-product'] }, true, { content: [], structuredContent: { cartId: 'remote-cart' } }],
+    ['getCart', { cartId: 'remote-cart' }, false, { content: [{ type: 'text', text: 'private-failure' }], isError: true, structuredContent: { failure: 'private-detail' } }],
+    ['createCart', { fixtureItems: ['remote-product'] }, true, { content: [], isError: true, structuredContent: { failure: 'private-detail' } }],
+  ] as const)('executa carrinho via SDK com HTTP 200 e preserva sucesso ou isError: %s', async (name, args, allowCartMutations, cartResult) => {
+    const callbackUrl = await localCallbackUrl();
+    const remote = mockServer({ cartCatalog, cartResult });
+    const events: IfoodMcpDiagnostic[] = [];
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), {
+      allowCartMutations, onDiagnostic: (event) => events.push(event),
+      openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); },
+    });
+    try {
+      await client.connect();
+      await expect(client.callCartTool(name, args)).resolves.toEqual(cartResult);
+      const calls = remote.requests.filter((request) => request.url === endpoint && request.init?.method === 'POST')
+        .map((request) => JSON.parse(String(request.init?.body)) as { method: string; params?: unknown })
+        .filter((body) => body.method === 'tools/call');
+      expect(calls).toEqual([expect.objectContaining({ method: 'tools/call', params: { name, arguments: args } })]);
+      expect(events).toContainEqual(expect.objectContaining({ stage: 'tools_cart', event: 'http_response', httpStatus: 200 }));
+      if ('isError' in cartResult) {
+        expect(events).toContainEqual(expect.objectContaining({ stage: 'tools_cart', event: 'failed', reason: 'cart_tool_failed' }));
+        expect(events).not.toContainEqual(expect.objectContaining({ stage: 'tools_cart', event: 'succeeded' }));
+      }
+      expect(JSON.stringify(events)).not.toContain('private-');
+    } finally { await client.close(); }
+  });
+
+  it('não envia tools/call de mutação ao SDK/HTTP sem habilitação explícita', async () => {
+    const callbackUrl = await localCallbackUrl();
+    const remote = mockServer({ cartCatalog, cartResult: { content: [] } });
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), { openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); } });
+    try {
+      await client.connect();
+      await expect(client.callCartTool('createCart', { fixtureItems: ['remote-product'] })).rejects.toMatchObject({ diagnostic: { reason: 'cart_mutations_disabled' } });
+      expect(remote.methods).toEqual(['initialize', 'notifications/initialized']);
+    } finally { await client.close(); }
+  });
+
   it.each([
     [{ content: [{ type: 'text', text: 'private-profile' }], structuredContent: { fixtureCount: 2, extra: 'private-extra' } }, false],
     [{ content: [{ type: 'text', text: 'private-failure' }], isError: true }, false],

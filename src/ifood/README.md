@@ -1,4 +1,4 @@
-# FoodJam — integração MCP do iFood (IF-01 e IF-02)
+# FoodJam — integração MCP do iFood (IF-01, IF-02 e IF-03)
 
 Responsável: Andrei. Branch: `feat/ifood-mcp`. **Íris** é o nome do agente
 cadastrado no portal; o produto e o cliente MCP se chamam **FoodJam**.
@@ -9,9 +9,10 @@ schemas reais das ferramentas. O fluxo utilizado foi OAuth `authorization_code`
 com `client_secret_post`, PKCE S256 e validação de state.
 
 Este módulo implementa conexão explícita, OAuth interativo para um usuário de
-teste, descoberta de ferramentas e execução restrita de consultas de leitura.
-Não interpreta conversas, calcula rateios, controla sessões do core ou executa
-operações comerciais de escrita. A composição com o
+teste, descoberta de ferramentas, execução restrita de consultas de leitura
+e operações de carrinho com mutações habilitadas explicitamente pela aplicação.
+Não interpreta conversas, calcula rateios, controla sessões do core ou conclui
+compras. A composição com o
 core/Telegram continua a cargo de `src/index.ts`, sem alterações nesta entrega.
 
 A IF-02 estende a IF-01 sem reconstruir autenticação/transporte. Os sete nomes
@@ -19,8 +20,10 @@ reais sem prefixo foram confirmados pelo responsável a partir de `listTools()`;
 schemas continuam dinâmicos. **A leitura real `getUser` foi validada manualmente
 no Mac em 17/10/2026**, conforme confirmação do responsável: autenticação OAuth,
 descoberta do catálogo, HTTP `200`, evento `tools_read: succeeded` e encerramento
-correto da conexão. Os testes automatizados usam HTTP/doubles locais; a validação
-manual não foi estendida às outras seis ferramentas de leitura nesta entrega.
+correto da conexão. No smoke test da IF-03, a pré-verificação real também passou
+com `listAddresses`, `getMerchant` e `getItem`. `browseOffers`, `searchOffers` e
+`getRecommendations` permanecem cobertas somente por testes automatizados com
+HTTP/doubles locais nesta entrega.
 
 ## Organização e dependências
 
@@ -33,6 +36,12 @@ manual não foi estendida às outras seis ferramentas de leitura nesta entrega.
 - `diagnostics.ts`: eventos por etapa e extração de metadados seguros dos erros.
 - `read-tools.ts`: política de leitura, argumentos JSON e validação de schemas/resultados.
 - `read-cli.ts`: teste real opcional de leitura, com resposta omitida do terminal.
+- `tool-validation.ts`: validação JSON/schema/envelope da IF-02 reutilizada pelas duas APIs.
+- `cart-tools.ts`: allowlist e separação de consultas/mutações de carrinho.
+- `cart-cli.ts`: validação manual opcional de carrinho, somente leitura por padrão.
+- `cart-smoke.ts`: inspeção local de estrutura e extração explícita de UUID, sem persistir respostas.
+- `smoke-setup.ts`: recupera os argumentos anteriores no SQLite local do OpenCode, somente leitura, e grava entradas privadas do teste.
+- `smoke-preflight.ts`: pré-verificação manual de endereço, estabelecimento e produto, usando somente a API de leitura da IF-02.
 
 Usa `@modelcontextprotocol/sdk` **1.32.1**, `StreamableHTTPClientTransport` e
 `OAuthClientProvider` do SDK v1; não há migração para v2. Zod permanece como peer
@@ -176,7 +185,8 @@ try {
 ```
 
 `callReadTool(name: string, args: Record<string, unknown>): Promise<IfoodMcpReadResult>`
-é o único caminho de execução exposto. Exige conexão aberta e tokens em memória.
+é o caminho de execução da IF-02. A IF-03 acrescenta `callCartTool`, descrito
+abaixo, sem ampliar a allowlist desta API. Exige conexão aberta e tokens em memória.
 Se não houver catálogo nessa conexão, descobre-o por `listTools()` antes da
 primeira leitura. O catálogo completo é guardado em cópia privada, sem alterar
 os schemas recebidos, até nova listagem, desconexão ou encerramento. Uma falha
@@ -247,11 +257,11 @@ quem consumir os resultados também deve evitar logá-los.
 
 ### Operações bloqueadas
 
-Todo nome fora da allowlist é bloqueado em código antes de `tools/call`,
+Em `callReadTool`, todo nome fora da allowlist é bloqueado antes de `tools/call`,
 independentemente de instruções do modelo ou annotations do servidor. Isso
 inclui `createCart`, `addItemToCart`, `updateCartItem`, `removeItemFromCart`,
 `createAddress`, `setCartPayment`, `submitOrder` e quaisquer novas operações de
-escrita. Não há executor MCP irrestrito público, wrappers de carrinho, checkout,
+escrita. Carrinhos usam exclusivamente a API controlada da IF-03. Não há executor MCP irrestrito público, checkout,
 busca inteligente, orçamento, interpretação de preferências ou rateio.
 
 ### Teste real opcional sem imprimir dados pessoais
@@ -284,14 +294,515 @@ Em **17/10/2026**, o responsável executou o teste real no Mac e confirmou
 autenticou por OAuth e descobriu as ferramentas antes da leitura, omitindo a
 resposta do terminal. Esse resultado manual foi informado pelo responsável;
 nenhuma leitura real foi executada pelo assistente e nenhum conteúdo do perfil
-foi salvo no repositório. As outras seis ferramentas permanecem sem validação
-manual nesta tarefa.
+foi salvo no repositório. Em 17/10/2026, o responsável também confirmou a
+pré-verificação real da IF-03 com `listAddresses`, `getMerchant` e `getItem`.
+As outras três ferramentas de leitura permanecem sem validação manual nesta
+entrega; a allowlist e as garantias da IF-02 continuam inalteradas.
 
 Os testes automatizados não acessam o iFood. A autenticação continua sendo de
 desenvolvimento, para um usuário, sem persistência entre execuções, com o
 navegador e callback no mesmo computador. O módulo depende da semântica de
 leitura dos nomes explicitamente aprovados; não audita a implementação interna
 do servidor nem libera outros nomes com base em descrições ou hints.
+
+## IF-03 — execução segura de carrinhos
+
+Esta camada encaminha solicitações ao carrinho remoto do iFood. Não mantém
+carrinhos locais, não cria identificadores e não implementa regras comerciais.
+**IF-03 validada no Mac em 17/10/2026**, conforme confirmação do responsável:
+pré-verificação aprovada, criação única por `createCart` e consulta posterior
+por `getCart` em modo somente leitura. As duas operações retornaram HTTP `200`,
+`tools_cart: succeeded` e código `0`; o UUID retornado foi validado, e a consulta
+confirmou exatamente um Tradicional One, quantidade 1. O teste usou autorização
+explícita e o usuário de teste; não houve checkout, pagamento ou `submitOrder`.
+Nenhuma chamada remota foi executada pelo assistente, e o identificador do
+carrinho, endereço, credenciais e dados pessoais não foram registrados aqui.
+
+Os nomes são os exatos informados na descoberta anterior; cada um também precisa
+existir no catálogo da conexão atual. Não há snapshots locais dos schemas
+oficiais de carrinho. O sucesso deste cenário não estende a validação real às
+outras cinco ferramentas nem a outros payloads, opções ou condições de entrega.
+
+### Operações e API pública
+
+| Ferramenta | Categoria | Solicitação encaminhada |
+| --- | --- | --- |
+| `createCart` | Mutação | Criar com restaurante, endereço e itens no mesmo payload, conforme schema |
+| `getCart` | Leitura | Consultar estado, itens, totais e benefícios |
+| `addItemToCart` | Mutação | Adicionar produto ao carrinho existente |
+| `updateCartItem` | Mutação | Enviar estado exigido do item, incluindo quantidade e opções |
+| `removeItemFromCart` | Mutação | Remover a linha identificada no carrinho |
+| `getCartDeliveryMethods` | Leitura | Consultar condições/métodos de entrega |
+| `setCartDelivery` | Mutação | Definir entrega e eventual agendamento conforme schema |
+
+```ts
+client.callCartTool(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<IfoodMcpCartResult>
+```
+
+O nome é validado em runtime. Os tipos `IfoodMcpCartToolName`,
+`IfoodMcpCartReadToolName`, `IfoodMcpCartMutationToolName`, `IfoodMcpCartResult`
+e `IfoodMcpClientOptions` são exportados por `index.ts`. Os argumentos são
+registros JSON, pois tipos fixos de payload poderiam divergir dos schemas
+oficiais descobertos. A API existente permanece disponível:
+`connect()`, `listTools()`, `callReadTool()` e `close()`.
+
+Exemplo de consulta com argumentos preparados pela aplicação conforme o schema
+recebido (os nomes/estrutura de campos não são fixados neste exemplo):
+
+```ts
+const client = createIfoodMcpClient(readIfoodMcpConfig());
+try {
+  await client.connect();
+  const catalog = await client.listTools();
+  // A aplicação prepara args de acordo com o inputSchema de getCart.
+  const args = await prepareArgumentsInApplication(catalog, 'getCart');
+  const result = await client.callCartTool('getCart', args);
+  if (result.isError) {
+    // Falha comercial/MCP: tratar privadamente, sem considerar HTTP 200 sucesso.
+  } else {
+    // Preservar a resposta original para validação/reconciliação pelo Core.
+  }
+} finally {
+  await client.close();
+}
+```
+
+`prepareArgumentsInApplication` é ilustrativo, pertence ao chamador e não é
+uma função deste módulo.
+
+### Separação entre leitura e escrita
+
+Mutações são **desabilitadas por padrão**. A única habilitação é a opção local
+`allowCartMutations: true` na criação do cliente:
+
+```ts
+// Executado pela aplicação confiável após sua decisão explícita.
+const client = createIfoodMcpClient(config, { allowCartMutations: true });
+```
+
+Essa decisão é copiada na criação e vale para a vida dessa instância. Somente o
+booleano `true` habilita escrita; alterar o objeto de opções depois não muda a
+decisão. Para voltar ao modo de leitura, feche e crie outro cliente com o padrão.
+Não há setter de autorização nem flag equivalente no payload de uma ferramenta.
+
+O Core controla essa configuração: não entregue a fábrica/configuração ao LLM,
+não aceite `allowCartMutations` de texto, argumentos de ferramenta ou metadados
+do servidor. A instrução isolada do modelo não autoriza mutações. A opção não é
+um sistema de permissões de usuários, nem uma autorização individual por chamada;
+se o Core precisar dessa granularidade, ele decide antes de encaminhar cada ação.
+Autorizar OAuth também não habilita mutações.
+
+Cada chamada exige conexão ativa, cliente aberto e token em memória. Antes de
+descobrir ou executar, confere a allowlist e, para mutações, a habilitação local.
+A ferramenta deve existir exatamente uma vez no catálogo privado da conexão;
+nomes com prefixos, aliases, espaços ou outra caixa são recusados. O mesmo
+catálogo paginado da IF-02 é reutilizado, atualizado por `listTools()` e
+invalidado ao falhar a descoberta, desconectar ou encerrar.
+
+Na API de carrinho, a classificação é exclusivamente local: `getCart` e
+`getCartDeliveryMethods` são leituras com `readOnlyHint` ausente, `true` ou
+`false`; as cinco mutações exigem habilitação explícita independentemente do hint.
+Anotações não ampliam nem reduzem essas permissões. Conforme a
+[especificação MCP](https://modelcontextprotocol.io/specification/2025-11-25/schema#toolannotations),
+são dicas, sem garantia de descrição fiel do comportamento da ferramenta.
+Se um booleano `readOnlyHint` contradisser a classificação local, o módulo
+emite somente `{ stage: 'tools_cart', event: 'annotation_mismatch' }`.
+Esse diagnóstico informativo não é falha, não copia anotações, IDs, argumentos
+ou respostas, e não altera a validação de schemas ou a autorização de mutações.
+Nomes desconhecidos continuam bloqueados, mesmo com hint de leitura.
+
+No primeiro teste real de `getCart`, o responsável relatou OAuth, conexão e
+`tools_list` bem-sucedidos, seguidos de `cart_tool_write_hint`. O código anterior
+tratava `readOnlyHint: false` como veto local. Esse bloqueio foi reproduzido e
+corrigido em testes offline; o responsável confirmou a repetição real com
+HTTP `200`, `tools_cart: succeeded` e saída `0`. Nenhuma chamada real foi feita
+pelo assistente. A política da API de leitura da IF-02 permanece inalterada.
+Ferramentas que exigem execução assíncrona via MCP Tasks são bloqueadas antes
+da execução (`cart_execution_unsupported`); esta API executa chamadas síncronas.
+
+`submitOrder`, `setCartPayment`, `listPaymentMethods`, `setVoucher`,
+`removeVoucher`, `createAddress` e qualquer nome fora das duas allowlists são
+bloqueados antes de executar, mesmo com escrita habilitada e independentemente
+de argumentos/annotations. `callReadTool` mantém sua lista original de sete
+leituras. O SDK e sua operação `request` não são expostos pela API pública.
+
+### Schemas, estruturas e identificadores
+
+A mesma infraestrutura da IF-02 cria um snapshot JSON dos argumentos e valida
+esse snapshot contra o `inputSchema` real usando o AJV do SDK. Não há coerção,
+campos padrão, reconstrução de estado local, consultas implícitas nem chamada
+extra para completar o payload. Schema não compilável falha fechado.
+
+`createCart` encaminha restaurante, endereço e itens juntos quando fornecidos
+conforme o schema. Não converte essa operação numa sequência de inclusões.
+Para `updateCartItem`, o chamador deve obter o estado necessário e preparar o
+payload completo exigido pelo schema, incluindo quantidade e opções quando
+obrigatórias. O adaptador não transforma uma alteração parcial em estado
+completo, nem infere opções/observações a manter. Payload incompleto é rejeitado.
+
+| Identificador | Significado e origem |
+| --- | --- |
+| `merchantId` | Restaurante/estabelecimento, obtido das ferramentas de catálogo |
+| `itemId` | Produto do catálogo do estabelecimento |
+| `cartId` | Carrinho remoto, obtido da resposta do iFood |
+| `cartItemId` | Linha/item inserido no carrinho remoto; não equivale ao `itemId` |
+
+O adapter preserva esses valores opacos. Os campos, nesting e restrições
+efetivamente aceitos vêm do schema descoberto; ele não troca um identificador
+por outro nem fabrica valores. Endereço e entrega também usam as estruturas
+oficiais, sem criar endereços nesta etapa.
+
+### Respostas, erros e auditoria financeira
+
+`IfoodMcpCartResult` preserva `content`, `structuredContent`, `isError` e os
+metadados entregues pelo SDK, incluindo informações de auditoria existentes.
+Não interpreta JSON contido em texto nem converte valores para contratos do Core.
+Totais, subtotais, taxas, preços, benefícios, descontos, moedas e unidades
+permanecem como recebidos. Benefício anunciado e desconto aplicado podem
+divergir; o adaptador não corrige nem distribui essa diferença. A reconciliação
+financeira e o rateio pertencem ao Core.
+
+`isError: true` devolve o envelope de erro intacto e emite
+`tools_cart: failed` / `cart_tool_failed`, sem evento de sucesso. Conteúdo de
+erro não é validado contra o schema de sucesso. HTTP `200` confirma apenas o
+transporte; mesmo `isError` ausente não substitui a validação de domínio no Core.
+Resultados de sucesso também são validados contra o `outputSchema` quando
+presente, inclusive quando descoberto em páginas anteriores.
+
+Na versão instalada **1.32.1**, `Client.callTool()` valida `structuredContent`
+contra o schema de sucesso até em algumas respostas com `isError: true`.
+Por isso o caminho privado de carrinho usa `Client.request()` com
+`method: 'tools/call'` e `CallToolResultSchema` no mesmo cliente SDK. O envelope
+continua validado pelo SDK e pelo adaptador; o schema de sucesso é aplicado
+pelo adaptador ao catálogo completo. Não há transporte, protocolo ou OAuth
+paralelo, nem desativação dos validadores das consultas existentes.
+
+Erros de rede, sessão, autorização, protocolo e validação rejeitam a Promise
+com `IfoodMcpDiagnosticError`. Preservam códigos técnicos conhecidos, sem
+mensagem bruta, corpo, argumentos, tokens ou `cause`. Eventos de carrinho usam
+`tools_cart`; falhas na descoberta continuam em `tools_list`. Razões locais:
+`cart_tool_not_allowed`, `cart_mutations_disabled`, `cart_tool_not_found`,
+`cart_catalog_ambiguous`, `cart_arguments_invalid`,
+`cart_schema_invalid`, `cart_result_invalid`, `cart_client_disconnected`,
+`cart_not_authenticated` e `cart_execution_unsupported`.
+
+O adaptador não implementa retry de mutações. Se uma chamada falhar após o
+envio, o estado remoto pode ter mudado: consulte o carrinho e reconcilie antes
+de decidir repetir. Não há garantia local de idempotência, transação ou rollback.
+Use `close()` em `finally`; encerramento não desfaz alterações remotas. A
+autenticação permanece de desenvolvimento para um usuário, sem persistência.
+
+### Procedimento manual opcional — somente após autorização
+
+Nenhuma escrita real deve ser executada automaticamente. Antes da primeira
+validação de mutação, obtenha a autorização explícita de Andrei para as operações
+e payloads, usando o usuário de teste. Até lá, mantenha o modo somente leitura.
+
+1. Configure o ambiente/callback da IF-01 e descubra o catálogo com
+   `node --import tsx src/ifood/cli.ts`. Confira nomes e schemas atuais.
+2. Obtenha os identificadores reais via leituras autorizadas; para um carrinho
+   existente, prepare `tmp/ifood-cart-args.json` conforme o schema retornado.
+   `tmp/` já é ignorado pelo Git; não coloque dados pessoais no histórico.
+3. Faça apenas uma consulta, sem flag de escrita:
+
+   ```bash
+   node --import tsx src/ifood/cart-cli.ts getCart < tmp/ifood-cart-args.json
+   ```
+
+   Para entrega, prepare os argumentos respectivos e use `getCartDeliveryMethods`.
+   Sem a flag, qualquer mutação é recusada antes de OAuth/rede, inclusive
+   se o JSON contiver uma suposta autorização.
+4. **Depois da autorização explícita**, prepare o payload de `createCart` com
+   restaurante, endereço e itens conforme schema. Para uma única execução:
+
+   ```bash
+   node --import tsx src/ifood/cart-cli.ts createCart --allow-cart-mutations < tmp/ifood-cart-args.json
+   ```
+
+   A flag é uma decisão local do operador, não pode vir do LLM nem do JSON.
+   Só vale para essa execução; não habilita pedidos, pagamento, cupons ou endereços.
+5. Por padrão, a CLI omite a resposta, incluindo IDs e valores. A opção
+   `--print-cart-id`, restrita a `createCart` habilitado, pode exibir somente um
+   UUID no caminho explicitamente confirmado, conforme a preparação abaixo.
+   Não imprima nem versione o restante do conteúdo. Não use IDs de fixtures.
+6. Com autorização para cada alteração pretendida, valide inclusão, atualização
+   completa, remoção e entrega. Antes e depois, consulte o carrinho para conferir
+   estado e preservar os valores originais para auditoria pelo Core. Encerre
+   sempre a conexão. Não execute `submitOrder`, pagamento ou pedido real.
+
+A CLI aceita um objeto JSON de até 1 MiB em stdin. Imprime somente diagnósticos
+sanitizados e status; sucesso de ferramenta retorna `0`, `isError`, validação ou
+falha técnica retornam `1`. SIGINT/SIGTERM cancelam e acionam cleanup. O comando
+também retorna `1` se uma resposta chegar após o cancelamento; nesse caso avisa
+que o estado remoto pode ter mudado e orienta consultar antes de repetir. O comando
+também funciona após build em `dist/ifood/cart-cli.js`, com as mesmas restrições.
+
+### Preparação do smoke test — primeiro inspecionar uma leitura
+
+O cenário solicitado é **Corta Pra Mim Hamburgueria Artesanal / Tradicional One /
+quantidade 1**. O responsável forneceu `merchantId` e `itemId` reais; o endereço
+permanece privado e é recuperado do registro anterior, sem inventar IDs.
+Antes de qualquer criação, o operador deve conferir com
+as leituras oficiais que o estabelecimento/produto continuam disponíveis e que
+o endereço está na lista de endereços do usuário de teste. Catálogo ou UUID
+sintaticamente válido, isoladamente, não confirma esses requisitos comerciais.
+
+As informações da simulação anterior são parciais: `getCart` recebe `cartId` e
+há uma lista `items[]`, mas não foram preservados os caminhos internos da saída
+nem sua origem. Portanto, a primeira etapa usa o carrinho anterior, sem escrita:
+
+```zsh
+cd /Users/andrei/FoodJam
+node --import tsx /Users/andrei/FoodJam/src/ifood/cart-cli.ts getCart --inspect-result < /Users/andrei/FoodJam/tmp/ifood-get-cart.json
+printf 'Código de saída: %s\n' "$?"
+```
+
+Use o arquivo de argumentos já validado, com o ID real anterior. Se ele não
+existir ou o carrinho estiver indisponível, pare: não há criação de fallback.
+`--inspect-result` só aceita `getCart`, sem `--allow-cart-mutations`.
+
+A saída da inspeção contém somente `{ source, path, type }`, nunca valores:
+
+- `source`: `structuredContent` ou `content[N].text` com o índice original do bloco.
+- `path`: caminho de campos; raiz `""`, e `[]` representa um elemento amostrado do array.
+- `type`: tipo JSON; texto não interpretável como JSON é marcado `non-json-text`.
+
+Somente um vocabulário fixo de nomes técnicos aparece nos caminhos. Chaves
+arbitrárias são ocultas como `<property>` para não expor nomes, e-mails, IDs
+usados como chave ou caracteres de controle. Esse segmento não é um caminho
+confirmado para extração. Metadados `_meta`, conteúdo não textual e valores
+de folhas não são inspecionados. Textos são interpretados apenas como JSON
+completo, sem remover Markdown, procurar substrings ou interpretar instruções.
+
+O responsável confirmou a inspeção real de `getCart`: JSON em `content[0].text`,
+`/cartId`, `/items` e, por item, `/itemId`, `/cartItemId`, `/quantity` e
+`/unitPrice`, com HTTP `200` e saída `0`. Esses caminhos são exclusivos desta
+consulta, não uma inferência sobre a resposta de criação.
+
+Limites: 200 campos visitados, profundidade 8, amostra de até 10 elementos por
+array, até 100 blocos de conteúdo e 1 MiB por texto JSON. A CLI informa quando
+há truncamento. Inspeção de estrutura não confirma qual produto está no carrinho
+nem sua quantidade. Agora `getCart --verify-single-item UUID` usa somente os
+caminhos confirmados: confere o `cartId` solicitado, cardinalidade 1, `itemId`
+esperado e quantidade numérica 1. Não usa `cartItemId` como ID de produto,
+não imprime IDs, preços ou dados pessoais e não altera a resposta financeira.
+Formato, identidade ou quantidade divergente geram saída `1` sem mutação.
+
+### Exibição opcional do cartId — somente após autorização de criação
+
+`createCart --allow-cart-mutations --print-cart-id` aceita ainda a opção
+`--cart-id-path ORIGEM:JSON_POINTER`. O operador precisa confirmar a origem e o
+caminho do UUID na **resposta de createCart**; o caminho de `getCart` não prova
+que a criação usa o mesmo formato. Não há caminho padrão nem descoberta por UUID.
+
+As origens aceitas são `structuredContent` e `content[N].text` (N de 0 a 99).
+O modo `json` seleciona o mesmo JSON Pointer explícito no conteúdo estruturado
+e nos blocos textuais JSON. Só aceita um UUID único, ou cópias do mesmo UUID;
+valores inválidos ou contraditórios falham fechado. Não escolhe outro campo,
+alias ou wrapper. Limites: até 100 blocos e 1 MiB de texto agregado.
+O caminho usa JSON Pointer, com escapes `~0`/`~1`. Os nomes de folha suportados
+são `cartId`, `cartUuid`, `id` e `uuid`; a seleção não pode atravessar campos
+conhecidos de produto, itens, estabelecimento, endereço, usuário ou perfil.
+Campos de protótipo, caracteres de controle, origem desconhecida ou opção
+duplicada são rejeitados antes de conectar. Essas restrições não confirmam a
+semântica de um campo desconhecido: o caminho deve vir de evidência real,
+nunca de uma sugestão do LLM.
+
+Exemplo **apenas de sintaxe**, com placeholders a substituir por caminho
+confirmado e payload real; não executar nesta fase de preparação:
+
+```text
+node --import tsx /Users/andrei/FoodJam/src/ifood/cart-cli.ts createCart --allow-cart-mutations --print-cart-id --cart-id-path 'ORIGEM:/CAMINHO_CONFIRMADO' < /Users/andrei/FoodJam/tmp/ifood-create-cart-one-item.json
+```
+
+Após uma única chamada, um UUID canônico de versão 1–8 e variante padrão gera
+somente `cartId: UUID` como dado de resposta. UUID nulo, valor inválido, caminho
+ausente ou formato desconhecido causam saída `1` e inspeção sanitizada da
+estrutura, sem outro ID ou payload. Não há busca recursiva por UUIDs nem alias
+automático de IDs. `isError` e cancelamento não imprimem ID nem inspecionam a
+resposta. O cliente sempre é encerrado.
+
+**Saída `1` após envio não significa que o carrinho não foi criado.** A criação
+nunca é repetida automaticamente, mesmo se a extração ou o cleanup falhar.
+Sem `--print-cart-id`, o comportamento anterior de omitir a resposta é preservado.
+Não execute uma criação sem um caminho confirmado apenas para testar a flag.
+Foi localizado, em leitura local do histórico do OpenCode, um `ifood_createCart`
+concluído com os IDs fornecidos e o JSON de resposta com `cartId` na raiz.
+Esse nome com prefixo é apenas a chave do histórico; a API continua executando
+`createCart` sem prefixo. A evidência da criação anterior confirma o caminho
+`/cartId`, independentemente da inspeção de `getCart`. O histórico não prova a
+origem do envelope MCP, por isso o teste usa `json:/cartId`. O formato atual
+continua sujeito à validação na execução; se mudar, pare e não repita a criação.
+
+Depois de obter o UUID, prepare o JSON de `getCart` com esse identificador e
+consulte sem qualquer flag de mutação, usando `--verify-single-item`.
+Nenhum dado financeiro é alterado. Nenhuma resposta completa é
+gravada em arquivo, log ou fixture real. O responsável concluiu o smoke test
+manual autorizado descrito abaixo; não houve submissão, pagamento ou checkout.
+
+### Smoke test final — procedimento e registro da validação real
+
+O responsável confirmou a execução bem-sucedida deste procedimento em
+17/10/2026. Os comandos abaixo documentam a reprodução, não autorizam outra
+criação: qualquer nova mutação requer uma nova decisão explícita do responsável.
+Não repita `createCart` para confirmar o resultado já validado.
+
+O schema de entrada de `createCart` fornecido pelo responsável contém
+`required: []` na raiz; suas descrições exigem `merchantId`, `addressId` e
+`items` para criar do zero. `orderId` é outra modalidade e não é usado.
+Cada item exige `itemId` e `quantity`; neste teste omitem-se `cartItemId`,
+`customerNote`, `options`, `deliveryMethod` e `paymentMethod`. A fonte de
+verdade continua sendo o schema dinâmico, validado antes de `tools/call`.
+
+O preparador local usa apenas o SQLite existente em
+`~/.local/share/opencode/opencode.db`, em modo somente leitura. Seleciona a
+última criação concluída com restaurante/produto corretos e recupera endereço
+e argumentos de catálogo da mesma sessão. Não abre `mcp-auth.json`, não copia
+credenciais, não usa resposta financeira e não faz chamadas MCP. Usa `node:sqlite`
+do Node já declarado no projeto, sem dependência nova; importar a CLI não abre
+o banco. As duas entradas geradas têm modo `0600`, sem sobrescrever arquivos:
+
+- `tmp/ifood-smoke-create.json`: somente `merchantId`, `addressId` e um item com quantidade 1.
+- `tmp/ifood-smoke-preflight.json`: endereço e argumentos antigos das consultas, incluindo coordenadas privadas.
+
+Não imprima esses arquivos nem os envie no chat. Se o registro não estiver
+disponível ou os argumentos já existirem, o preparador falha fechado. Não
+substitui a conferência atual da conta e da disponibilidade pelo servidor.
+
+Execute no mesmo terminal, uma etapa por vez, com o `.env` já configurado e
+usando o usuário de teste. Pare em qualquer código diferente de `0`.
+
+1. Preparação local, sem rede:
+
+   ```zsh
+   cd /Users/andrei/FoodJam
+   umask 077
+   node --disable-warning=ExperimentalWarning --import tsx /Users/andrei/FoodJam/src/ifood/smoke-setup.ts --out-dir /Users/andrei/FoodJam/tmp
+   printf 'Preparação: %s\n' "$?"
+   ```
+
+2. Pré-verificação atual, somente leitura:
+
+   ```zsh
+   node --import tsx /Users/andrei/FoodJam/src/ifood/smoke-preflight.ts < /Users/andrei/FoodJam/tmp/ifood-smoke-preflight.json
+   ifood_smoke_preflight_status=$?
+   printf 'Pré-verificação: %s\n' "$ifood_smoke_preflight_status"
+   ```
+
+   Executa apenas `listAddresses`, `getMerchant` e `getItem`. Confere que o ID
+   de endereço consta na conta autenticada e suas coordenadas coincidem com
+   as anteriores; o estabelecimento correto está aberto; o produto corresponde
+   a Tradicional One e não exige opções. Schema dinâmico, catálogo, tokens e
+   allowlist da IF-02 continuam obrigatórios. Formato desconhecido, `isError`,
+   dados divergentes ou falha de autorização/rede interrompem sem escrita.
+   Essa leitura não reserva estoque; a criação validará as condições comerciais
+   atuais no servidor. A saída não imprime endereço, coordenadas nem preço.
+
+3. Criação única, somente com autorização explícita para essa execução:
+
+   ```zsh
+   if [[ "${ifood_smoke_preflight_status:-1}" != 0 ]]; then
+     printf 'Pré-verificação não aprovada; criação bloqueada.\n'
+   elif [[ "${ifood_smoke_creation_started:-0}" == 1 ]]; then
+     printf 'Criação já disparada neste terminal; não repita.\n'
+   else
+     ifood_smoke_creation_started=1
+     node --import tsx /Users/andrei/FoodJam/src/ifood/cart-cli.ts createCart --allow-cart-mutations --print-cart-id --cart-id-path 'json:/cartId' < /Users/andrei/FoodJam/tmp/ifood-smoke-create.json
+     ifood_smoke_creation_status=$?
+     printf 'Criação: %s\n' "$ifood_smoke_creation_status"
+   fi
+   ```
+
+   Esperado: HTTP `200`, `tools_cart: succeeded`, `cartId: UUID` e código `0`.
+   `annotation_mismatch` é informativo. A variável do shell reduz repetição
+   acidental nesse terminal; não representa idempotência do servidor. Em erro
+   de extração, veja somente a inspeção sanitizada e **não execute novamente**.
+
+4. Após código `0` na criação, copie somente o UUID mostrado. Prepare os
+   argumentos de leitura com entrada oculta, sem adicionar o valor ao histórico:
+
+   ```zsh
+   IFS= read -r -s 'ifood_smoke_cart_id?Cole somente o cartId retornado: '
+   printf '\n'
+   export IFOOD_SMOKE_CART_ID="$ifood_smoke_cart_id"
+   node --import tsx --input-type=module -e '
+   import {writeFileSync} from "node:fs";
+   import {validateCartId} from "/Users/andrei/FoodJam/src/ifood/cart-smoke.ts";
+   try {
+     const cartId = validateCartId(process.env.IFOOD_SMOKE_CART_ID);
+     writeFileSync("/Users/andrei/FoodJam/tmp/ifood-smoke-get.json", JSON.stringify({cartId}) + "\n", {mode: 0o600, flag: "wx"});
+     console.log("Argumentos de leitura preparados; identificador omitido.");
+   } catch {
+     console.error("Argumentos de leitura não preparados; valor omitido.");
+     process.exitCode = 1;
+   }'
+   ifood_smoke_get_args_status=$?
+   unset IFOOD_SMOKE_CART_ID ifood_smoke_cart_id
+   printf 'Preparação da leitura: %s\n' "$ifood_smoke_get_args_status"
+   ```
+
+   Esperado: arquivo privado `0600`, sem sobrescrita, e código `0`. Não use IDs
+   de produtos, linhas ou estabelecimentos como identificador do carrinho.
+
+5. Consulte o carrinho sem permitir mutações:
+
+   ```zsh
+   node --import tsx /Users/andrei/FoodJam/src/ifood/cart-cli.ts getCart --verify-single-item 18409df3-1e16-4bf8-9be5-433882c049aa < /Users/andrei/FoodJam/tmp/ifood-smoke-get.json
+   printf 'Conferência: %s\n' "$?"
+   ```
+
+   Esperado: HTTP `200`, `tools_cart: succeeded`, mensagem de verificação
+   aprovada (carrinho solicitado, exatamente um produto esperado, quantidade 1)
+   e código `0`, sem valores financeiros ou dados pessoais. O resultado da
+   ferramenta pode ser válido e a conferência falhar; nesse caso a CLI retorna
+   `1`. Não corrige o carrinho nem repete a criação. Compartilhe apenas os
+   diagnósticos sanitizados/status. O responsável confirmou esta sequência com
+   código `0` e exatamente o produto/quantidade previstos, sem expor dados pessoais.
+
+### Cobertura real e automatizada da IF-03
+
+| Ferramenta | Testes automatizados | Validação no servidor real |
+| --- | --- | --- |
+| `createCart` | Doubles e SDK com HTTP simulado | Sim: criação única, UUID validado, um Tradicional One, quantidade 1 |
+| `getCart` | Doubles e SDK com HTTP simulado | Sim: somente leitura, carrinho/produto/quantidade conferidos, código 0 |
+| `addItemToCart` | Doubles | Não executada nesta entrega |
+| `updateCartItem` | Doubles | Não executada nesta entrega |
+| `removeItemFromCart` | Doubles | Não executada nesta entrega |
+| `getCartDeliveryMethods` | Doubles | Não executada nesta entrega |
+| `setCartDelivery` | Doubles | Não executada nesta entrega |
+
+A pré-verificação real usou somente `listAddresses`, `getMerchant` e `getItem`
+pela API da IF-02, com mutações desabilitadas. Resultados comerciais divergentes,
+erros de rede/sessão/autorização, `isError`, bloqueio de pagamento/submissão e
+preservação financeira são cobertos por mocks; não foram provocados no servidor.
+Não houve validação real de descontos ou reconciliação financeira.
+
+`annotation_mismatch` pode ser apenas informativo: um hint contraditório não
+transforma uma leitura em mutação nem habilita escrita. As allowlists locais e
+`allowCartMutations === true` continuam determinando as permissões de carrinho;
+ferramentas desconhecidas, pagamentos, cupons e submissão permanecem bloqueados.
+
+### Verificação e limitações
+
+Os testes em `tests/ifood/cart-tools.test.ts` e `cart-cli.test.ts` usam doubles;
+`cart-smoke.test.ts` cobre inspeção sem valores e UUID selecionado por caminho
+explícito em conteúdo estruturado e em JSON textual, com formatos desconhecidos
+e caminhos inválidos recusados;
+`protocol.test.ts` exercita o SDK instalado com HTTP externo inteiramente
+simulado, inclusive HTTP `200` com `isError` e conteúdo de erro incompatível
+com schema de sucesso. Os testes de IF-01/IF-02 permanecem na suíte. Importar
+a API ou as CLIs não abre rede, navegador, listener ou processo.
+
+Execute `npm run check` e `npm run build`. Nenhum teste acessa o servidor iFood.
+Os schemas fictícios demonstram validação dinâmica; a compatibilidade real foi
+confirmada somente para o cenário de criação/consulta registrado acima.
+Disponibilidade futura, outros payloads, semântica de atualização, entrega e
+formatos financeiros reais ainda exigem a validação manual autorizada.
+Schemas ficam limitados ao suporte do AJV instalado. Não há carrinho local,
+IA, interpretação de linguagem natural, sessões coletivas, checkout ou rateio.
 
 ### Diagnóstico de falha após o callback
 
@@ -488,8 +999,14 @@ Mac; outras contas, permissões e plataformas não foram validadas nesta entrega
 
 Na **IF-02**, o responsável confirmou manualmente em **17/10/2026** a execução
 real de `getUser` no Mac: OAuth, descoberta, HTTP `200`, `tools_read: succeeded`
-e fechamento da conexão. Essa validação se limita a essa consulta e ao usuário
-de teste; não inclui execução real das demais ferramentas ou operações de escrita.
+e fechamento da conexão. A pré-verificação da **IF-03** também validou
+`listAddresses`, `getMerchant` e `getItem` para o usuário de teste; as outras
+três consultas permanecem cobertas somente por mocks. A validação real da IF-03
+incluiu uma criação autorizada por `createCart` e a consulta posterior por
+`getCart`, com exatamente um Tradicional One, quantidade 1, HTTP `200`,
+`tools_cart: succeeded` e saída `0`. As outras cinco operações de carrinho
+permanecem testadas somente por mocks. Nenhum identificador privado ou payload
+real foi versionado, e não houve checkout, pagamento ou submissão de pedido.
 
 ## Acesso MCP versus autorização de compra
 
@@ -498,6 +1015,8 @@ uma autorização explícita para fechar um pedido. Essa decisão pertence ao co
 deve ser validada para a sessão/pedido e depende da confirmação da pessoa
 responsável. Listar `ifood_submitOrder`, se o servidor o retornar, não o executa
 nem autoriza compra. A IF-01 implementou descoberta; a IF-02 permite somente as
-consultas explicitamente aprovadas, sem carrinho ou checkout.
+consultas explicitamente aprovadas; a IF-03 permite as operações de carrinho
+da allowlist, exigindo decisão explícita da aplicação para mutações. Nenhuma
+dessas APIs habilita checkout, pagamento ou submissão de pedido.
 
 Referência do SDK: [clientes e OAuth na documentação oficial v1](https://ts.sdk.modelcontextprotocol.io/client).

@@ -4,7 +4,7 @@ import { McpError } from '@modelcontextprotocol/sdk/types.js';
 
 export type IfoodMcpStage = 'mcp_initial_connect' | 'oauth_browser' | 'oauth_callback'
   | 'oauth_state_validation' | 'oauth_token_exchange' | 'oauth_tokens_storage'
-  | 'mcp_reconnect' | 'tools_list' | 'tools_read' | 'mcp_close';
+  | 'mcp_reconnect' | 'tools_list' | 'tools_read' | 'tools_cart' | 'mcp_close';
 
 interface SafeErrorDetails {
   errorType?: string;
@@ -21,12 +21,16 @@ interface SafeErrorDetails {
     | 'pkce_unavailable' | 'tokens_not_saved' | 'unsupported_protocol_version'
     | 'read_tool_not_allowed' | 'read_tool_not_found' | 'read_catalog_ambiguous'
     | 'read_tool_write_hint' | 'read_arguments_invalid' | 'read_schema_invalid'
-    | 'read_result_invalid' | 'read_tool_failed' | 'read_client_disconnected' | 'read_not_authenticated';
+    | 'read_result_invalid' | 'read_tool_failed' | 'read_client_disconnected' | 'read_not_authenticated'
+    | 'cart_tool_not_allowed' | 'cart_tool_not_found' | 'cart_catalog_ambiguous'
+    | 'cart_arguments_invalid' | 'cart_schema_invalid'
+    | 'cart_result_invalid' | 'cart_tool_failed' | 'cart_client_disconnected'
+    | 'cart_not_authenticated' | 'cart_mutations_disabled' | 'cart_execution_unsupported';
 }
 
 export interface IfoodMcpDiagnostic extends SafeErrorDetails {
   readonly stage: IfoodMcpStage;
-  readonly event: 'started' | 'succeeded' | 'failed' | 'authorization_required' | 'http_response';
+  readonly event: 'started' | 'succeeded' | 'failed' | 'authorization_required' | 'http_response' | 'annotation_mismatch';
 }
 export type DiagnosticListener = (diagnostic: IfoodMcpDiagnostic) => void;
 
@@ -58,6 +62,7 @@ const stageMessages: Record<IfoodMcpStage, string> = {
   mcp_reconnect: 'Não foi possível conectar ao MCP após autenticação OAuth.',
   tools_list: 'Não foi possível listar ferramentas MCP.',
   tools_read: 'Não foi possível concluir a consulta MCP de leitura.',
+  tools_cart: 'Não foi possível concluir a operação MCP de carrinho.',
   mcp_close: 'Não foi possível encerrar a sessão MCP; recursos locais liberados.',
 };
 
