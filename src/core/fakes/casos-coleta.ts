@@ -1,5 +1,5 @@
 import type { ColetaOutcome, ColetaResult } from '../coleta.js';
-import { coletar } from '../coleta.js';
+import { coletar, passaNoFiltro } from '../coleta.js';
 import type { ParticipantPreferences } from '../contracts.js';
 import type { LlmCallRecord } from '../llm.js';
 import type { LlmPort } from '../ports.js';
@@ -47,7 +47,8 @@ export const CASOS_COLETA: CasoColeta[] = [
   },
   { mensagens: ['até 30 conto'], esperado: { outcome: 'preference_updated', budgetCents: 3000 } },
   { mensagens: ['R$ 25,90 no máximo, lanche'], esperado: { outcome: 'preference_updated', food: ['lanche'], budgetCents: 2590 } },
-  { mensagens: ['tanto faz kkk'], esperado: { outcome: ['preference_updated', 'irrelevant'] } },
+  // Pedir esclarecimento também é aceitável: "tanto faz" não diz o que a pessoa quer.
+  { mensagens: ['tanto faz kkk'], esperado: { outcome: ['preference_updated', 'irrelevant', 'clarification'] } },
   {
     mensagens: ['quero hambúrguer', 'na verdade, prefiro pizza'],
     esperado: { outcome: 'preference_updated', food: ['pizza'], notFood: ['hamburg|burger'] },
@@ -106,4 +107,12 @@ export async function avaliarCaso(
   }
 
   return { caso, result, preferences, falhas };
+}
+
+/**
+ * Chamadas ao modelo previstas para os casos: uma por mensagem que passa no
+ * filtro barato. Com novas tentativas, pode chegar ao dobro.
+ */
+export function chamadasPrevistas(casos: readonly CasoColeta[]): number {
+  return casos.reduce((total, caso) => total + caso.mensagens.filter((m) => passaNoFiltro(m.trim())).length, 0);
 }

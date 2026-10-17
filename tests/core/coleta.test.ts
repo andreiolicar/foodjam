@@ -275,3 +275,11 @@ describe('casos informais compartilhados com a avaliação manual (responder heu
     });
   });
 });
+
+describe('chamadasPrevistas', () => {
+  it('conta só as mensagens que passam no filtro barato', async () => {
+    const { chamadasPrevistas } = await import('../../src/core/fakes/casos-coleta.js');
+    expect(chamadasPrevistas([{ mensagens: ['a', '😂'], esperado: { outcome: 'filtered' } }, { mensagens: ['b'], esperado: { outcome: 'question' } }])).toBe(2);
+    expect(chamadasPrevistas(CASOS_COLETA)).toBe(CASOS_COLETA.reduce((t, c) => t + c.mensagens.length, 0) - 1);
+  });
+});

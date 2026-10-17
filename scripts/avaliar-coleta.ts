@@ -5,26 +5,31 @@
  *
  * Uso:
  *   npm run avaliar:coleta
- *   npm run avaliar:coleta -- --intervalo 4000   # ms entre chamadas (camadas gratuitas)
+ *   npm run avaliar:coleta -- --intervalo 4000      # ms entre chamadas (camadas gratuitas)
+ *   npm run avaliar:coleta -- --max-chamadas 10     # para ao atingir o limite
  *
- * Para no primeiro erro fatal do provedor (chave, plano ou cota) e mostra a
- * mensagem dele. 429 de limite por minuto é tratado no adaptador (espera e repete).
+ * Antes de começar, mostra quantas chamadas estão previstas. Para no primeiro
+ * erro fatal do provedor (chave, plano ou cota) e mostra a mensagem dele.
+ * 429 por minuto e 503 são tratados no adaptador (espera e repete); essas
+ * repetições internas não entram na contagem de --max-chamadas.
  */
 import { config } from 'dotenv';
-import { CASOS_COLETA, avaliarCaso } from '../src/core/fakes/casos-coleta.js';
+import { passaNoFiltro } from '../src/core/coleta.js';
+import { CASOS_COLETA, avaliarCaso, chamadasPrevistas } from '../src/core/fakes/casos-coleta.js';
 import type { LlmCallRecord } from '../src/core/llm.js';
 import { criarLlmDoAmbiente, temProvedorReal } from '../src/core/llm-ambiente.js';
 import type { LlmPort } from '../src/core/ports.js';
 
 config({ quiet: true });
 
-function lerIntervalo(argv: readonly string[]): number {
-  const i = argv.findIndex((a) => a === '--intervalo' || a.startsWith('--intervalo='));
-  if (i < 0) return Number(process.env.AVAL_INTERVALO_MS ?? 0);
-  const valor = argv[i]?.includes('=') ? argv[i]?.split('=')[1] : argv[i + 1];
-  const ms = Number(valor);
-  if (!Number.isFinite(ms) || ms < 0) throw new Error(`--intervalo inválido: ${String(valor)}`);
-  return ms;
+/** Lê "--nome 10" ou "--nome=10"; sem a opção, usa a variável de ambiente (ou undefined). */
+function lerNumero(argv: readonly string[], nome: string, variavel: string): number | undefined {
+  const i = argv.findIndex((a) => a === `--${nome}` || a.startsWith(`--${nome}=`));
+  const valor = i < 0 ? process.env[variavel] : argv[i]?.includes('=') ? argv[i]?.split('=')[1] : argv[i + 1];
+  if (valor === undefined || valor === '') return undefined;
+  const n = Number(valor);
+  if (!Number.isFinite(n) || n < 0) throw new Error(`--${nome} inválido: ${valor}`);
+  return n;
 }
 
 /**
@@ -47,17 +52,40 @@ function espacar(llm: LlmPort, intervaloMs: number): LlmPort & { esperadoMs: num
   };
 }
 
-const intervaloMs = lerIntervalo(process.argv.slice(2));
+const LIMITE = 'limite de --max-chamadas atingido';
+
+/** Conta as chamadas e recusa (como erro fatal, sem chamar o provedor) acima do limite. */
+function limitar(llm: LlmPort, max: number | undefined): LlmPort & { feitas: number } {
+  return {
+    feitas: 0,
+    async generate(request) {
+      if (max !== undefined && this.feitas >= max) {
+        throw Object.assign(new Error(`${LIMITE} (${max})`), { fatal: true });
+      }
+      this.feitas++;
+      return llm.generate(request);
+    },
+  };
+}
+
+const argv = process.argv.slice(2);
+const intervaloMs = lerNumero(argv, 'intervalo', 'AVAL_INTERVALO_MS') ?? 0;
+const maxChamadas = lerNumero(argv, 'max-chamadas', 'AVAL_MAX_CHAMADAS');
 const provider = process.env.AI_PROVIDER || 'fake';
 if (provider !== 'fake' && !temProvedorReal(process.env)) {
   console.warn(`Aviso: AI_PROVIDER=${provider} sem AI_API_KEY; as chamadas devem ser recusadas.\n`);
 }
-const llm = espacar(criarLlmDoAmbiente(process.env), intervaloMs);
+const espacado = espacar(criarLlmDoAmbiente(process.env), intervaloMs);
+const llm = limitar(espacado, maxChamadas);
 const modelo = process.env.AI_MODEL_FAST || process.env.AI_MODEL || '—';
 
+const previstas = chamadasPrevistas(CASOS_COLETA);
+console.log(`Avaliando ${CASOS_COLETA.length} casos de coleta · provedor: ${provider} · modelo fast: ${modelo}`);
 console.log(
-  `Avaliando ${CASOS_COLETA.length} casos de coleta · provedor: ${provider} · modelo fast: ${modelo}` +
-    ` · intervalo: ${intervaloMs} ms\n`,
+  `Chamadas previstas: ${previstas} (até ${previstas * 2} com novas tentativas)` +
+    ` · limite: ${maxChamadas ?? 'sem limite'} · intervalo: ${intervaloMs} ms` +
+    (intervaloMs > 0 ? ` · duração mínima ~${Math.ceil((previstas * intervaloMs) / 1000)} s` : '') +
+    '\n',
 );
 
 const chamadas: LlmCallRecord[] = [];
@@ -66,13 +94,23 @@ let acertos = 0;
 let avaliados = 0;
 
 for (const caso of CASOS_COLETA) {
+  const doCaso = caso.mensagens.filter((m) => passaNoFiltro(m.trim())).length;
+  if (maxChamadas !== undefined && llm.feitas + doCaso > maxChamadas) {
+    console.log(`\n⏸ Limite de ${maxChamadas} chamadas: parei antes de "${caso.mensagens.join(' ⟶ ')}".`);
+    break;
+  }
+
   const antes = chamadas.length;
-  const esperaAntes = llm.esperadoMs;
+  const esperaAntes = espacado.esperadoMs;
   const inicio = performance.now();
   const { result, preferences, falhas } = await avaliarCaso(caso, llm, (r) => chamadas.push(r));
-  const duracao = performance.now() - inicio - (llm.esperadoMs - esperaAntes);
+  const duracao = performance.now() - inicio - (espacado.esperadoMs - esperaAntes);
 
   const fatal = chamadas.slice(antes).find((c) => c.fatal);
+  if (fatal?.error?.includes(LIMITE)) {
+    console.log(`\n⏸ Limite de ${maxChamadas} chamadas atingido em "${caso.mensagens.join(' ⟶ ')}" (novas tentativas). Caso não contado.`);
+    break;
+  }
   if (fatal) {
     console.log(`\n⛔ Erro fatal do provedor em "${caso.mensagens.join(' ⟶ ')}". Avaliação interrompida.`);
     console.log(`   ${fatal.error ?? ''}`);
@@ -102,10 +140,12 @@ const ordenadas = [...latenciaPorMensagem].sort((a, b) => a - b);
 const p95 = ordenadas[Math.min(ordenadas.length - 1, Math.floor(ordenadas.length * 0.95))] ?? 0;
 const falhasModelo = chamadas.filter((c) => !c.ok && !c.fatal);
 
-console.log(`\nTaxa de acerto: ${acertos}/${avaliados} avaliados (${Math.round((acertos / Math.max(1, avaliados)) * 100)}%)` +
-  (avaliados < CASOS_COLETA.length ? ` · ${CASOS_COLETA.length - avaliados} não avaliados` : ''));
+console.log(
+  `\nTaxa de acerto: ${acertos}/${avaliados} avaliados (${Math.round((acertos / Math.max(1, avaliados)) * 100)}%)` +
+    (avaliados < CASOS_COLETA.length ? ` · ${CASOS_COLETA.length - avaliados} não avaliados` : ''),
+);
 console.log(`Latência por mensagem: média ${Math.round(media)} ms · p95 ${Math.round(p95)} ms (sem o intervalo; inclui novas tentativas)`);
-console.log(`Chamadas ao modelo: ${chamadas.length} (${falhasModelo.length} tentativas falharam)`);
+console.log(`Chamadas ao modelo: ${llm.feitas} de ${previstas} previstas (${falhasModelo.length} tentativas falharam)`);
 // Erros iguais aparecem uma vez só.
 const porErro = new Map<string, number>();
 for (const c of falhasModelo) porErro.set(c.error ?? '', (porErro.get(c.error ?? '') ?? 0) + 1);
