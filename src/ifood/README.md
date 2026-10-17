@@ -1,4 +1,4 @@
-# FoodJam — integração MCP do iFood (IF-01)
+# FoodJam — integração MCP do iFood (IF-01 e IF-02)
 
 Responsável: Andrei. Branch: `feat/ifood-mcp`. **Íris** é o nome do agente
 cadastrado no portal; o produto e o cliente MCP se chamam **FoodJam**.
@@ -9,9 +9,18 @@ schemas reais das ferramentas. O fluxo utilizado foi OAuth `authorization_code`
 com `client_secret_post`, PKCE S256 e validação de state.
 
 Este módulo implementa conexão explícita, OAuth interativo para um usuário de
-teste e descoberta de ferramentas. Não interpreta conversas, calcula rateios,
-controla sessões do core ou executa ferramentas comerciais. A composição com o
+teste, descoberta de ferramentas e execução restrita de consultas de leitura.
+Não interpreta conversas, calcula rateios, controla sessões do core ou executa
+operações comerciais de escrita. A composição com o
 core/Telegram continua a cargo de `src/index.ts`, sem alterações nesta entrega.
+
+A IF-02 estende a IF-01 sem reconstruir autenticação/transporte. Os sete nomes
+reais sem prefixo foram confirmados pelo responsável a partir de `listTools()`;
+schemas continuam dinâmicos. **A leitura real `getUser` foi validada manualmente
+no Mac em 17/10/2026**, conforme confirmação do responsável: autenticação OAuth,
+descoberta do catálogo, HTTP `200`, evento `tools_read: succeeded` e encerramento
+correto da conexão. Os testes automatizados usam HTTP/doubles locais; a validação
+manual não foi estendida às outras seis ferramentas de leitura nesta entrega.
 
 ## Organização e dependências
 
@@ -22,6 +31,8 @@ core/Telegram continua a cargo de `src/index.ts`, sem alterações nesta entrega
 - `client.ts`: ciclo de conexão, autenticação, listagem paginada e encerramento.
 - `cli.ts`: descoberta manual e diagnóstico seguro.
 - `diagnostics.ts`: eventos por etapa e extração de metadados seguros dos erros.
+- `read-tools.ts`: política de leitura, argumentos JSON e validação de schemas/resultados.
+- `read-cli.ts`: teste real opcional de leitura, com resposta omitida do terminal.
 
 Usa `@modelcontextprotocol/sdk` **1.32.1**, `StreamableHTTPClientTransport` e
 `OAuthClientProvider` do SDK v1; não há migração para v2. Zod permanece como peer
@@ -137,9 +148,150 @@ Para reproduzir a validação manual:
 6. Confira o encerramento da conexão e o status de saída. Não salve tokens,
    credenciais, cookies ou URLs OAuth em logs ou artefatos versionados.
 
-Não há `callTool`, comandos de compra ou execução automática das ferramentas
-listadas. Nomes e schemas mostrados vêm exclusivamente do MCP; fixtures de
-testes não representam ferramentas descobertas no iFood.
+A API pública não oferece `callTool` irrestrito ou comandos de compra. A CLI de
+descoberta não executa ferramentas listadas. Nomes e schemas mostrados vêm
+exclusivamente do MCP; fixtures de testes não representam parâmetros reais.
+
+## IF-02 — execução segura de ferramentas de leitura
+
+```ts
+import { createIfoodMcpClient, readIfoodMcpConfig } from './ifood/index.js';
+
+const client = createIfoodMcpClient(readIfoodMcpConfig());
+try {
+  await client.connect();
+  const catalog = await client.listTools();
+  // Inspecione o inputSchema recebido. {} é apenas exemplo, válido somente
+  // se o schema real de getUser não exigir argumentos adicionais.
+  const result = await client.callReadTool('getUser', {});
+  if (result.isError) {
+    // Falha da ferramenta: conteúdo preservado para tratamento privado pelo core.
+  } else {
+    // structuredContent e content permanecem opacos: valide o domínio antes de usar.
+  }
+  void catalog;
+} finally {
+  await client.close();
+}
+```
+
+`callReadTool(name: string, args: Record<string, unknown>): Promise<IfoodMcpReadResult>`
+é o único caminho de execução exposto. Exige conexão aberta e tokens em memória.
+Se não houver catálogo nessa conexão, descobre-o por `listTools()` antes da
+primeira leitura. O catálogo completo é guardado em cópia privada, sem alterar
+os schemas recebidos, até nova listagem, desconexão ou encerramento. Uma falha
+de atualização invalida o catálogo anterior. `listTools()` permite atualizá-lo
+explicitamente.
+
+### Ferramentas permitidas
+
+Allowlist explícita com os nomes reais confirmados pelo responsável:
+
+- `getUser`
+- `listAddresses`
+- `browseOffers`
+- `searchOffers`
+- `getRecommendations`
+- `getMerchant`
+- `getItem`
+
+O nome também precisa existir exatamente uma vez no catálogo descoberto nessa
+conexão. Não há remoção de `ifood_`, alteração de caixa, espaços ou aliases.
+Ferramenta aprovada ausente não é criada nem substituída por outra. Não há
+schemas ou parâmetros oficiais fixados no código; schemas dos testes são
+fictícios e servem exclusivamente à verificação da integração.
+
+`readOnlyHint: true` não concede autorização a nomes fora da lista. Se uma
+ferramenta aprovada anunciar explicitamente `readOnlyHint: false`, a execução
+também é bloqueada. Annotations são um sinal adicional, não a política principal.
+
+### Validação, respostas e erros
+
+Os argumentos devem ser um objeto JSON serializável. Valores como `undefined`,
+funções, números não finitos, BigInt e ciclos são rejeitados, evitando mudanças
+silenciosas na serialização. O módulo guarda uma cópia dos argumentos e valida
+essa mesma cópia contra o `inputSchema` descoberto, usando o validador AJV
+fornecido pelo SDK v1 instalado. Schema que não puder ser compilado bloqueia a
+consulta, sem buscar referências remotas ou adivinhar parâmetros. A validação
+fica limitada aos recursos de JSON Schema suportados por esse validador.
+
+A requisição usa a operação oficial `Client.callTool()` do SDK. O envelope MCP
+é validado e `content`, `structuredContent`, `isError` e metadados são preservados
+para o chamador. Nenhum texto é convertido automaticamente para JSON ou para
+um modelo de usuário/produto. `structuredContent` continua sendo um registro de
+valores desconhecidos; validade do domínio é responsabilidade do consumidor.
+Quando há `outputSchema`, o resultado de sucesso é validado também contra o
+schema do catálogo completo, inclusive para ferramentas de páginas anteriores.
+
+Uma resposta de ferramenta com `isError: true` é devolvida como falha da
+ferramenta, com seu conteúdo intacto para tratamento privado, e produz somente
+um diagnóstico genérico `read_tool_failed`. Não é transformada em sucesso ou em
+exceção com dados pessoais. Erros de protocolo, comunicação, autorização e
+validação rejeitam a Promise com uma mensagem sanitizada e `diagnostic` seguro.
+São preservados códigos técnicos conhecidos, como código MCP e HTTP `403`,
+nunca os argumentos, mensagens/corpos brutos ou a exceção original em `cause`.
+
+HTTP `200` sozinho não significa sucesso da ferramenta ou do negócio: um
+resultado MCP pode conter `isError: true` mesmo nessa situação. O tipo público
+`IfoodMcpReadResult`, exportado por `index.ts`, preserva esse campo para o
+consumidor distingui-lo. Nesse caso não há evento `tools_read: succeeded`, e a
+CLI termina com código `1`. Mesmo sem `isError`, a resposta continua opaca e
+não substitui a validação de domínio do consumidor.
+
+As razões locais incluem `read_tool_not_allowed`, `read_tool_not_found`,
+`read_catalog_ambiguous`, `read_tool_write_hint`, `read_arguments_invalid`,
+`read_schema_invalid`, `read_result_invalid`, `read_client_disconnected` e
+`read_not_authenticated`. Os eventos dessa execução usam a etapa `tools_read`.
+O módulo não registra respostas, nomes de pessoas, endereços ou preferências;
+quem consumir os resultados também deve evitar logá-los.
+
+### Operações bloqueadas
+
+Todo nome fora da allowlist é bloqueado em código antes de `tools/call`,
+independentemente de instruções do modelo ou annotations do servidor. Isso
+inclui `createCart`, `addItemToCart`, `updateCartItem`, `removeItemFromCart`,
+`createAddress`, `setCartPayment`, `submitOrder` e quaisquer novas operações de
+escrita. Não há executor MCP irrestrito público, wrappers de carrinho, checkout,
+busca inteligente, orçamento, interpretação de preferências ou rateio.
+
+### Teste real opcional sem imprimir dados pessoais
+
+Com as mesmas variáveis e callback da IF-01, execute na raiz do repositório:
+
+```bash
+node --import tsx src/ifood/read-cli.ts getUser </dev/null
+```
+
+Isso envia `{}` como exemplo de argumentos. Se o schema real exigir campos,
+o módulo bloqueia a chamada; inspecione `listTools()` e forneça os argumentos
+reais por stdin, sem colocá-los em argumentos de shell ou histórico. Por exemplo,
+prepare um arquivo local `tmp/ifood-read-args.json`, ignorado pelo Git, conforme
+o schema recebido e execute:
+
+```bash
+node --import tsx src/ifood/read-cli.ts searchOffers < tmp/ifood-read-args.json
+```
+
+O JSON de stdin deve ser um objeto e tem limite de 1 MiB. O comando conecta,
+descobre o catálogo, valida, executa somente a leitura autorizada e encerra.
+Imprime apenas diagnósticos sanitizados e indicação de conclusão ou falha,
+omitindo integralmente argumentos e resposta. Não mostra dados pessoais, nomes
+de itens, contagens de endereços ou perfis. `isError: true` resulta em saída `1`;
+sucesso, em `0`. SIGINT/SIGTERM acionam cancelamento e cleanup.
+
+Em **17/10/2026**, o responsável executou o teste real no Mac e confirmou
+`getUser` com HTTP `200`, `tools_read: succeeded` e encerramento correto. A CLI
+autenticou por OAuth e descobriu as ferramentas antes da leitura, omitindo a
+resposta do terminal. Esse resultado manual foi informado pelo responsável;
+nenhuma leitura real foi executada pelo assistente e nenhum conteúdo do perfil
+foi salvo no repositório. As outras seis ferramentas permanecem sem validação
+manual nesta tarefa.
+
+Os testes automatizados não acessam o iFood. A autenticação continua sendo de
+desenvolvimento, para um usuário, sem persistência entre execuções, com o
+navegador e callback no mesmo computador. O módulo depende da semântica de
+leitura dos nomes explicitamente aprovados; não audita a implementação interna
+do servidor nem libera outros nomes com base em descrições ou hints.
 
 ### Diagnóstico de falha após o callback
 
@@ -268,6 +420,8 @@ try {
   compartilham a inicialização, e chamadas após a conexão retornam os metadados.
 - `listTools(): Promise<IfoodMcpTool[]>`; exige conexão ativa, preserva descrição,
   inputSchema e campos adicionais, como annotations e outputSchema.
+- `callReadTool(name, args): Promise<IfoodMcpReadResult>`; exige autenticação,
+  allowlist, presença no catálogo e argumentos compatíveis com o schema real.
 - `close(): Promise<void>`; após fechar, crie outra instância para reconectar.
 
 Esses tipos não expõem o transporte MCP. Nenhum contrato compartilhado do core
@@ -332,12 +486,18 @@ execuções. A política de binding assume o AS oficial observado. Compatibilida
 foi exercitada somente com o usuário/agente e as permissões do teste manual no
 Mac; outras contas, permissões e plataformas não foram validadas nesta entrega.
 
+Na **IF-02**, o responsável confirmou manualmente em **17/10/2026** a execução
+real de `getUser` no Mac: OAuth, descoberta, HTTP `200`, `tools_read: succeeded`
+e fechamento da conexão. Essa validação se limita a essa consulta e ao usuário
+de teste; não inclui execução real das demais ferramentas ou operações de escrita.
+
 ## Acesso MCP versus autorização de compra
 
 OAuth autoriza acesso do agente às capacidades oferecidas pelo serviço. Não é
 uma autorização explícita para fechar um pedido. Essa decisão pertence ao core,
 deve ser validada para a sessão/pedido e depende da confirmação da pessoa
 responsável. Listar `ifood_submitOrder`, se o servidor o retornar, não o executa
-nem autoriza compra. A IF-01 não implementa checkout ou execução de ferramentas.
+nem autoriza compra. A IF-01 implementou descoberta; a IF-02 permite somente as
+consultas explicitamente aprovadas, sem carrinho ou checkout.
 
 Referência do SDK: [clientes e OAuth na documentação oficial v1](https://ts.sdk.modelcontextprotocol.io/client).

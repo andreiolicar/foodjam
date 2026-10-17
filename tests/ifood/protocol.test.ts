@@ -22,6 +22,7 @@ async function localCallbackUrl() {
 function mockServer(options: {
   tokenFailure?: boolean; invalidTools?: boolean; alternateIssuer?: boolean;
   reconnectFailure?: boolean; malformedTokens?: boolean; requirePost?: boolean; clientFailure?: boolean;
+  readCatalog?: boolean; readResult?: unknown;
 } = {}) {
   const requests: { url: string; init: RequestInit | undefined }[] = [];
   const methods: string[] = [];
@@ -61,9 +62,21 @@ function mockServer(options: {
     if (init?.method === 'GET') return new Response(null, { status: 405 });
     if (init?.method === 'DELETE') return new Response(null, { status: 204 });
     if (options.reconnectFailure) return Response.json({ error: 'private-token' }, { status: 403 });
-    const message = JSON.parse(String(init?.body)) as { id?: number; method: string };
+    const message = JSON.parse(String(init?.body)) as { id?: number; method: string; params?: { cursor?: string } };
     methods.push(message.method);
     if (message.method === 'notifications/initialized') return new Response(null, { status: 202 });
+    if (options.readCatalog && message.method === 'tools/list') {
+      const result = message.params?.cursor ? { tools: [] } : {
+        tools: [{
+          name: 'getUser', inputSchema: { type: 'object', additionalProperties: false },
+          outputSchema: { type: 'object', properties: { fixtureCount: { type: 'number' } }, required: ['fixtureCount'] },
+        }], nextCursor: 'fixture-second-page',
+      };
+      return Response.json({ jsonrpc: '2.0', id: message.id, result });
+    }
+    if (options.readCatalog && message.method === 'tools/call') {
+      return Response.json({ jsonrpc: '2.0', id: message.id, result: options.readResult });
+    }
     const result = message.method === 'initialize' ? {
       protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'offline-ifood', version: '1.0' },
     } : { tools: options.invalidTools ? [{ name: 'invalid' }] : [{
@@ -77,6 +90,34 @@ function mockServer(options: {
 afterEach(() => vi.restoreAllMocks());
 
 describe('SDK v1 real com HTTP externo simulado', () => {
+  it.each([
+    [{ content: [{ type: 'text', text: 'private-profile' }], structuredContent: { fixtureCount: 2, extra: 'private-extra' } }, false],
+    [{ content: [{ type: 'text', text: 'private-failure' }], isError: true }, false],
+    [{ content: [], structuredContent: { fixtureCount: 'private-invalid-type' } }, true],
+  ] as const)('executa tools/call real, preservando resultado ou rejeitando outputSchema incompatível', async (readResult, invalid) => {
+    const callbackUrl = await localCallbackUrl();
+    const remote = mockServer({ readCatalog: true, readResult });
+    const diagnostics: IfoodMcpDiagnostic[] = [];
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), {
+      onDiagnostic: (event) => diagnostics.push(event),
+      openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); },
+    });
+    try {
+      await client.connect();
+      if (invalid) await expect(client.callReadTool('getUser', {})).rejects.toMatchObject({ diagnostic: { stage: 'tools_read', reason: 'read_result_invalid' } });
+      else await expect(client.callReadTool('getUser', {})).resolves.toEqual(readResult);
+      const requestBodies = remote.requests.filter((request) => request.url === endpoint && request.init?.method === 'POST')
+        .map((request) => JSON.parse(String(request.init?.body)) as { method: string; params?: unknown });
+      expect(requestBodies.filter((body) => body.method === 'tools/call')).toEqual([
+        expect.objectContaining({ method: 'tools/call', params: { name: 'getUser', arguments: {} } }),
+      ]);
+      expect(remote.methods).toEqual(['initialize', 'notifications/initialized', 'tools/list', 'tools/list', 'tools/call']);
+      expect(JSON.stringify(diagnostics)).not.toContain('private-');
+    } finally { await client.close(); }
+  });
+
   it('executa OAuth com PKCE, valida callback, reconecta e faz apenas tools/list', async () => {
     const callbackUrl = await localCallbackUrl();
     const remote = mockServer({ requirePost: true });

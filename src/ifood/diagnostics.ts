@@ -4,7 +4,7 @@ import { McpError } from '@modelcontextprotocol/sdk/types.js';
 
 export type IfoodMcpStage = 'mcp_initial_connect' | 'oauth_browser' | 'oauth_callback'
   | 'oauth_state_validation' | 'oauth_token_exchange' | 'oauth_tokens_storage'
-  | 'mcp_reconnect' | 'tools_list' | 'mcp_close';
+  | 'mcp_reconnect' | 'tools_list' | 'tools_read' | 'mcp_close';
 
 interface SafeErrorDetails {
   errorType?: string;
@@ -18,7 +18,10 @@ interface SafeErrorDetails {
   clientAuthMethod?: 'client_secret_basic' | 'client_secret_post' | 'private_key_jwt' | 'none';
   reason?: 'callback_timeout' | 'callback_cancelled' | 'callback_port_unavailable'
     | 'callback_invalid' | 'authorization_not_started' | 'authorization_restart_required'
-    | 'pkce_unavailable' | 'tokens_not_saved' | 'unsupported_protocol_version';
+    | 'pkce_unavailable' | 'tokens_not_saved' | 'unsupported_protocol_version'
+    | 'read_tool_not_allowed' | 'read_tool_not_found' | 'read_catalog_ambiguous'
+    | 'read_tool_write_hint' | 'read_arguments_invalid' | 'read_schema_invalid'
+    | 'read_result_invalid' | 'read_tool_failed' | 'read_client_disconnected' | 'read_not_authenticated';
 }
 
 export interface IfoodMcpDiagnostic extends SafeErrorDetails {
@@ -54,6 +57,7 @@ const stageMessages: Record<IfoodMcpStage, string> = {
   oauth_tokens_storage: 'Falha de autenticação OAuth ao armazenar tokens em memória.',
   mcp_reconnect: 'Não foi possível conectar ao MCP após autenticação OAuth.',
   tools_list: 'Não foi possível listar ferramentas MCP.',
+  tools_read: 'Não foi possível concluir a consulta MCP de leitura.',
   mcp_close: 'Não foi possível encerrar a sessão MCP; recursos locais liberados.',
 };
 

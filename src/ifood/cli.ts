@@ -11,7 +11,7 @@ export async function runDiscovery(options: {
   env?: NodeJS.ProcessEnv;
   log?: (message: string) => void;
   error?: (message: string) => void;
-  createClient?: (config: IfoodMcpConfig, options?: { onDiagnostic?: DiagnosticListener }) => IfoodMcpClient;
+  createClient?: (config: IfoodMcpConfig, options?: { onDiagnostic?: DiagnosticListener }) => Pick<IfoodMcpClient, 'connect' | 'listTools' | 'close'>;
   signal?: AbortSignal;
 } = {}): Promise<number> {
   const log = options.log ?? console.info;

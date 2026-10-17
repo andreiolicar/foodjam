@@ -5,6 +5,7 @@ import { expect, it } from 'vitest';
 it('importa API e CLI sem ambiente, rede, listener, processo ou saída automática', () => {
   const api = fileURLToPath(new URL('../../src/ifood/index.ts', import.meta.url));
   const cli = fileURLToPath(new URL('../../src/ifood/cli.ts', import.meta.url));
+  const readCli = fileURLToPath(new URL('../../src/ifood/read-cli.ts', import.meta.url));
   const script = `
     import http from 'node:http';
     import childProcess from 'node:child_process';
@@ -17,10 +18,11 @@ it('importa API e CLI sem ambiente, rede, listener, processo ou saída automáti
     syncBuiltinESMExports();
     const api = await import(pathToFileURL(process.argv[1]).href);
     await import(pathToFileURL(process.argv[2]).href);
+    await import(pathToFileURL(process.argv[3]).href);
     console.log(Object.keys(api).sort().join(','));
   `;
   const output = execFileSync(process.execPath, [
-    '--import', import.meta.resolve('tsx'), '--input-type=module', '-e', script, api, cli,
+    '--import', import.meta.resolve('tsx'), '--input-type=module', '-e', script, api, cli, readCli,
   ], { env: {}, encoding: 'utf8', timeout: 10_000 });
   expect(output.trim()).toBe('createIfoodMcpClient,readIfoodMcpConfig');
 });

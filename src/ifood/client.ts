@@ -8,6 +8,8 @@ import { readIfoodMcpConfig } from './config.js';
 import type { IfoodMcpConfig } from './config.js';
 import { diagnosticError, reportDiagnostic } from './diagnostics.js';
 import type { DiagnosticListener, IfoodMcpDiagnostic, IfoodMcpStage } from './diagnostics.js';
+import { assertApprovedReadTool, findReadTool, snapshotReadArguments, validateReadResult, validateReadSchema } from './read-tools.js';
+import type { IfoodMcpReadResult } from './read-tools.js';
 
 /** Metadados preservados de tools/list; não representa permissão de execução. */
 export interface IfoodMcpTool {
@@ -25,6 +27,7 @@ export interface IfoodMcpServer {
 export interface IfoodMcpClient {
   connect(): Promise<IfoodMcpServer | undefined>;
   listTools(): Promise<IfoodMcpTool[]>;
+  callReadTool(name: string, args: Record<string, unknown>): Promise<IfoodMcpReadResult>;
   /** Terminal e idempotente. Cancele e crie outro cliente para autenticar novamente. */
   close(): Promise<void>;
 }
@@ -46,6 +49,7 @@ export function createIfoodMcpClient(
   let closed = false;
   let connection: Promise<IfoodMcpServer | undefined> | undefined;
   let closing: Promise<void> | undefined;
+  let catalog: IfoodMcpTool[] | undefined;
   const abort = new AbortController();
   let stage: IfoodMcpStage = 'mcp_initial_connect';
   const httpContext = new Map<IfoodMcpStage, Pick<IfoodMcpDiagnostic, 'httpStatus' | 'requestKind' | 'method' | 'contentType' | 'clientAuthMethod'>>();
@@ -58,6 +62,10 @@ export function createIfoodMcpClient(
 
   const createConnection = () => {
     client = new Client({ name: 'FoodJam', version: '0.1.0' }, { capabilities: {} });
+    const createdClient = client;
+    client.onclose = () => {
+      if (client === createdClient) { connected = false; catalog = undefined; }
+    };
     transport = new StreamableHTTPClientTransport(new URL(validated.endpoint), {
       authProvider: provider!,
       // Limita também discovery, troca de código e encerramento, além do timeout MCP.
@@ -131,7 +139,7 @@ export function createIfoodMcpClient(
     }
   }
 
-  return {
+  const api: IfoodMcpClient = {
     connect() {
       if (closed) return Promise.reject(new Error('Cliente MCP encerrado. Crie uma nova instância.'));
       if (connected) return Promise.resolve(client?.getServerVersion());
@@ -142,6 +150,7 @@ export function createIfoodMcpClient(
     },
     async listTools() {
       if (!connected || closed || !client) throw new Error('Cliente MCP precisa estar conectado para listar ferramentas.');
+      catalog = undefined;
       startStage('tools_list');
       try {
         const tools: IfoodMcpTool[] = [];
@@ -154,10 +163,36 @@ export function createIfoodMcpClient(
           if (cursor && cursors.has(cursor)) throw new Error('Cursor repetido.');
           if (cursor) cursors.add(cursor);
         } while (cursor);
+        if (!connected || closed) throw new Error('Conexão encerrada durante discovery.');
+        catalog = structuredClone(tools);
         succeed();
         return tools;
       } catch (error) {
         const failure = diagnosticError('tools_list', error, httpContext.get('tools_list'));
+        reportDiagnostic(options.onDiagnostic, failure.diagnostic);
+        throw failure;
+      }
+    },
+    async callReadTool(name, args) {
+      const current = client;
+      try {
+        if (!connected || closed || !current) throw diagnosticError('tools_read', undefined, { reason: 'read_client_disconnected' });
+        if (!provider?.tokens()?.access_token) throw diagnosticError('tools_read', undefined, { reason: 'read_not_authenticated' });
+        assertApprovedReadTool(name);
+        const argumentsSnapshot = snapshotReadArguments(args);
+        if (!catalog) await api.listTools();
+        if (!connected || closed || client !== current) throw diagnosticError('tools_read', undefined, { reason: 'read_client_disconnected' });
+        const tool = findReadTool(name, catalog ?? []);
+        startStage('tools_read');
+        validateReadSchema(tool.inputSchema, argumentsSnapshot, 'input');
+        const result = validateReadResult(tool, await current.callTool({ name, arguments: argumentsSnapshot }));
+        if (result.isError) reportDiagnostic(options.onDiagnostic, {
+          stage: 'tools_read', event: 'failed', reason: 'read_tool_failed',
+        });
+        else reportDiagnostic(options.onDiagnostic, { stage: 'tools_read', event: 'succeeded' });
+        return result;
+      } catch (error) {
+        const failure = diagnosticError('tools_read', error, httpContext.get('tools_read'));
         reportDiagnostic(options.onDiagnostic, failure.diagnostic);
         throw failure;
       }
@@ -183,6 +218,7 @@ export function createIfoodMcpClient(
           abort.abort();
           await provider?.dispose();
           connected = false;
+          catalog = undefined;
           client = undefined;
           transport = undefined;
         }
@@ -196,4 +232,5 @@ export function createIfoodMcpClient(
       return closing;
     },
   };
+  return api;
 }
