@@ -116,8 +116,8 @@ Os testes atuais verificam a importação dos três módulos e a inicialização
 | Responsável | Módulo | Branch |
 | --- | --- | --- |
 | Desenvolvedor 1 — Andrei | [iFood](src/ifood/README.md) | `feat/ifood-mcp` |
-| Desenvolvedor 2 | [Telegram](src/telegram/README.md) | `feat/telegram-bot` |
-| Desenvolvedor 3 | [Core / Agente IA](src/core/README.md) | `feat/core-agent` |
+| Desenvolvedor 2 — Allan | [Telegram](src/telegram/README.md) | `feat/telegram-bot` |
+| Desenvolvedor 3 — Ana Paula| [Core / Agente IA](src/core/README.md) | `feat/core-agent` |
 
 Comece pela `main` atualizada e crie sua branch. Exemplo para a integração iFood:
 
