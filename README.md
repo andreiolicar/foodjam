@@ -82,7 +82,11 @@ foodjam/
 │   ├── ifood/            # Integração com o MCP do iFood
 │   └── index.ts          # Ponto de entrada da aplicação
 ├── tests/                # Testes de inicialização
-├── docs/architecture.md  # Arquitetura e limites dos módulos
+├── docs/
+│   ├── architecture.md  # Arquitetura e limites dos módulos
+│   ├── teste-pedido-colaborativo-iris.md
+│   └── feedback-mcp/
+│       └── MCP-02-beneficios-e-total-do-carrinho.md
 ├── .env.example          # Exemplo de configuração local
 ├── eslint.config.js      # Regras de qualidade de código
 ├── tsconfig.json         # Verificação de tipos de fontes e testes
@@ -96,6 +100,14 @@ O fluxo planejado é: **Telegram → Core / Agente IA → Integração MCP → i
 O core controla as regras de negócio. Valores monetários usam **centavos inteiros**: `2590` representa R$ 25,90. O modelo de IA não deve fazer os cálculos financeiros nem autorizar a compra final.
 
 Os contratos de `src/core/contracts.ts` são um ponto de partida e poderão mudar conforme a integração. Consulte [a arquitetura](docs/architecture.md) para conhecer os limites e as decisões do projeto.
+
+## Documentação
+
+- [Arquitetura](docs/architecture.md): responsabilidades e limites dos módulos.
+- [Teste de pedido colaborativo](docs/teste-pedido-colaborativo-iris.md): relatório do teste realizado com a Íris.
+- [Feedback MCP-02](docs/feedback-mcp/MCP-02-beneficios-e-total-do-carrinho.md): observações sobre benefícios e alterações no total do carrinho.
+
+Os relatórios foram mantidos com seus nomes e conteúdos originais.
 
 ## Comandos e testes
 
