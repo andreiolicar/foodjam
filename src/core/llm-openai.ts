@@ -211,22 +211,59 @@ export interface ListarModelosOptions {
   fetch?: typeof fetch;
 }
 
+/** Modelo como o provedor descreve em /models (campos extras variam por provedor). */
+export interface ModeloInfo {
+  id: string;
+  ownedBy?: string;
+  contextWindow?: number;
+  maxCompletionTokens?: number;
+  active?: boolean;
+}
+
+export interface ConsultaModelos {
+  modelos: ModeloInfo[];
+  /** Cabeçalhos de limite da resposta (x-ratelimit-*, retry-after), quando o provedor envia. */
+  limites: Record<string, string>;
+}
+
 /**
- * GET {baseUrl}/models e devolve os ids, em ordem alfabética, para escolher
- * AI_MODEL com o nome exato. Aceita { data: [{ id }] } (formato OpenAI) ou [{ id }].
+ * GET {baseUrl}/models: modelos em ordem alfabética, sem repetição, com os
+ * campos que o provedor informar, e os cabeçalhos de limite. Aceita
+ * { data: [...] } (formato OpenAI) ou lista direta. Erros não expõem a chave.
  */
-export async function listarModelos(options: ListarModelosOptions): Promise<string[]> {
+export async function consultarModelos(options: ListarModelosOptions): Promise<ConsultaModelos> {
   const headers: Record<string, string> = {};
   if (options.apiKey) headers.authorization = `Bearer ${options.apiKey}`;
 
   const response = await (options.fetch ?? fetch)(`${options.baseUrl.replace(/\/+$/, '')}/models`, { headers });
   if (!response.ok) throw new LlmHttpError(response.status, await response.text());
 
+  const limites: Record<string, string> = {};
+  response.headers.forEach((valor, nome) => {
+    if (/^x-ratelimit|^retry-after$/i.test(nome)) limites[nome.toLowerCase()] = valor;
+  });
+
   const body = (await response.json()) as unknown;
   const lista = Array.isArray(body) ? body : (body as { data?: unknown })?.data;
   if (!Array.isArray(lista)) {
     throw new Error('resposta de /models sem lista de modelos (esperado { data: [{ id }] })');
   }
-  const ids = lista.map((m) => (m as { id?: unknown })?.id).filter((id): id is string => typeof id === 'string' && id.length > 0);
-  return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+
+  const porId = new Map<string, ModeloInfo>();
+  for (const item of lista) {
+    const m = item as Record<string, unknown>;
+    if (typeof m?.id !== 'string' || !m.id || porId.has(m.id)) continue;
+    const info: ModeloInfo = { id: m.id };
+    if (typeof m.owned_by === 'string') info.ownedBy = m.owned_by;
+    if (typeof m.context_window === 'number') info.contextWindow = m.context_window;
+    if (typeof m.max_completion_tokens === 'number') info.maxCompletionTokens = m.max_completion_tokens;
+    if (typeof m.active === 'boolean') info.active = m.active;
+    porId.set(m.id, info);
+  }
+  return { modelos: [...porId.values()].sort((a, b) => a.id.localeCompare(b.id)), limites };
+}
+
+/** Só os ids, em ordem alfabética, para escolher AI_MODEL com o nome exato. */
+export async function listarModelos(options: ListarModelosOptions): Promise<string[]> {
+  return (await consultarModelos(options)).modelos.map((m) => m.id);
 }

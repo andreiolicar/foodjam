@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LlmHttpError, OpenAiCompatLlm, classificarErro, extrairJson, listarModelos, tempoDeEspera } from '../../src/core/llm-openai.js';
+import { LlmHttpError, OpenAiCompatLlm, classificarErro, consultarModelos, extrairJson, listarModelos, tempoDeEspera } from '../../src/core/llm-openai.js';
 import type { LlmRequest } from '../../src/core/ports.js';
 
 const request: LlmRequest = {
@@ -274,5 +274,28 @@ describe('Gemini: respostas reais da camada gratuita', () => {
     await expect(llm.generate(request)).resolves.toEqual({ ok: 1 });
     expect(esperas).toEqual([1000, 2000]);
     expect(chamadas).toHaveLength(3);
+  });
+});
+
+describe('consultarModelos', () => {
+  it('devolve campos do provedor (formato Groq) e os cabeçalhos de limite', async () => {
+    const fn = (async () =>
+      new Response(
+        JSON.stringify({
+          object: 'list',
+          data: [
+            { id: 'modelo-b', owned_by: 'Meta', context_window: 131072, max_completion_tokens: 32768, active: true },
+            { id: 'modelo-a', owned_by: 'Google', active: false },
+          ],
+        }),
+        { headers: { 'x-ratelimit-limit-requests': '1000', 'x-ratelimit-remaining-requests': '999', 'content-type': 'application/json' } },
+      )) as typeof fetch;
+
+    const r = await consultarModelos({ baseUrl: 'https://exemplo.test', fetch: fn });
+    expect(r.modelos).toEqual([
+      { id: 'modelo-a', ownedBy: 'Google', active: false },
+      { id: 'modelo-b', ownedBy: 'Meta', contextWindow: 131072, maxCompletionTokens: 32768, active: true },
+    ]);
+    expect(r.limites).toEqual({ 'x-ratelimit-limit-requests': '1000', 'x-ratelimit-remaining-requests': '999' });
   });
 });
