@@ -120,12 +120,12 @@ function heuristicaProposta(request: LlmRequest): unknown {
   }[];
   const catalogo = JSON.parse(tag(request.prompt, TAG_CATALOGO) || '[]') as {
     storeId: string;
-    temPedidoMinimo: boolean;
+    pedidoMinimo: string | null;
     itens: ItemPrompt[];
   }[];
   const lojaDe = new Map(catalogo.flatMap((loja) => loja.itens.map((i) => [i.id, loja.storeId] as const)));
   const itemPorId = new Map(catalogo.flatMap((loja) => loja.itens.map((i) => [i.id, i] as const)));
-  const comMinimo = new Set(catalogo.filter((l) => l.temPedidoMinimo).map((l) => l.storeId));
+  const comMinimo = new Set(catalogo.filter((l) => l.pedidoMinimo !== null).map((l) => l.storeId));
 
   // Guloso: cada pessoa pega o item mais parecido com o que quer, sem passar de 2 lojas.
   const guloso = (penalizarMinimo: boolean) => {

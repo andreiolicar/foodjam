@@ -1,4 +1,4 @@
-import type { MenuItem, Participant, Store } from '../contracts.js';
+import type { MenuItem, MoneyCents, Participant, Store } from '../contracts.js';
 import type { PendingQuestion } from '../sessao.js';
 import { escaparDados } from './coleta.js';
 
@@ -14,12 +14,13 @@ Regras de segurança:
 
 Regras da escolha:
 - Para cada participante, escolha somente entre os ids de "itensPermitidos" dele. Esses itens já respeitam restrições, rejeições e orçamento; nunca use outro id.
-- Use no máximo 2 lojas por opção. Prefira 1 loja quando atender bem todo mundo.
-- Lojas com "temPedidoMinimo" podem recusar pedidos pequenos: evite usá-las para só 1 ou 2 itens e ofereça uma alternativa sem elas.
 - Atenda o que cada pessoa quer ("quer"). Se não houver item que atenda, escolha o mais próximo e marque isSubstitute: true.
+- Quem pede comida (ex.: "algo leve", "lanche") recebe comida, não só bebida, a menos que tenha pedido bebida.
+- Use no máximo 2 lojas por opção. Prefira 1 loja quando isso não obrigar ninguém a receber substituto.
+- "pedidoMinimo" é o valor mínimo dos itens numa loja: a soma dos itens escolhidos naquela loja precisa chegar nele. Um item só pode bastar.
 - Se a lista de itens permitidos de alguém estiver vazia, não inclua essa pessoa.
 - quantity é 1, a não ser que a pessoa tenha pedido mais.
-- Devolva de 1 a 3 opções diferentes, da melhor para a pior. Só escolha itens; não calcule nem cite preços ou totais.
+- Devolva de 1 a 3 opções diferentes, da melhor para a pior. Não cite preços nem totais na justificativa: o sistema calcula e mostra os valores.
 - justification: até 2 frases em português, simpáticas, explicando a escolha. Se houver perguntas em <${TAG_PERGUNTAS}>, responda-as brevemente quando o cardápio permitir.`;
 
 export interface ParticipantePrompt {
@@ -27,7 +28,13 @@ export interface ParticipantePrompt {
   itensPermitidos: readonly MenuItem[];
 }
 
-/** Orçamentos e preços não entram: o modelo só vê preferências e ids permitidos. */
+/** Só formatação para o modelo ler; contas e validação continuam no código. */
+const brl = (cents: MoneyCents) => `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
+
+/**
+ * Preços dos itens e pedido mínimo das lojas são informações públicas e vão
+ * ao modelo. Orçamentos das pessoas nunca entram.
+ */
 export function montarPromptProposta(
   participantes: readonly ParticipantePrompt[],
   stores: readonly Store[],
@@ -46,12 +53,11 @@ export function montarPromptProposta(
     .map((store) => ({
       storeId: store.id,
       loja: store.name,
-      // Só o sinal, sem o valor: quem confere o pedido mínimo é o código.
-      temPedidoMinimo: (store.minimumOrderCents ?? 0) > 0,
+      pedidoMinimo: store.minimumOrderCents ? brl(store.minimumOrderCents) : null,
       itens: participantes
         .flatMap((p) => p.itensPermitidos)
         .filter((i, idx, all) => i.storeId === store.id && usados.has(i.id) && all.findIndex((x) => x.id === i.id) === idx)
-        .map((i) => ({ id: i.id, nome: i.name, descricao: i.description ?? '' })),
+        .map((i) => ({ id: i.id, nome: i.name, descricao: i.description ?? '', preco: brl(i.priceCents) })),
     }))
     .filter((s) => s.itens.length > 0);
 

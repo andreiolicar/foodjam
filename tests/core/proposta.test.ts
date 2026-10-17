@@ -3,7 +3,7 @@ import type { Participant, ParticipantPreferences } from '../../src/core/contrac
 import { CatalogoFake, LOJAS } from '../../src/core/fakes/catalogo-fake.js';
 import { FakeLlm, responderHeuristico } from '../../src/core/fakes/llm-fake.js';
 import type { PropostaDeps } from '../../src/core/proposta.js';
-import { propor } from '../../src/core/proposta.js';
+import { compararPropostas, propor } from '../../src/core/proposta.js';
 import { SISTEMA_PROPOSTA } from '../../src/core/prompts/proposta.js';
 import type { ModelPick, ModelProposal } from '../../src/core/schemas.js';
 import type { CoreSession } from '../../src/core/sessao.js';
@@ -282,5 +282,76 @@ describe('propor: escolha entre opções e resultado', () => {
     const result = await proporOk(session, new FakeLlm(responderHeuristico));
     expect(result.proposal.orders.length).toBeLessThanOrEqual(2);
     expect(result.proposal.uncoveredParticipantIds).toEqual([]);
+  });
+});
+
+describe('propor: preços, pedido mínimo e critério de escolha', () => {
+  it('o prompt traz preço dos itens e pedido mínimo das lojas, mas nunca orçamento', async () => {
+    const session = sessao(
+      pessoa('ana', { foodPreferences: ['hambúrguer'], budgetCents: 4321 }),
+      pessoa('bia', { foodPreferences: ['bolo de cenoura'] }),
+    );
+    const llm = new FakeLlm([saida(opcao(pick('ana', 'burger-x-salada'), pick('bia', 'pad-bolo-cenoura')))]);
+    await proporOk(session, llm);
+
+    const prompt = (llm.requests[0]?.prompt ?? '').replaceAll('&quot;', '"');
+    const catalogo = JSON.parse(/<catalogo>(.*)<\/catalogo>/.exec(prompt)?.[1] ?? '[]') as {
+      storeId: string;
+      pedidoMinimo: string | null;
+      itens: { id: string; preco: string }[];
+    }[];
+    const burger = catalogo.find((l) => l.storeId === LOJAS.hamburgueria);
+    expect(burger?.pedidoMinimo).toBe('R$ 20,00');
+    expect(burger?.itens.find((i) => i.id === 'burger-x-salada')?.preco).toBe('R$ 25,90');
+    expect(catalogo.find((l) => l.storeId === LOJAS.padaria)?.pedidoMinimo).toBeNull();
+    expect(prompt).not.toMatch(/4321|43,21|budget|orçamento/i);
+  });
+
+  it('o sistema pede comida (não só bebida) para quem pede comida', () => {
+    expect(SISTEMA_PROPOSTA).toMatch(/recebe comida, não só bebida/);
+  });
+
+  it('critério: mais gente com o que pediu > menos substitutos > menos lojas > menor total', async () => {
+    const session = sessao(pessoa('ana', { foodPreferences: ['hambúrguer'] }), pessoa('bia', { foodPreferences: ['bolo de cenoura'] }));
+    const llm = new FakeLlm([
+      saida(
+        // 1 loja, mas a Ana recebe substituto.
+        opcao(pick('ana', 'pad-misto', { isSubstitute: true }), pick('bia', 'pad-bolo-cenoura')),
+        // 2 lojas, as duas com o que pediram: deve vencer.
+        opcao(pick('ana', 'burger-x-salada'), pick('bia', 'pad-bolo-cenoura')),
+      ),
+    ]);
+    const result = await proporOk(session, llm);
+    expect(itensDe(result)).toEqual([
+      ['ana', 'burger-x-salada'],
+      ['bia', 'pad-bolo-cenoura'],
+    ]);
+  });
+
+  it('empate em quem recebe o que pediu: menos substitutos vence; depois menos lojas', () => {
+    /** Itens como [loja, substituto?]; um por pessoa, agrupados em pedidos por loja. */
+    const p = (itens: [string, boolean][], total = 1000) => {
+      const lojas = [...new Set(itens.map(([loja]) => loja))];
+      return {
+        proposal: {
+          orders: lojas.map((storeId) => ({
+            storeId,
+            items: itens
+              .map(([loja, sub], i) => ({ loja, participantId: `p${i}`, isSubstitute: sub }))
+              .filter((it) => it.loja === storeId),
+          })),
+          split: { totalCents: total },
+        },
+      } as never;
+    };
+
+    // Mais gente com o que pediu vence, mesmo com mais lojas.
+    expect(compararPropostas(p([['a', false], ['b', false]]), p([['a', false], ['a', true]]))).toBeLessThan(0);
+    // Mesmo número com o que pediu: menos substitutos vence.
+    expect(compararPropostas(p([['a', false], ['b', false]]), p([['a', false], ['b', false], ['a', true]]))).toBeLessThan(0);
+    // Mesmo número de substitutos: menos lojas vence.
+    expect(compararPropostas(p([['a', false], ['a', true]]), p([['a', false], ['b', true]]))).toBeLessThan(0);
+    // Empate em tudo: menor total vence.
+    expect(compararPropostas(p([['a', false]], 900), p([['a', false]], 1000))).toBeLessThan(0);
   });
 });

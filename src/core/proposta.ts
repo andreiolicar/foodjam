@@ -136,11 +136,17 @@ export async function propor(session: CoreSession, deps: PropostaDeps): Promise<
   };
 }
 
-/** Cobertura primeiro; empate: menos lojas; depois menor total. */
-function compararPropostas(a: { proposal: Proposal }, b: { proposal: Proposal }): number {
-  const cobertura = (p: Proposal) => p.split.shares.length;
+/**
+ * Ordem de preferência entre opções válidas:
+ * mais pessoas atendidas com o que pediram > menos substitutos > menos lojas > menor total.
+ */
+export function compararPropostas(a: { proposal: Proposal }, b: { proposal: Proposal }): number {
+  const itens = (p: Proposal) => p.orders.flatMap((o) => o.items);
+  const comOQuePediram = (p: Proposal) => new Set(itens(p).filter((i) => !i.isSubstitute).map((i) => i.participantId)).size;
+  const substitutos = (p: Proposal) => itens(p).filter((i) => i.isSubstitute).length;
   return (
-    cobertura(b.proposal) - cobertura(a.proposal) ||
+    comOQuePediram(b.proposal) - comOQuePediram(a.proposal) ||
+    substitutos(a.proposal) - substitutos(b.proposal) ||
     a.proposal.orders.length - b.proposal.orders.length ||
     a.proposal.split.totalCents - b.proposal.split.totalCents
   );
