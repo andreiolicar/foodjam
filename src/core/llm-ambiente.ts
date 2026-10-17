@@ -1,5 +1,6 @@
 import { FakeLlm, responderHeuristico } from './fakes/llm-fake.js';
-import { OpenAiCompatLlm } from './llm-openai.js';
+import type { ReasoningEffort } from './llm-openai.js';
+import { ESFORCOS, OpenAiCompatLlm } from './llm-openai.js';
 import type { LlmPort, LlmTier } from './ports.js';
 
 /** Variáveis lidas; recebidas como parâmetro para o core não ler process.env escondido. */
@@ -11,7 +12,19 @@ export interface LlmEnv {
   AI_MODEL_CAPABLE?: string | undefined;
   AI_MODEL_FAST_FALLBACK?: string | undefined;
   AI_MODEL_CAPABLE_FALLBACK?: string | undefined;
+  /** low | medium | high; ausente = padrão do provedor (não envia). */
+  AI_REASONING_EFFORT_FAST?: string | undefined;
+  AI_REASONING_EFFORT_CAPABLE?: string | undefined;
   AI_API_KEY?: string | undefined;
+}
+
+function lerEsforco(nome: string, valor: string | undefined): ReasoningEffort | undefined {
+  const v = valor?.trim().toLowerCase();
+  if (!v) return undefined;
+  if (!(ESFORCOS as readonly string[]).includes(v)) {
+    throw new Error(`${nome} inválido: "${valor}". Use ${ESFORCOS.join(', ')} ou deixe vazio.`);
+  }
+  return v as ReasoningEffort;
 }
 
 export const PROVEDORES_DISPONIVEIS = ['fake', 'openai-compat'] as const;
@@ -48,11 +61,18 @@ export function criarLlmDoAmbiente(env: LlmEnv): LlmPort {
       if (reservaFast && reservaFast !== fast) fallbacks.fast = reservaFast;
       if (reservaCapable && reservaCapable !== capable) fallbacks.capable = reservaCapable;
 
+      const reasoningEffort: Partial<Record<LlmTier, ReasoningEffort>> = {};
+      const esforcoFast = lerEsforco('AI_REASONING_EFFORT_FAST', env.AI_REASONING_EFFORT_FAST);
+      const esforcoCapable = lerEsforco('AI_REASONING_EFFORT_CAPABLE', env.AI_REASONING_EFFORT_CAPABLE);
+      if (esforcoFast) reasoningEffort.fast = esforcoFast;
+      if (esforcoCapable) reasoningEffort.capable = esforcoCapable;
+
       const apiKey = env.AI_API_KEY?.trim();
       return new OpenAiCompatLlm({
         baseUrl,
         models: { fast, capable },
         ...(Object.keys(fallbacks).length > 0 && { fallbacks }),
+        ...(Object.keys(reasoningEffort).length > 0 && { reasoningEffort }),
         ...(apiKey && { apiKey }),
       });
     }

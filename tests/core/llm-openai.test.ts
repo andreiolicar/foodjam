@@ -47,7 +47,8 @@ describe('OpenAiCompatLlm', () => {
       response_format: { type: 'json_schema', json_schema: { name: 'coleta', schema: { type: 'object' } } },
     });
     expect((chamada?.init.headers as Record<string, string>).authorization).toBe('Bearer chave-teste');
-    expect((chamada?.body.messages as { content: string }[])[0]?.content).toContain('JSON Schema');
+    // Em json_schema o schema vai só no response_format, não repetido no prompt.
+    expect((chamada?.body.messages as { content: string }[])[0]?.content).not.toContain('JSON Schema');
   });
 
   it('usa o modelo capable no nível capable e não manda header sem chave', async () => {
@@ -418,5 +419,36 @@ describe('OpenAiCompatLlm: modelo reserva', () => {
     ]);
     expect(llm.modoDe('principal')).toBe('json_schema');
     expect(llm.modoDe('reserva')).toBe('json_object');
+  });
+});
+
+describe('OpenAiCompatLlm: prompt enxuto e reasoning_effort', () => {
+  it('fora do json_schema, o schema volta para o prompt de sistema', async () => {
+    const { fn, chamadas } = fetchFalso([
+      { status: 400, body: 'response_format json_schema not supported' },
+      { status: 200, body: resposta('{}') },
+    ]);
+    await criar(fn).generate(request);
+    const sistema = (i: number) => (chamadas[i]?.body.messages as { content: string }[])[0]?.content ?? '';
+    expect(sistema(0)).not.toContain('JSON Schema');
+    expect(sistema(1)).toContain('JSON Schema');
+    expect(sistema(1)).toContain('{"type":"object"}');
+  });
+
+  it('envia reasoning_effort só no nível configurado', async () => {
+    const { fn, chamadas } = fetchFalso([
+      { status: 200, body: resposta('{}') },
+      { status: 200, body: resposta('{}') },
+    ]);
+    const llm = new OpenAiCompatLlm({
+      baseUrl: 'https://exemplo.test/v1',
+      models: { fast: 'f', capable: 'c' },
+      reasoningEffort: { capable: 'low' },
+      fetch: fn,
+    });
+    await llm.generate(request);
+    await llm.generate({ ...request, tier: 'capable' });
+    expect(chamadas[0]?.body).not.toHaveProperty('reasoning_effort');
+    expect(chamadas[1]?.body.reasoning_effort).toBe('low');
   });
 });

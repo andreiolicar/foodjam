@@ -51,3 +51,15 @@ describe('criarLlmDoAmbiente: modelo reserva', () => {
     expect(sem.modeloAtual('capable')).toBe('b');
   });
 });
+
+describe('criarLlmDoAmbiente: reasoning_effort', () => {
+  const base = { AI_PROVIDER: 'openai-compat', AI_BASE_URL: 'https://x.test', AI_MODEL: 'm' };
+
+  it('aceita low/medium/high (qualquer caixa) e vazio', () => {
+    expect(() => criarLlmDoAmbiente({ ...base, AI_REASONING_EFFORT_CAPABLE: 'LOW', AI_REASONING_EFFORT_FAST: '' })).not.toThrow();
+  });
+
+  it('recusa valor inválido com mensagem clara', () => {
+    expect(() => criarLlmDoAmbiente({ ...base, AI_REASONING_EFFORT_CAPABLE: 'mínimo' })).toThrow(/AI_REASONING_EFFORT_CAPABLE inválido/);
+  });
+});

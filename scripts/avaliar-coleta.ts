@@ -18,6 +18,7 @@ import { passaNoFiltro } from '../src/core/coleta.js';
 import { CASOS_COLETA, avaliarCaso, chamadasPrevistas } from '../src/core/fakes/casos-coleta.js';
 import type { LlmCallRecord } from '../src/core/llm.js';
 import { criarLlmDoAmbiente, temProvedorReal } from '../src/core/llm-ambiente.js';
+import { OpenAiCompatLlm } from '../src/core/llm-openai.js';
 import type { LlmPort } from '../src/core/ports.js';
 
 config({ quiet: true });
@@ -75,7 +76,8 @@ const provider = process.env.AI_PROVIDER || 'fake';
 if (provider !== 'fake' && !temProvedorReal(process.env)) {
   console.warn(`Aviso: AI_PROVIDER=${provider} sem AI_API_KEY; as chamadas devem ser recusadas.\n`);
 }
-const espacado = espacar(criarLlmDoAmbiente(process.env), intervaloMs);
+const real = criarLlmDoAmbiente(process.env);
+const espacado = espacar(real, intervaloMs);
 const llm = limitar(espacado, maxChamadas);
 const modelo = process.env.AI_MODEL_FAST || process.env.AI_MODEL || '—';
 
@@ -146,6 +148,17 @@ console.log(
 );
 console.log(`Latência por mensagem: média ${Math.round(media)} ms · p95 ${Math.round(p95)} ms (sem o intervalo; inclui novas tentativas)`);
 console.log(`Chamadas ao modelo: ${llm.feitas} de ${previstas} previstas (${falhasModelo.length} tentativas falharam)`);
+if (real instanceof OpenAiCompatLlm && real.usos.length > 0) {
+  const usos = real.usos;
+  const soma = (f: (u: (typeof usos)[number]) => number) => usos.reduce((t, u) => t + f(u), 0);
+  const n = usos.length;
+  console.log(
+    `Tokens: entrada ${soma((u) => u.promptTokens)} (média ${Math.round(soma((u) => u.promptTokens) / n)}/chamada)` +
+      ` · saída ${soma((u) => u.completionTokens)} (raciocínio ${soma((u) => u.reasoningTokens)})` +
+      ` · total ${soma((u) => u.totalTokens)} · modo ${real.mode}`,
+  );
+  for (const t of real.trocas) console.log(`  troca de modelo: ${t.de} → ${t.para} (${t.motivo})`);
+}
 // Erros iguais aparecem uma vez só.
 const porErro = new Map<string, number>();
 for (const c of falhasModelo) porErro.set(c.error ?? '', (porErro.get(c.error ?? '') ?? 0) + 1);

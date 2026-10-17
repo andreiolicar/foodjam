@@ -15,6 +15,11 @@ export interface OpenAiCompatOptions {
    * provedor (padrão: 1 min; 1 h para cota diária). Use um modelo com cota separada.
    */
   fallbacks?: Partial<Record<LlmTier, string>>;
+  /**
+   * reasoning_effort por nível (modelos de raciocínio, ex.: gpt-oss na Groq).
+   * Ausente = não envia (padrão do provedor).
+   */
+  reasoningEffort?: Partial<Record<LlmTier, ReasoningEffort>>;
   /** Injetável para testes; padrão: fetch global. */
   fetch?: typeof fetch;
   /** Relógio em ms, injetável para testes. Padrão: Date.now. */
@@ -36,6 +41,9 @@ export interface OpenAiCompatOptions {
  * - other: demais erros.
  * auth e plan_or_quota são fatais: tentar de novo não adianta.
  */
+export type ReasoningEffort = 'low' | 'medium' | 'high';
+export const ESFORCOS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
+
 export interface UsoTokens {
   tier: LlmTier;
   model: string;
@@ -237,7 +245,12 @@ export class OpenAiCompatLlm implements LlmPort {
 
   private post(request: LlmRequest, model: string): Promise<Response> {
     const mode = this.modoDe(model);
-    const system = `${request.system}\n\nResponda SOMENTE com um objeto JSON válido que siga este JSON Schema, sem texto fora do JSON:\n${JSON.stringify(request.outputSchema)}`;
+    // Em json_schema o provedor já recebe o schema no response_format: repetir no
+    // prompt só gasta tokens. Nos outros modos, o schema vai no prompt de sistema.
+    const system =
+      mode === 'json_schema'
+        ? `${request.system}\n\nResponda SOMENTE com JSON no formato pedido.`
+        : `${request.system}\n\nResponda SOMENTE com um objeto JSON válido que siga este JSON Schema, sem texto fora do JSON:\n${JSON.stringify(request.outputSchema)}`;
     const body: Record<string, unknown> = {
       model,
       temperature: 0,
@@ -246,6 +259,8 @@ export class OpenAiCompatLlm implements LlmPort {
         { role: 'user', content: request.prompt },
       ],
     };
+    const esforco = this.options.reasoningEffort?.[request.tier];
+    if (esforco) body.reasoning_effort = esforco;
     if (mode === 'json_schema') {
       body.response_format = {
         type: 'json_schema',
