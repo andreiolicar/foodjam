@@ -1,0 +1,29 @@
+# Dependências e artefatos
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.cache/
+
+# Ambiente e credenciais locais
+.env
+.env.*
+!.env.example
+.npmrc
+secrets/
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs e arquivos temporários
+*.log
+logs/
+tmp/
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+.vscode/
