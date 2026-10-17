@@ -1,16 +1,16 @@
 import telebot
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-
-bot = telebot.TeleBot(bot_token)
-
-@bot.message_handler(['start'])
-def start(msg:telebot.types.Message):
-    bot.reply_to(msg, 'Hello, world!')
+from config import TELEGRAM_BOT_TOKEN
+from handlers import register_handlers
 
 
-bot.infinity_polling()
+def main():
+    bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
+
+    register_handlers(bot)
+
+    print("Bot iniciado!")
+    bot.infinity_polling()
+
+
+if __name__ == "__main__":
+    main()
