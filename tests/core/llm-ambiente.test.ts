@@ -19,8 +19,8 @@ describe('criarLlmDoAmbiente: openai-compat', () => {
     const { OpenAiCompatLlm } = await import('../../src/core/llm-openai.js');
     const llm = criarLlmDoAmbiente({
       AI_PROVIDER: 'openai-compat',
-      AI_BASE_URL: 'https://opencode.ai/inference/openai/v1',
-      AI_MODEL: 'glm-5.3-flash',
+      AI_BASE_URL: 'https://opencode.ai/zen/v1',
+      AI_MODEL: 'modelo-exemplo',
     });
     expect(llm).toBeInstanceOf(OpenAiCompatLlm);
   });

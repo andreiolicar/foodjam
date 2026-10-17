@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LlmHttpError, OpenAiCompatLlm, extrairJson } from '../../src/core/llm-openai.js';
+import { LlmHttpError, OpenAiCompatLlm, extrairJson, listarModelos } from '../../src/core/llm-openai.js';
 import type { LlmRequest } from '../../src/core/ports.js';
 
 const request: LlmRequest = {
@@ -111,4 +111,36 @@ describe('extrairJson', () => {
       expect(() => extrairJson(data)).toThrow();
     },
   );
+});
+
+describe('listarModelos', () => {
+  it('faz GET em {base}/models com a chave e devolve ids ordenados e sem repetição', async () => {
+    const chamadas: { url: string; init?: RequestInit }[] = [];
+    const fn = (async (url: string | URL | Request, init?: RequestInit) => {
+      chamadas.push({ url: String(url), ...(init && { init }) });
+      return new Response(JSON.stringify({ object: 'list', data: [{ id: 'modelo-b' }, { id: 'modelo-a' }, { id: 'modelo-b' }, {}] }));
+    }) as typeof fetch;
+
+    await expect(listarModelos({ baseUrl: 'https://exemplo.test/v1/', apiKey: 'k', fetch: fn })).resolves.toEqual([
+      'modelo-a',
+      'modelo-b',
+    ]);
+    expect(chamadas[0]?.url).toBe('https://exemplo.test/v1/models');
+    expect((chamadas[0]?.init?.headers as Record<string, string>).authorization).toBe('Bearer k');
+  });
+
+  it('aceita lista direta', async () => {
+    const fn = (async () => new Response(JSON.stringify([{ id: 'x' }]))) as typeof fetch;
+    await expect(listarModelos({ baseUrl: 'https://exemplo.test', fetch: fn })).resolves.toEqual(['x']);
+  });
+
+  it('erro HTTP vira LlmHttpError sem expor a chave; formato inesperado falha com mensagem clara', async () => {
+    const negado = (async () => new Response('unauthorized', { status: 401 })) as typeof fetch;
+    const erro = await listarModelos({ baseUrl: 'https://exemplo.test', apiKey: 'segredo', fetch: negado }).catch((e: unknown) => e);
+    expect(erro).toBeInstanceOf(LlmHttpError);
+    expect(String(erro)).not.toContain('segredo');
+
+    const estranho = (async () => new Response(JSON.stringify({ models: 'x' }))) as typeof fetch;
+    await expect(listarModelos({ baseUrl: 'https://exemplo.test', fetch: estranho })).rejects.toThrow(/sem lista de modelos/);
+  });
 });

@@ -16,7 +16,8 @@
     "test": "vitest run",
     "check": "npm run lint && npm run typecheck && npm test",
     "simular": "tsx scripts/simulador.ts",
-    "avaliar:coleta": "tsx scripts/avaliar-coleta.ts"
+    "avaliar:coleta": "tsx scripts/avaliar-coleta.ts",
+    "listar:modelos": "tsx scripts/listar-modelos.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",

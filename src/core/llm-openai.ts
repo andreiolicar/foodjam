@@ -5,7 +5,7 @@ export type ResponseMode = 'json_schema' | 'json_object' | 'none';
 const MODOS: readonly ResponseMode[] = ['json_schema', 'json_object', 'none'];
 
 export interface OpenAiCompatOptions {
-  /** Ex.: https://opencode.ai/inference/openai/v1 (sem /chat/completions). */
+  /** Ex.: https://opencode.ai/zen/v1 (sem /chat/completions). */
   baseUrl: string;
   apiKey?: string;
   models: Record<LlmTier, string>;
@@ -106,4 +106,30 @@ export function extrairJson(data: unknown): unknown {
   } catch {
     throw new Error(`JSON inválido na resposta: ${semRaciocinio.slice(inicio, inicio + 200)}`);
   }
+}
+
+export interface ListarModelosOptions {
+  baseUrl: string;
+  apiKey?: string;
+  fetch?: typeof fetch;
+}
+
+/**
+ * GET {baseUrl}/models e devolve os ids, em ordem alfabética, para escolher
+ * AI_MODEL com o nome exato. Aceita { data: [{ id }] } (formato OpenAI) ou [{ id }].
+ */
+export async function listarModelos(options: ListarModelosOptions): Promise<string[]> {
+  const headers: Record<string, string> = {};
+  if (options.apiKey) headers.authorization = `Bearer ${options.apiKey}`;
+
+  const response = await (options.fetch ?? fetch)(`${options.baseUrl.replace(/\/+$/, '')}/models`, { headers });
+  if (!response.ok) throw new LlmHttpError(response.status, await response.text());
+
+  const body = (await response.json()) as unknown;
+  const lista = Array.isArray(body) ? body : (body as { data?: unknown })?.data;
+  if (!Array.isArray(lista)) {
+    throw new Error('resposta de /models sem lista de modelos (esperado { data: [{ id }] })');
+  }
+  const ids = lista.map((m) => (m as { id?: unknown })?.id).filter((id): id is string => typeof id === 'string' && id.length > 0);
+  return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
 }
