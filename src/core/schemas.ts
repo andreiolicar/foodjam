@@ -154,21 +154,45 @@ export const MAX_CLARIFICATION_LENGTH = 200;
 
 const PreferenceListSchema = z.array(z.string().trim().min(1).max(MAX_PREFERENCE_LENGTH)).max(MAX_PREFERENCE_ITEMS);
 
-export const ColetaOutputSchema = z
-  .strictObject({
-    kind: z.enum(['preference', 'question', 'irrelevant', 'ambiguous']),
-    foodPreferences: PreferenceListSchema,
-    dietaryRestrictions: PreferenceListSchema,
-    avoids: PreferenceListSchema,
-    budgetText: z.string().trim().min(1).max(40).nullable(),
-    clarification: z.string().trim().min(1).max(MAX_CLARIFICATION_LENGTH).nullable(),
-  })
-  .refine((output) => output.kind !== 'ambiguous' || output.clarification !== null, {
-    message: 'kind "ambiguous" exige clarification',
-    path: ['clarification'],
-  });
+const COLETA_CAMPOS = {
+  kind: z.enum(['preference', 'question', 'irrelevant', 'ambiguous']),
+  foodPreferences: PreferenceListSchema,
+  dietaryRestrictions: PreferenceListSchema,
+  avoids: PreferenceListSchema,
+  budgetText: z.string().trim().min(1).max(40).nullable(),
+  clarification: z.string().trim().min(1).max(MAX_CLARIFICATION_LENGTH).nullable(),
+};
+const ambiguoExigePergunta = (o: { kind: string; clarification: string | null }) =>
+  o.kind !== 'ambiguous' || o.clarification !== null;
+
+export const ColetaOutputSchema = z.strictObject(COLETA_CAMPOS).refine(ambiguoExigePergunta, {
+  message: 'kind "ambiguous" exige clarification',
+  path: ['clarification'],
+});
 
 export type ColetaOutput = z.infer<typeof ColetaOutputSchema>;
+
+/**
+ * Saída da coleta em lote: um resultado por participante do lote, cada um
+ * com o participantId exato. O schema é montado por chamada, com os ids do
+ * lote, para o modelo não inventar nem esquecer ninguém (fora disso: nova tentativa).
+ */
+export function criarColetaLoteSchema(participantIds: readonly string[]) {
+  const [primeiro, ...resto] = participantIds;
+  if (primeiro === undefined) throw new Error('lote vazio');
+  const item = z
+    .strictObject({ participantId: z.enum([primeiro, ...resto]), ...COLETA_CAMPOS })
+    .refine(ambiguoExigePergunta, { message: 'kind "ambiguous" exige clarification', path: ['clarification'] });
+
+  return z.strictObject({ resultados: z.array(item) }).refine(
+    (o) =>
+      o.resultados.length === participantIds.length &&
+      new Set(o.resultados.map((r) => r.participantId)).size === participantIds.length,
+    { message: `devolva exatamente um resultado para cada participante: ${participantIds.join(', ')}`, path: ['resultados'] },
+  );
+}
+
+export type ColetaLoteOutput = z.infer<ReturnType<typeof criarColetaLoteSchema>>;
 
 // ---------------------------------------------------------------------------
 // Saída do modelo ao interpretar um pedido de ajuste ("troca o meu por um café").

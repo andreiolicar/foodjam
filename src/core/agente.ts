@@ -1,6 +1,7 @@
 import { interpretarAjuste } from './ajuste.js';
 import { atualizarCatalogo } from './catalogo.js';
-import { coletar } from './coleta.js';
+import type { ItemLote } from './coleta.js';
+import { coletar, coletarLote } from './coleta.js';
 import type { AuthorizedOrder, CoreAction, IncomingMessage, ParticipantId, Proposal, SessionId } from './contracts.js';
 import { fechar } from './fechamento.js';
 import type { LlmCallRecord } from './llm.js';
@@ -36,6 +37,8 @@ export interface Resposta {
   discarded?: Descarte[];
   /** Na proposta: itens a confirmar com quem tem restrição (sem descrição no cardápio). */
   uncertain?: ItemIncerto[];
+  /** Em mensagens(): o outcome de cada pessoa do lote, na ordem da primeira mensagem dela. */
+  resultados?: { participantId: ParticipantId; outcome: string }[];
 }
 
 export interface AgenteDeps {
@@ -62,6 +65,12 @@ export interface Agente {
   iniciar(sessionId: SessionId, organizador: Organizador): Promise<Resposta>;
   /** Mensagem de alguém do grupo: preferência na coleta, pedido de ajuste na proposta. */
   mensagem(message: IncomingMessage, displayName?: string): Promise<Resposta>;
+  /**
+   * Várias mensagens do mesmo chat de uma vez (o bot junta com debounce; veja
+   * criarAgrupador). Na coleta vira uma chamada ao modelo para até 10 pessoas;
+   * na proposta, cada mensagem é interpretada como ajuste, em ordem.
+   */
+  mensagens(sessionId: SessionId, itens: readonly ItemLote[]): Promise<Resposta>;
   /** Monta (ou refaz) a proposta. Só o organizador. */
   propor(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
   /** Volta da proposta para a coleta (ex.: entrou gente nova). Só o organizador. */
@@ -176,6 +185,43 @@ export function criarAgente(deps: AgenteDeps): Agente {
             actions: result.actions,
             ...(result.session.proposal && { proposal: result.session.proposal }),
             ...(result.problems && { problems: result.problems }),
+          };
+        }),
+      ),
+
+    mensagens: (sessionId, itens) =>
+      enfileirar(sessionId, () =>
+        protegido(undefined, sessionId, async () => {
+          if (itens.length === 0) return { outcome: 'empty', actions: [], resultados: [] };
+          const record = await ativa(sessionId);
+          if (ehResposta(record)) return record;
+
+          if (record.session.status === 'collecting') {
+            const result = await coletarLote(record.session, itens, llmDeps);
+            await salvar(record, result.session);
+            return { outcome: 'batch', session: result.session, actions: result.actions, resultados: result.resultados };
+          }
+
+          // Na proposta, cada mensagem é um possível ajuste, em ordem.
+          const catalogo = record.catalog;
+          if (!catalogo) throw new Error(`sessão ${sessionId} em revisão sem catálogo da proposta`);
+          let session = record.session;
+          const actions: CoreAction[] = [];
+          const resultados: { participantId: ParticipantId; outcome: string }[] = [];
+          for (const item of itens) {
+            const r = await interpretarAjuste(session, { sessionId, participantId: item.participantId, text: item.text }, catalogo, llmDeps);
+            session = r.session;
+            resultados.push({ participantId: item.participantId, outcome: r.outcome });
+            actions.push(...r.actions.filter((a) => a.type !== 'session_updated'));
+          }
+          if (session !== record.session) actions.push({ type: 'session_updated', session });
+          await salvar(record, session);
+          return {
+            outcome: 'batch',
+            session,
+            actions,
+            resultados,
+            ...(session.proposal && { proposal: session.proposal }),
           };
         }),
       ),

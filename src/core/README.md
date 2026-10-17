@@ -29,7 +29,7 @@ qualquer fase não final ──cancelar──▶ cancelada
 
 | Fase | Arquivo | Modelo | O que faz |
 |---|---|---|---|
-| Coleta | `coleta.ts` | `fast`, sem ferramentas | Filtro barato (descarta vazias e só emoji), extrai `foodPreferences`, `dietaryRestrictions`, `avoids` e o trecho de orçamento (convertido em código). Perguntas ficam em `pendingQuestions`. |
+| Coleta | `coleta.ts` | `fast`, sem ferramentas | Filtro barato (descarta vazias e só emoji), extrai `foodPreferences`, `dietaryRestrictions`, `avoids` e o trecho de orçamento (convertido em código). Perguntas ficam em `pendingQuestions`. `coletarLote` faz o mesmo para até 10 pessoas numa chamada, com schema montado com os ids do lote. |
 | Proposta | `proposta.ts` | `capable`, sem tool calling | Busca lojas em código (`catalogo.ts`), filtra itens elegíveis por pessoa (`regras/elegibilidade.ts`), o modelo escolhe ids, o código valida, recalcula e escolhe a melhor opção. |
 | Ajuste | `ajuste.ts` | `fast` | `interpretarAjuste` converte texto em troca estruturada; `ajustar` troca o item da pessoa e recalcula. A pessoa só troca o próprio item. |
 | Fechamento | `fechamento.ts` | nenhum | Exige organizador e catálogo consultado há no máximo 60 s; revalida tudo e devolve `AuthorizedOrder`. |
@@ -41,6 +41,7 @@ qualquer fase não final ──cancelar──▶ cancelada
 - O modelo só escolhe entre ids permitidos para cada pessoa; escolha fora disso é descartada com motivo.
 - Só portas de leitura de catálogo; não existe ferramenta de pedido para o modelo.
 - Cada chamada é registrada (fase, nível, tentativa, duração, sucesso, erro fatal) via `registrar`.
+- Modelo reserva opcional por nível (`AI_MODEL_FAST_FALLBACK`, `AI_MODEL_CAPABLE_FALLBACK`): um 429 do principal troca na hora para o reserva, e o principal fica de lado pelo tempo pedido pelo provedor.
 - Erros do provedor: chave inválida, plano ou cota diária (401, 402, 403, `FreeTierError`, `PerDay`) são **fatais**, sem nova tentativa; 429 de limite por minuto espera (`Retry-After`, `retryDelay`, "try again in") e repete até 3 vezes.
 
 ## Como o bot usa o core
@@ -52,7 +53,8 @@ Sem HTTP: o Telegram importa o core e chama a fachada `criarAgente` (`agente.ts`
 | Caminho | Conteúdo |
 |---|---|
 | `index.ts` | API pública: `criarAgente`, `SessoesEmMemoria`, tipos, fakes e `criarLlmDoAmbiente`. |
-| `agente.ts` | Fachada para a interface: iniciar, mensagem, propor, reabrirColeta, fechar, cancelar, obter. |
+| `agente.ts` | Fachada para a interface: iniciar, mensagem, mensagens (lote), propor, reabrirColeta, fechar, cancelar, obter. |
+| `agrupador.ts` | `criarAgrupador`: debounce por chat; mensagens quase simultâneas viram um lote (uma chamada ao modelo para até 10 pessoas). |
 | `sessoes.ts` | `SessoesEmMemoria` (implementação da `SessionStore`). |
 | `contracts.ts` | Tipos compartilhados com o time (ver abaixo). |
 | `ports.ts` | `CatalogPort` (só leitura), `LlmPort` (níveis `fast`/`capable`) e `SessionStore`. |

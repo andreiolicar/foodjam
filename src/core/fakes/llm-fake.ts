@@ -1,6 +1,7 @@
 import type { LlmPort, LlmRequest } from '../ports.js';
 import { TAG_OPCOES } from '../prompts/ajuste.js';
-import { TAG_MENSAGEM, TAG_PREFERENCIAS, desescaparDados } from '../prompts/coleta.js';
+import type { EntradaLote } from '../prompts/coleta.js';
+import { TAG_LOTE, TAG_MENSAGEM, TAG_PREFERENCIAS, desescaparDados, montarPromptColeta } from '../prompts/coleta.js';
 import { TAG_CATALOGO, TAG_PARTICIPANTES } from '../prompts/proposta.js';
 
 export type Responder = (request: LlmRequest, index: number) => unknown;
@@ -77,6 +78,16 @@ export function responderHeuristico(request: LlmRequest): unknown {
   switch (request.outputName) {
     case 'coleta':
       return heuristicaColeta(request);
+    case 'coleta_lote': {
+      // Uma "coleta individual" por pessoa do lote, com as mensagens dela juntas.
+      const lote = JSON.parse(tag(request.prompt, TAG_LOTE) || '[]') as EntradaLote[];
+      return {
+        resultados: lote.map((e) => {
+          const prompt = montarPromptColeta(e.mensagens.join('\n'), (e as { preferenciasAtuais?: object }).preferenciasAtuais ?? {});
+          return { participantId: e.participantId, ...(heuristicaColeta({ ...request, outputName: 'coleta', prompt }) as object) };
+        }),
+      };
+    }
     case 'proposta':
       return heuristicaProposta(request);
     case 'ajuste':
