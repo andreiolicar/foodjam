@@ -32,6 +32,7 @@ const saida = (extra: Partial<ColetaOutput> = {}): ColetaOutput => ({
   foodPreferences: [],
   dietaryRestrictions: [],
   avoids: [],
+  wishes: [],
   budgetText: null,
   clarification: null,
   ...extra,
@@ -87,6 +88,7 @@ describe('coletar', () => {
       foodPreferences: ['pizza', 'algo leve'],
       dietaryRestrictions: ['vegetariano'],
       avoids: [],
+      wishes: [],
       budgetCents: 4000,
     });
     expect(result.actions).toEqual([{ type: 'session_updated', session: result.session }]);

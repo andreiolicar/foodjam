@@ -15,6 +15,12 @@ export interface ParticipantPreferences {
   dietaryRestrictions?: string[];
   /** Rejeição de gosto ("sem japonês"): filtra lojas e categorias, sem risco à saúde. */
   avoids?: string[];
+  /**
+   * Itens que a pessoa quer receber, um por entrada ("um lanche e um bolo de
+   * cenoura" → ["lanche", "bolo de cenoura"]). Vazio ou ausente: um item que
+   * combine com foodPreferences.
+   */
+  wishes?: string[];
   budgetCents?: MoneyCents;
 }
 

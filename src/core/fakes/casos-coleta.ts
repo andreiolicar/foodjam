@@ -23,6 +23,9 @@ export interface CasoColeta {
     restrictions?: string[];
     notRestrictions?: string[];
     avoids?: string[];
+    /** Fragmentos esperados em wishes (itens a receber). */
+    wishes?: string[];
+    wishesCount?: number;
     budgetCents?: number | null;
   };
 }
@@ -34,9 +37,13 @@ export const CASOS_COLETA: CasoColeta[] = [
     esperado: { outcome: 'preference_updated', avoids: ['japon|japa|sushi'], notRestrictions: ['japon|japa|sushi'] },
   },
   { mensagens: ['tô sem grana, algo barato pfv'], esperado: { outcome: 'preference_updated', food: ['barat|econom'] } },
-  { mensagens: ['bora de hambúrguer!!'], esperado: { outcome: 'preference_updated', food: ['hamburg|burger'] } },
+  { mensagens: ['bora de hambúrguer!!'], esperado: { outcome: 'preference_updated', food: ['hamburg|burger'], wishes: ['hamburg|burger'], wishesCount: 1 } },
   { mensagens: ['MANO QUERO PIZZA'], esperado: { outcome: 'preference_updated', food: ['pizza'] } },
-  { mensagens: ['um bolo de cenoura cai bem'], esperado: { outcome: 'preference_updated', food: ['bolo'] } },
+  { mensagens: ['um bolo de cenoura cai bem'], esperado: { outcome: 'preference_updated', food: ['bolo'], wishes: ['bolo'] } },
+  {
+    mensagens: ['quero um lanche e um bolo de cenoura'],
+    esperado: { outcome: 'preference_updated', wishes: ['lanche', 'bolo'], wishesCount: 2 },
+  },
   {
     mensagens: ['sou vegana e tenho intolerância a lactose'],
     esperado: { outcome: 'preference_updated', restrictions: ['vegan', 'lactose'] },
@@ -97,11 +104,18 @@ export async function avaliarCaso(
   const outcomes = Array.isArray(esperado.outcome) ? esperado.outcome : [esperado.outcome];
 
   if (!outcomes.includes(result.outcome)) falhas.push(`outcome ${result.outcome}, esperado ${outcomes.join(' ou ')}`);
-  for (const f of esperado.food ?? []) if (!contem(preferences?.foodPreferences, f)) falhas.push(`food sem "${f}"`);
+  // O item pedido pode estar no gosto (foodPreferences) ou nos itens a receber (wishes): a proposta usa os dois.
+  for (const f of esperado.food ?? []) {
+    if (!contem(preferences?.foodPreferences, f) && !contem(preferences?.wishes, f)) falhas.push(`food sem "${f}"`);
+  }
   for (const f of esperado.notFood ?? []) if (contem(preferences?.foodPreferences, f)) falhas.push(`food com "${f}"`);
   for (const f of esperado.restrictions ?? []) if (!contem(preferences?.dietaryRestrictions, f)) falhas.push(`restrições sem "${f}"`);
   for (const f of esperado.notRestrictions ?? []) if (contem(preferences?.dietaryRestrictions, f)) falhas.push(`restrições com "${f}"`);
   for (const f of esperado.avoids ?? []) if (!contem(preferences?.avoids, f)) falhas.push(`avoids sem "${f}"`);
+  for (const f of esperado.wishes ?? []) if (!contem(preferences?.wishes, f)) falhas.push(`wishes sem "${f}"`);
+  if (esperado.wishesCount !== undefined && (preferences?.wishes?.length ?? 0) !== esperado.wishesCount) {
+    falhas.push(`wishes com ${preferences?.wishes?.length ?? 0} itens, esperado ${esperado.wishesCount}`);
+  }
   if (esperado.budgetCents !== undefined && (preferences?.budgetCents ?? null) !== esperado.budgetCents) {
     falhas.push(`orçamento ${preferences?.budgetCents ?? 'nenhum'}, esperado ${esperado.budgetCents ?? 'nenhum'}`);
   }

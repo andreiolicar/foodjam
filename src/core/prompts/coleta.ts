@@ -9,6 +9,7 @@ Listas sempre COMPLETAS e atualizadas (atuais + novas; se mudou de ideia, "na ve
 - foodPreferences: o que quer, termos curtos ("hambúrguer", "algo leve", "barato").
 - dietaryRestrictions: saúde ou dieta, nunca violar ("vegetariano", "vegano", "sem lactose", "sem glúten", "alergia a amendoim").
 - avoids: só gosto, nome da comida sem "sem" ("qualquer coisa menos japa" → ["japonês"]). Na dúvida, se envolve saúde, é dietaryRestrictions.
+- wishes: os itens que a pessoa quer RECEBER, um por item ("um lanche e um bolo de cenoura" → ["lanche", "bolo de cenoura"]; "algo leve" → ["algo leve"]). Atributos como "barato" não são itens. Sem pedido de comida, [].
 budgetText: trecho exato do valor citado ("até 30 reais"), sem converter nem calcular; senão null.
 clarification: se "ambiguous", pergunta curta e simpática em português; senão null.
 Se kind não for "preference", devolva as listas atuais.`;
@@ -32,6 +33,7 @@ export function montarPromptColeta(mensagem: string, atuais: ParticipantPreferen
     foodPreferences: atuais.foodPreferences ?? [],
     dietaryRestrictions: atuais.dietaryRestrictions ?? [],
     avoids: atuais.avoids ?? [],
+    wishes: atuais.wishes ?? [],
   };
   return [
     `<${TAG_PREFERENCIAS}>${escaparDados(JSON.stringify(preferencias))}</${TAG_PREFERENCIAS}>`,
@@ -65,6 +67,7 @@ export function montarPromptColetaLote(entradas: readonly EntradaLote[]): string
       foodPreferences: e.atuais.foodPreferences ?? [],
       dietaryRestrictions: e.atuais.dietaryRestrictions ?? [],
       avoids: e.atuais.avoids ?? [],
+      wishes: e.atuais.wishes ?? [],
     },
     mensagens: e.mensagens,
   }));

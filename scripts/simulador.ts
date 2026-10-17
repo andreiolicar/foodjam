@@ -94,6 +94,7 @@ function mostrarSessao(): void {
     console.log(`      quer: ${foodPreferences.join(', ') || '—'}`);
     console.log(`      restrições: ${dietaryRestrictions.join(', ') || '—'}`);
     console.log(`      evita: ${avoids.join(', ') || '—'}`);
+    console.log(`      itens a receber: ${(p.preferences.wishes ?? []).join(', ') || '—'}`);
     console.log(`      orçamento (privado): ${budgetCents === undefined ? '—' : brl(budgetCents)}`);
   }
   for (const q of sessao.pendingQuestions ?? []) {
@@ -206,6 +207,11 @@ async function executar(linha: string): Promise<boolean> {
       }
       sessao = result.session;
       mostrarProposta(result.proposal);
+      const m = result.metricas;
+      console.log(
+        `  ${result.combinacoesAvaliadas} combinações avaliadas · escolhida: ${m.atendidos} atendido(s) com o que pediram,` +
+          ` ${m.faltando} desejo(s) sem item, ${m.substitutos} substituto(s), ${m.lojas} loja(s)`,
+      );
       for (const d of result.discarded) console.log(`  descartado: ${nomeDe(d.participantId)} → ${d.menuItemId} (${d.reason})`);
       for (const u of result.uncertain) console.log(`  ⚠ confirmar ingredientes: ${nomeDe(u.participantId)} → ${nomeItem(u.menuItemId)}`);
       return true;

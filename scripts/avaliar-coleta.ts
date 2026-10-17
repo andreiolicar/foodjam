@@ -132,6 +132,7 @@ for (const caso of CASOS_COLETA) {
     `    ${result.outcome} · quer: [${preferences?.foodPreferences?.join(', ') ?? ''}]` +
       ` · restrições: [${preferences?.dietaryRestrictions?.join(', ') ?? ''}]` +
       ` · evita: [${preferences?.avoids?.join(', ') ?? ''}]` +
+      ` · itens: [${preferences?.wishes?.join(', ') ?? ''}]` +
       ` · orçamento: ${preferences?.budgetCents ?? '—'}`,
   );
   for (const falha of falhas) console.log(`    ✗ ${falha}`);

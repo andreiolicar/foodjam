@@ -23,6 +23,7 @@ const pref = (participantId: string, foodPreferences: string[] = [], extra: obje
   foodPreferences,
   dietaryRestrictions: [],
   avoids: [],
+  wishes: [],
   budgetText: null,
   clarification: null,
   ...extra,

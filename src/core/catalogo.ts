@@ -16,7 +16,7 @@ const GENERICAS = new Set([
 export function termosDeBusca(participants: readonly Participant[]): string[] {
   const termos = new Set<string>();
   for (const p of participants) {
-    for (const pref of p.preferences.foodPreferences ?? []) {
+    for (const pref of [...(p.preferences.wishes ?? []), ...(p.preferences.foodPreferences ?? [])]) {
       const termo = pref
         .split(/\s+/)
         .filter((w) => w && !GENERICAS.has(normalizar(w)))

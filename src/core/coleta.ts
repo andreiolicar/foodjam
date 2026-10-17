@@ -14,6 +14,8 @@ export const MAX_BUDGET_CENTS = 100_000;
 
 export const TEXTO_FALHA_MODELO = 'Não consegui entender agora. Pode repetir o que você quer comer?';
 export const TEXTO_PERGUNTA_ANOTADA = 'Anotei sua pergunta e vou levar em conta na proposta.';
+/** Itens que uma pessoa pode pedir (wishes); o resto é ignorado. */
+export const MAX_ITENS_POR_PESSOA = 3;
 /** Limite de perguntas guardadas por pessoa, para não inflar o prompt da proposta. */
 export const MAX_PENDING_QUESTIONS_PER_PARTICIPANT = 3;
 
@@ -138,6 +140,7 @@ function aplicarSaidaColeta(
         foodPreferences: limparLista(output.foodPreferences),
         dietaryRestrictions: limparLista(output.dietaryRestrictions),
         avoids: limparLista(output.avoids),
+        wishes: limparLista(output.wishes).slice(0, MAX_ITENS_POR_PESSOA),
       };
       const budgetCents = output.budgetText ? extrairOrcamentoCents(output.budgetText) : current.budgetCents;
       if (budgetCents !== undefined) preferences.budgetCents = budgetCents;
@@ -262,6 +265,7 @@ export async function coletarLote(
         foodPreferences: saida.foodPreferences,
         dietaryRestrictions: saida.dietaryRestrictions,
         avoids: saida.avoids,
+        wishes: saida.wishes,
         budgetText: saida.budgetText,
         clarification: saida.clarification,
       };

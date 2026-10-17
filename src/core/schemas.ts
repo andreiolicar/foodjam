@@ -159,6 +159,7 @@ const COLETA_CAMPOS = {
   foodPreferences: PreferenceListSchema,
   dietaryRestrictions: PreferenceListSchema,
   avoids: PreferenceListSchema,
+  wishes: PreferenceListSchema,
   budgetText: z.string().trim().min(1).max(40).nullable(),
   clarification: z.string().trim().min(1).max(MAX_CLARIFICATION_LENGTH).nullable(),
 };
@@ -214,3 +215,44 @@ export const AjusteOutputSchema = z
   });
 
 export type AjusteOutput = z.infer<typeof AjusteOutputSchema>;
+
+// ---------------------------------------------------------------------------
+// Proposta: o modelo só faz o casamento semântico. Para cada pessoa e cada
+// desejo dela (na ordem), lista ids que atendem e ids substitutos, do melhor
+// para o pior; o que não aparece "não serve". Quem monta lojas, preços,
+// pedido mínimo, orçamento e rateio é o código.
+// ---------------------------------------------------------------------------
+
+export const MAX_IDS_POR_CLASSE = 8;
+
+/** Schema montado por chamada: ids e número de desejos de cada pessoa. */
+export function criarClassificacaoSchema(desejosPorPessoa: ReadonlyMap<string, number>) {
+  const ids = [...desejosPorPessoa.keys()];
+  const [primeiro, ...resto] = ids;
+  if (primeiro === undefined) throw new Error('nenhuma pessoa para classificar');
+  const lista = z.array(IdSchema).max(MAX_IDS_POR_CLASSE);
+
+  return z
+    .strictObject({
+      pessoas: z.array(
+        z.strictObject({
+          participantId: z.enum([primeiro, ...resto]),
+          desejos: z.array(z.strictObject({ atende: lista, substitutos: lista })),
+        }),
+      ),
+    })
+    .refine(
+      (o) =>
+        o.pessoas.length === ids.length &&
+        new Set(o.pessoas.map((p) => p.participantId)).size === ids.length &&
+        o.pessoas.every((p) => p.desejos.length === desejosPorPessoa.get(p.participantId)),
+      {
+        message: `um item por pessoa (${ids.join(', ')}) e um item em "desejos" para cada desejo dela, na ordem`,
+        path: ['pessoas'],
+      },
+    );
+}
+
+export type ClassificacaoOutput = z.infer<ReturnType<typeof criarClassificacaoSchema>>;
+
+export const JustificativaSchema = z.strictObject({ justification: JustificationSchema });
