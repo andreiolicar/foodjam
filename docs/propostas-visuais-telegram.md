@@ -56,24 +56,32 @@ fotos: envia no máximo uma por produto selecionado, conforme este novo contrato
 
 A mensagem de item usa `sendPhoto` com legenda HTML completa de até 1.024 unidades
 UTF-16, contando também marcação e entidades de forma conservadora. Sem imagem
-válida, legenda longa, falha ou timeout de mídia, usa `sendMessage` para aquele
-item, sem truncamento nem reinserção no resumo. Itens não têm botões. As mensagens
+válida, legenda longa, falha/timeout antes do upload ou rejeição explícita 4xx do
+Bot API, usa `sendMessage` para aquele item, sem truncamento nem reinserção no
+resumo. Depois de iniciado o envio ao Telegram, timeout, erro de rede ou 5xx são
+entrega incerta: não geram fallback nem nova tentativa naquela revisão. Itens
+não têm botões. As mensagens
 são sequenciais; falha de um item não bloqueia os próximos. O resumo já está
 entregue e interativo antes do download. Download+envio de foto têm prazo conjunto
-de 2 segundos; fallback textual individual também tem prazo de 2 segundos.
+de 2 segundos; fallback textual individual também tem prazo de 2 segundos e
+reserva a chave do produto quando sua própria entrega for incerta.
 São preservados HTTPS, host comprovado, bloqueio de redirecionamento, MIME e teto
 de 5 MB. URLs e erros remotos não são registrados.
 
 Reapresentar/revisar a mesma identidade não reenvia itens. Atualizações editam o
 resumo com `editMessageText`, a foto com `editMessageCaption` e itens textuais com
 `editMessageText`. Se a legenda crescer demais ou a edição for recusada, substitui
-somente a mensagem daquele item por texto completo. Atualizações da mesma revisão
+somente a mensagem daquele item por texto completo após confirmar sua exclusão.
+Se a exclusão falhar ou ficar incerta, mantém a mensagem conhecida e bloqueia
+outro envio desse item na revisão. Atualizações da mesma revisão
 são serializadas; metadados atualizados durante o envio são reaplicados ao item.
 
 Troca de alternativa, substituição, cancelamento e volta à coleta invalidam a
 identidade do resumo e limpam resumo e mensagens de item. Cada envio é protegido
 por token de apresentação e revisão do Core, com conferências antes/depois dos
-awaits e registro síncrono do ID. Respostas tardias são removidas; uma edição tardia
+awaits e registro síncrono do ID. Respostas tardias da revisão vigente são adotadas
+como o único envio reservado e recebem os metadados mais recentes. Respostas
+tardias de apresentações invalidadas são removidas; uma edição tardia
 repete a limpeza para não restaurar callbacks antigos. Mensagens de item nunca
 são reconhecidas como cards de callback. O Core mantém sua validação independente.
 
@@ -82,6 +90,12 @@ requisição mas não devolver seu ID, não é possível garantir remoção fís
 exclusão falhar, mensagens históricas podem ficar visíveis. Os itens respondem ao
 resumo original e nunca recebem a identidade de uma proposta nova. Callback de
 resumo antigo permanece inválido mesmo se a remoção física falhar.
+
+Não é possível combinar fallback imediato com garantia de não duplicação quando
+o Telegram aceita uma mensagem e perde a resposta. Nessa situação, prioriza-se
+não duplicar: o item pode não aparecer se a requisição nunca tiver sucesso ou
+nunca devolver seu resultado. O resumo e os demais produtos continuam disponíveis.
+Abortar a requisição não é considerado prova de que ela não criou a mensagem.
 
 Avaliação aparece por loja como `⭐ 4,7 (850 avaliações)`; sem contagem, `⭐ 4,7`.
 Sem nota válida, omite a linha. Nomes são escapados em HTML. Nenhum valor financeiro
@@ -173,3 +187,35 @@ O caso de edição tardia após fallback também recusado foi reproduzido em RED
 corrigido: o ID abandonado é invalidado antes de tentar o texto; uma nova tentativa
 não reutiliza esse ID. A limpeza tardia preserva o item novo. Revisão final:
 100/100 testes selecionados, incluindo os 48 casos novos, sem bloqueadores.
+
+## Correção de entrega incerta (base 2360252)
+
+Trabalho isolado em `codex/item-media-delivery-certainty`, sem mudanças em Core,
+seleção, contratos MCP, preços, avaliações, cascata, credenciais ou permissões.
+O log sanitizado existente confirma proposta real pronta às 08h06 de 18/10/2026,
+mas não contém duração/status de envio de mídia. A causa técnica foi reproduzida
+offline: o prazo de dois segundos liberava texto enquanto `sendPhoto` continuava;
+uma resposta tardia com exclusão recusada deixava duas mensagens visíveis.
+
+Os envios agora distinguem entrega confirmada, não envio comprovado e entrega
+incerta. A reserva por produto impede reenvio por atualização concorrente da
+mesma revisão. Uma conferência assíncrona do Core também verifica o aborto antes
+de iniciar upload, evitando foto tardia após fallback pré-envio. A retirada de
+botões e a exclusão usam sinais/prazos independentes: falha da exclusão não
+aborta a limpeza do teclado.
+
+RED: sete regressões iniciais falharam antes da correção; uma regressão adicional
+de limpeza também falhou antes do ajuste. GREEN: 59 testes de cards por item e
+21 de mídia. Casos cobrem envio acima de dois segundos, aceitação seguida de erro
+de rede, resposta tardia, exclusão recusada, reapresentação concorrente, segundo
+produto normal após o primeiro lento, cancelamento/substituição e fallback
+pré-envio preservado. Rejeições definitivas usam `GrammyError` 4xx; erros genéricos
+e 5xx continuam cobertos como incertos. Nenhuma fixture MCP foi alterada.
+
+Validação final local: **1.523 testes em 80 arquivos** (baseline de 1.512, onze
+regressões adicionais), `npm run check` com lint/typecheck aprovados e
+`npm run build` aprovado. Diff sem erros de whitespace e varredura local de
+padrões de segredos sem ocorrências nos cinco arquivos alterados. Revisão
+independente: 106 testes selecionados aprovados, sem bloqueadores remanescentes.
+O bot PID 3731 permaneceu no checkout anterior em `2360252`, sem interrupção,
+reinício ou novo polling. Não houve chamadas reais MCP, IA ou Telegram.

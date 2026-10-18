@@ -20,14 +20,14 @@ async function bounded<T>(operation: (signal: AbortSignal) => Promise<T>): Promi
   finally { if (timer) clearTimeout(timer); controller.abort(); }
 }
 
-/** Identidade já foi invalidada; remove botões e foto sem bloquear outro card. */
-export async function removerFoto(api: MediaApi, sessionId: string, messageId: number): Promise<void> {
-  await bounded(async signal => {
-    await Promise.allSettled([
-      api.editMessageReplyMarkup(sessionId, messageId, { reply_markup: new InlineKeyboard() }, telegramSignal(signal)),
-      api.deleteMessage(sessionId, messageId, telegramSignal(signal)),
-    ]);
-  });
+/** Limpeza limitada por tempo; só a exclusão confirmada permite substituir um item. */
+export async function removerFoto(api: MediaApi, sessionId: string, messageId: number): Promise<boolean> {
+  // Uma exclusão recusada não pode abortar a retirada independente dos botões.
+  const [, deleted] = await Promise.all([
+    bounded(signal => api.editMessageReplyMarkup(sessionId, messageId, { reply_markup: new InlineKeyboard() }, telegramSignal(signal))),
+    bounded(signal => api.deleteMessage(sessionId, messageId, telegramSignal(signal))),
+  ]);
+  return deleted === true;
 }
 
 /** Download apenas da origem comprovada, sem redirects, com teto de bytes/tempo. */
@@ -55,35 +55,49 @@ async function photoBytes(url: string, signal: AbortSignal): Promise<Uint8Array 
   } finally { await reader.cancel().catch(() => undefined); }
 }
 
-/** Foto apenas do produto renderizado; download e envio dividem o mesmo prazo. */
+/** Só uma rejeição explícita do Bot API prova que a mensagem não foi criada. */
+function rejected(error: unknown): boolean {
+  return error instanceof GrammyError && error.error_code >= 400 && error.error_code < 500;
+}
+export type ResultadoEnvioItem = 'sent' | 'not_sent' | 'uncertain';
+type AoEnviar = (messageId: number, late: boolean) => void;
+
+/** Falha pré-envio permite texto; upload iniciado e incerto nunca permite duplicar. */
 export async function enviarFotoItem(api: MediaApi, sessionId: string, itemImageUrl: string | undefined,
-  caption: string, cardId: number, current: () => Promise<boolean>, active: () => boolean): Promise<{ message_id: number } | undefined> {
+  caption: string, cardId: number, current: () => Promise<boolean>, active: () => boolean,
+  onSent: AoEnviar): Promise<ResultadoEnvioItem> {
   const url = validatedItemImageUrl(itemImageUrl);
-  if (!url || caption.length > 1024) return;
-  return bounded(async signal => {
+  if (!url || caption.length > 1024) return 'not_sent';
+  let started = false; let refused = false; let delivered = false;
+  await bounded(async signal => {
     const bytes = await photoBytes(url, signal);
-    if (!bytes || signal.aborted || !await current() || !active()) return;
-    const message = await api.sendPhoto(sessionId, new InputFile(bytes, 'produto.jpg'), { caption, parse_mode: 'HTML', reply_parameters: { message_id: cardId } }, telegramSignal(signal));
-    if (signal.aborted || !active()) {
-      await removerFoto(api, sessionId, message.message_id);
-      return;
-    }
-    return message;
+    if (!bytes || !await current() || !active() || signal.aborted) return;
+    started = true;
+    let message: { message_id: number };
+    try { message = await api.sendPhoto(sessionId, new InputFile(bytes, 'produto.jpg'), { caption, parse_mode: 'HTML', reply_parameters: { message_id: cardId } }, telegramSignal(signal)); }
+    catch (error) { refused = rejected(error); return; }
+    if (!await current() || !active()) { await removerFoto(api, sessionId, message.message_id); return; }
+    // Aborto não prova que o Telegram recusou a foto. Na revisão vigente,
+    // adota o único envio tardio em vez de apagá-lo após publicar outro.
+    onSent(message.message_id, signal.aborted); delivered = true;
   });
+  return delivered ? 'sent' : started && !refused ? 'uncertain' : 'not_sent';
 }
 
-/** Texto individual também tem prazo; respostas tardias são removidas. */
+/** Texto tem a mesma proteção contra retentativa de uma entrega ambígua. */
 export async function enviarTextoItem(api: MediaApi, sessionId: string, text: string, cardId: number,
-  current: () => Promise<boolean>, active: () => boolean): Promise<{ message_id: number } | undefined> {
-  return bounded(async signal => {
+  current: () => Promise<boolean>, active: () => boolean, onSent: AoEnviar): Promise<ResultadoEnvioItem> {
+  let started = false; let refused = false; let delivered = false;
+  await bounded(async signal => {
     if (!await current() || !active() || signal.aborted) return;
-    const message = await api.sendMessage(sessionId, text, { parse_mode: 'HTML', reply_parameters: { message_id: cardId } }, telegramSignal(signal));
-    if (signal.aborted || !active()) {
-      await removerFoto(api, sessionId, message.message_id);
-      return;
-    }
-    return message;
+    started = true;
+    let message: { message_id: number };
+    try { message = await api.sendMessage(sessionId, text, { parse_mode: 'HTML', reply_parameters: { message_id: cardId } }, telegramSignal(signal)); }
+    catch (error) { refused = rejected(error); return; }
+    if (!await current() || !active()) { await removerFoto(api, sessionId, message.message_id); return; }
+    onSent(message.message_id, signal.aborted); delivered = true;
   });
+  return delivered ? 'sent' : started && !refused ? 'uncertain' : 'not_sent';
 }
 
 /** Edição opcional também tem prazo; o ID antigo nunca limpa seu substituto. */
@@ -99,7 +113,7 @@ export async function editarMensagemItem(api: MediaApi, sessionId: string, messa
       }
       return !signal.aborted && active();
     } finally {
-      if (signal.aborted || !active()) await removerFoto(api, sessionId, messageId);
+      if (!active()) await removerFoto(api, sessionId, messageId);
     }
   }) === true;
 }

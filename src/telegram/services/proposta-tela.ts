@@ -9,7 +9,7 @@ type IrisCard = Pick<Agente, 'nomes' | 'obter'>;
 interface ItemEnviado { messageId: number; kind: 'photo' | 'text'; texto: string }
 interface CardEnviado {
   messageId: number; proposalId: string; render: symbol; iris: IrisCard; preliminary: boolean;
-  items: Map<string, ItemEnviado>; retired: Set<number>; pending: Set<string>; desired: Map<string, ItemPropostaPreliminar>; keys: string; updates: Promise<void>;
+  items: Map<string, ItemEnviado>; retired: Set<number>; pending: Set<string>; uncertain: Set<string>; desired: Map<string, ItemPropostaPreliminar>; keys: string; updates: Promise<void>;
 }
 const ultimoCard = new Map<SessionId, CardEnviado>();
 const renderizando = new Map<SessionId, symbol>();
@@ -55,25 +55,34 @@ export async function exibirProposta(api: ApiCard, iris: IrisCard, sessionId: Se
   return true;
 }
 
-async function enviarItem(api: ApiCard, sessionId: string, item: ItemPropostaPreliminar, cardId: number,
-  vigente: () => Promise<boolean>, ativa: () => boolean): Promise<ItemEnviado | undefined> {
-  const photo = await enviarFotoItem(api, sessionId, item.itemImageUrl, item.texto, cardId, vigente, ativa);
-  if (!await vigente() || !ativa()) { if (photo) await removerFoto(api, sessionId, photo.message_id); return; }
-  const message = photo ?? await enviarTextoItem(api, sessionId, item.texto, cardId, vigente, ativa);
-  if (!message) return;
-  if (!await vigente() || !ativa()) { await removerFoto(api, sessionId, message.message_id); return; }
-  return { messageId: message.message_id, kind: photo ? 'photo' : 'text', texto: item.texto };
+/** Registra tanto resposta imediata quanto tardia, sempre no mesmo envio reservado. */
+function guardarItem(api: ApiCard, sessionId: string, state: CardEnviado, item: ItemPropostaPreliminar,
+  kind: 'photo' | 'text', messageId: number, late: boolean, vigente: () => Promise<boolean>, ativa: () => boolean): void {
+  if (!ativa()) { void removerFoto(api, sessionId, messageId); return; }
+  state.items.set(item.key, { messageId, kind, texto: item.texto });
+  state.uncertain.delete(item.key);
+  if (late) {
+    const catchup = state.updates.catch(() => undefined).then(async () => {
+      const desired = state.desired.get(item.key);
+      if (desired) await atualizarItem(api, sessionId, state, desired, vigente, ativa);
+    });
+    state.updates = catchup;
+    void catchup.catch(() => undefined);
+  }
 }
 
-/** Reserva a chave antes de enviar: reapresentações não duplicam itens em voo. */
+/** Reserva também entregas incertas: a revisão não pode publicar um segundo item. */
 async function registrarItem(api: ApiCard, sessionId: string, state: CardEnviado, item: ItemPropostaPreliminar,
   vigente: () => Promise<boolean>, ativa: () => boolean): Promise<void> {
-  if (state.items.has(item.key) || state.pending.has(item.key) || !ativa()) return;
+  if (state.items.has(item.key) || state.pending.has(item.key) || state.uncertain.has(item.key) || !ativa()) return;
   state.pending.add(item.key);
   try {
-    const sent = await enviarItem(api, sessionId, item, state.messageId, vigente, ativa);
-    if (!ativa()) { if (sent) void removerFoto(api, sessionId, sent.messageId); return; }
-    if (sent) state.items.set(item.key, sent);
+    const photo = await enviarFotoItem(api, sessionId, item.itemImageUrl, item.texto, state.messageId, vigente, ativa,
+      (id, late) => guardarItem(api, sessionId, state, item, 'photo', id, late, vigente, ativa));
+    if (!await vigente() || !ativa()) return;
+    const result = photo === 'not_sent' ? await enviarTextoItem(api, sessionId, item.texto, state.messageId, vigente, ativa,
+      (id, late) => guardarItem(api, sessionId, state, item, 'text', id, late, vigente, ativa)) : photo;
+    if (result === 'uncertain' && ativa() && !state.items.has(item.key)) state.uncertain.add(item.key);
   } finally { state.pending.delete(item.key); }
 }
 
@@ -93,7 +102,7 @@ async function desenharCard(api: ApiCard, iris: IrisCard, sessionId: SessionId, 
   // O resumo e seus botões ficam disponíveis antes de qualquer mídia opcional.
   const message = await api.sendMessage(sessionId, card.texto, card.opcoes);
   if (!await vigente() || !ativa()) { await removerFoto(api, sessionId, message.message_id); return; }
-  const state: CardEnviado = { messageId: message.message_id, proposalId, render, iris, preliminary: Boolean(resposta.preliminary), items: new Map(), retired: new Set(), pending: new Set(), desired: new Map(card.items.map(i => [i.key, i])), keys: JSON.stringify(card.items.map(i => i.key)), updates: Promise.resolve() };
+  const state: CardEnviado = { messageId: message.message_id, proposalId, render, iris, preliminary: Boolean(resposta.preliminary), items: new Map(), retired: new Set(), pending: new Set(), uncertain: new Set(), desired: new Map(card.items.map(i => [i.key, i])), keys: JSON.stringify(card.items.map(i => i.key)), updates: Promise.resolve() };
   ultimoCard.set(sessionId, state);
   for (const item of card.items) {
     if (!await vigente() || !ativa()) break;
@@ -111,22 +120,21 @@ async function desenharCard(api: ApiCard, iris: IrisCard, sessionId: SessionId, 
 async function atualizarItem(api: ApiCard, sessionId: string, state: CardEnviado, item: ItemPropostaPreliminar,
   vigente: () => Promise<boolean>, ativa: () => boolean): Promise<void> {
   const previous = state.items.get(item.key);
-  if (!previous || previous.texto === item.texto || !await vigente() || !ativa()) return;
+  if (!previous || state.uncertain.has(item.key) || previous.texto === item.texto || !await vigente() || !ativa()) return;
   if (previous.kind !== 'photo' || item.texto.length <= 1024) {
     const edited = await editarMensagemItem(api, sessionId, previous.messageId, previous.kind, item.texto, ativa);
     if (!await vigente() || !ativa()) { await removerFoto(api, sessionId, previous.messageId); return; }
     if (edited) { previous.texto = item.texto; return; }
   }
-  // Falha, timeout ou legenda longa afetam só este item, nunca o próximo.
-  // Retira o ID antes do fallback: se o texto também falhar, a próxima tentativa
-  // cria outra mensagem. Uma edição antiga nunca pode apagar um ID reutilizado.
+  // Uma substituição só é segura depois de confirmar a remoção do ID antigo.
+  const removed = await removerFoto(api, sessionId, previous.messageId);
+  if (!await vigente() || !ativa()) return;
+  if (!removed) { state.uncertain.add(item.key); return; }
   state.items.delete(item.key);
   state.retired.add(previous.messageId);
-  void removerFoto(api, sessionId, previous.messageId);
-  const message = await enviarTextoItem(api, sessionId, item.texto, state.messageId, vigente, ativa);
-  if (!message) return;
-  if (!await vigente() || !ativa()) { await removerFoto(api, sessionId, message.message_id); return; }
-  state.items.set(item.key, { messageId: message.message_id, kind: 'text', texto: item.texto });
+  const result = await enviarTextoItem(api, sessionId, item.texto, state.messageId, vigente, ativa,
+    (id, late) => guardarItem(api, sessionId, state, item, 'text', id, late, vigente, ativa));
+  if (result === 'uncertain' && ativa() && !state.items.has(item.key)) state.uncertain.add(item.key);
 }
 
 /** Serializa edições da mesma revisão; uma substituição invalida a fila antiga. */

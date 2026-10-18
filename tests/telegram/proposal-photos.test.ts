@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
+import { GrammyError } from 'grammy';
 import type { Resposta, DiscoveryItem } from '../../src/core/index.js';
 import { exibirProposta, atualizarCard, retirarBotoesDoCard, propostaDoCard, type ApiCard } from '../../src/telegram/services/proposta-tela.js';
 let sequence = 0;
@@ -47,9 +48,9 @@ it.each(['missing', 'unsafe', 'foreign'])('sem imagem utilizável (%s) entrega c
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
   expect(f.sendMessage).toHaveBeenCalledTimes(2); expect(f.fetchImage).not.toHaveBeenCalled(); expect(f.sendPhoto).not.toHaveBeenCalled();
 });
-it.each(['telegram', 'download', 'redirect', 'size', 'type'])('falha de mídia %s mantém card e botões da revisão correta', async failure => {
+it.each(['telegram', 'download', 'redirect', 'size', 'type'])('falha pré-envio ou rejeição explícita %s mantém card e botões da revisão correta', async failure => {
   const f = setup(['a']);
-  if (failure === 'telegram') f.sendPhoto.mockRejectedValueOnce(new Error('PRIVATE_URL_SECRET'));
+  if (failure === 'telegram') f.sendPhoto.mockRejectedValueOnce(new GrammyError('Controlled rejection', { ok:false, error_code:400, description:'Controlled rejection' }, 'sendPhoto', {}));
   if (failure === 'download') f.fetchImage.mockRejectedValueOnce(new Error('PRIVATE_DOWNLOAD'));
   if (failure === 'redirect') f.fetchImage.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'http://127.0.0.1' } }));
   if (failure === 'size') f.fetchImage.mockResolvedValueOnce(new Response(new Uint8Array(5_000_001), { headers: { 'content-type': 'image/jpeg' } }));
@@ -103,15 +104,17 @@ it('quando a proposta muda durante download, não envia foto nem a próxima cand
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
   expect(f.sendMessage).toHaveBeenCalledTimes(1); expect(f.sendPhoto).not.toHaveBeenCalled(); expect(f.fetchImage).toHaveBeenCalledTimes(1);
 });
-it('resposta depois do timeout é removida mesmo quando o transporte ignora aborto', async () => {
+it('resposta depois do timeout é adotada na revisão vigente e removida ao sair dela', async () => {
   vi.useFakeTimers(); const f = setup(['a']);
   let resolve!: (value: { message_id: number }) => void;
   f.sendPhoto.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
   const pending = exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
   await vi.advanceTimersByTimeAsync(2500); await pending;
   resolve({ message_id: 80 }); await vi.advanceTimersByTimeAsync(0);
+  expect(f.deleteMessage.mock.calls.some(args => (args as unknown[])[1] === 80)).toBe(false);
+  expect(f.sendMessage).toHaveBeenCalledTimes(1); expect(propostaDoCard(f.group, 11)).toBe('p1');
+  await retirarBotoesDoCard(f.api, f.group);
   expect(f.deleteMessage).toHaveBeenCalledWith(f.group, 80, expect.any(AbortSignal));
-  expect(propostaDoCard(f.group, 11)).toBe('p1');
 });
 it('falha na limpeza da foto velha não bloqueia entrega de um novo card', async () => {
   const f = setup(['a']); await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
