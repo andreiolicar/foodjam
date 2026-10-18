@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FakeLlm } from '../../src/core/fakes/llm-fake.js';
 import { criarLlmDoAmbiente, temProvedorReal } from '../../src/core/llm-ambiente.js';
 
@@ -15,6 +15,19 @@ describe('criarLlmDoAmbiente', () => {
 });
 
 describe('criarLlmDoAmbiente: openai-compat', () => {
+  it('aceita transporte observado sem trocar o modelo configurado', async () => {
+    const previous = globalThis.fetch;
+    globalThis.fetch = async () => { throw new Error('Rede proibida neste teste'); };
+    const observed = vi.fn<typeof fetch>(async () => {
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }] }));
+    });
+    try {
+      const llm = criarLlmDoAmbiente({ AI_PROVIDER: 'openai-compat', AI_BASE_URL: 'https://provider.invalid', AI_MODEL: 'modelo-do-time' }, { fetch: observed });
+      await expect(llm.generate({ tier: 'capable', system: 'Teste', prompt: 'Teste', outputName: 'teste', outputSchema: {} })).resolves.toEqual({});
+      expect(observed).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(observed.mock.calls[0]![1]?.body)).model).toBe('modelo-do-time');
+    } finally { globalThis.fetch = previous; }
+  });
   it('cria o adaptador com base URL e modelo', async () => {
     const { OpenAiCompatLlm } = await import('../../src/core/llm-openai.js');
     const llm = criarLlmDoAmbiente({

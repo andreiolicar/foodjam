@@ -91,7 +91,7 @@ describe('LlmEmCascata', () => {
     const { llm } = cascata([a, b], { now: r.now });
 
     await llm.generate(request);
-    expect(llm.fila()).toEqual([1, 0]);
+    expect(llm.fila()).toEqual([1]);
     await expect(llm.generate(request)).resolves.toEqual({ ok: 2 });
     expect(a.chamadas).toBe(1);
 
@@ -100,15 +100,18 @@ describe('LlmEmCascata', () => {
     await expect(llm.generate(request)).resolves.toEqual({ ok: 1 });
   });
 
-  it('com todos em pausa, tenta mesmo assim, do que volta primeiro ao último', async () => {
+  it('com todos em pausa, falha sem repetir chamadas antes do cooldown', async () => {
     const r = relogio();
     const a = provedor(new LlmHttpError(429, 'tokens per day'), { ok: 1 });
     const b = provedor(new LlmHttpError(503, 'overloaded'), { ok: 2 });
     const { llm } = cascata([a, b], { now: r.now });
 
     await expect(llm.generate(request)).rejects.toBeInstanceOf(CascataEsgotadaError);
-    expect(llm.fila()).toEqual([1, 0]);
-    await expect(llm.generate(request)).resolves.toEqual({ ok: 2 });
+    expect(llm.fila()).toEqual([]);
+    await expect(llm.generate(request)).rejects.toBeInstanceOf(CascataEsgotadaError);
+    expect(a.chamadas).toBe(1); expect(b.chamadas).toBe(1);
+    r.agora += 30_000;
+    await expect(llm.generate(request)).resolves.toEqual({ok: 2});
   });
 
   it('percorre os 4 provedores até um responder', async () => {
@@ -151,12 +154,12 @@ describe('LlmEmCascata', () => {
     expect(lento.sinais[0]?.aborted).toBe(true);
   });
 
-  it('o último da fila não tem timeout próprio (vale o de quem chamou)', async () => {
+  it('o último da fila também respeita o prazo por provedor', async () => {
     const a = provedor(new LlmHttpError(503, 'x'));
     const devagar: LlmPort = { generate: () => new Promise((resolve) => setTimeout(() => resolve({ ok: 2 }), 40)) };
     const { llm } = cascata([a, devagar], { timeoutPorProvedorMs: 10 });
 
-    await expect(llm.generate(request)).resolves.toEqual({ ok: 2 });
+    await expect(llm.generate(request)).rejects.toBeInstanceOf(CascataEsgotadaError);
   });
 
   it('quem chamou cancelou: para a fila sem tentar os próximos', async () => {

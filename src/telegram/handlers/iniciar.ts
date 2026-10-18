@@ -1,6 +1,7 @@
 import type { Bot, Context } from 'grammy';
 
 import type { Agente } from '../../core/index.js';
+import { retirarBotoesDoCard } from '../services/proposta-tela.js';
 import { apresentarActions } from '../services/apresentacao.js';
 
 const FINAIS = new Set(['closed', 'cancelled']);
@@ -32,21 +33,31 @@ async function iniciarPedido(ctx: Context, iris: Agente): Promise<void> {
       return;
     }
 
+    const enderecoNoGrupo = resposta.actions.some(a => a.type === 'confirm_address' && a.visibility === 'group');
     await ctx.reply(
-      `Pedido iniciado por ${nome}! Mandem aqui o que querem comer, restrições e limite de valor.\n` +
-        `${nome}, te chamei no privado para combinar o endereço de entrega. Quando todos tiverem falado, use /montar.`,
+      `Pedido iniciado por ${nome}! ` + (enderecoNoGrupo ? 'Mandem aqui preferências e restrições. Confirmações de orçamento permanecem no privado.\n' : 'Mandem aqui o que querem comer, restrições e limite de valor.\n') +
+        (enderecoNoGrupo
+          ? 'Confirme o endereço aqui no grupo. Quando todos tiverem falado, use /montar.'
+          : `${nome}, te chamei no privado para combinar o endereço de entrega. Quando todos tiverem falado, use /montar.`),
     );
 
     // Endereço vai no privado do organizador.
     await apresentarActions(ctx.api, resposta, ctx.me.username);
-  } catch (error) {
-    console.error('Erro ao iniciar:', error);
+  } catch {
+    console.error('Erro ao iniciar. Dados privados omitidos.');
     await ctx.reply('Não foi possível iniciar o pedido.');
   }
 }
 
 export function registrarIniciar(bot: Bot, iris: Agente): void {
   bot.command('iniciar', (ctx) => iniciarPedido(ctx, iris));
+  bot.chatType(['group', 'supergroup']).command('endereco', async ctx => {
+    const id = String(ctx.chat.id); const result = await iris.pedirOutroEndereco(id, String(ctx.from.id));
+    if (result.outcome === 'not_authorized') { await ctx.reply('Somente quem organizou pode trocar o endereço.'); return; }
+    if (result.session && !result.session.preliminary && !result.session.proposal) await retirarBotoesDoCard(ctx.api, id);
+    await apresentarActions(ctx.api, result, ctx.me.username);
+    if (['error', 'catalog_failed'].includes(result.outcome)) await ctx.reply('Não foi possível reler os endereços salvos. A proposta anterior foi invalidada. Use /endereco quando a consulta estiver disponível.');
+  });
 
   // Menção ao bot no grupo: inicia se não houver pedido ativo; senão segue para a coleta.
   bot.chatType(['group', 'supergroup']).on('message:text', async (ctx, next) => {

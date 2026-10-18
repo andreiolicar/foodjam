@@ -161,7 +161,8 @@ describe('endereço no privado', () => {
     await h.texto(ANA, '/iniciar');
 
     await h.texto(BIA, 'quero um lanche', BIA.id);
-    expect(ultima(h, BIA.id)?.text).toMatch(/só recebo o endereço/);
+    expect(ultima(h, BIA.id)?.text).toMatch(/endereço de entrega quando eu pedir/);
+    expect(ultima(h, BIA.id)?.text).toMatch(/preferências.*grupo/);
     expect((await iris.obter(SESSAO))?.participants.map((p) => p.id)).not.toContain(String(BIA.id));
   });
 

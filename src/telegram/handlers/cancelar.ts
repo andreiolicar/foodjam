@@ -32,8 +32,8 @@ export async function cancelarPedido(ctx: Context, iris: Agente, agrupador: Agru
     } else if (resposta.outcome === 'no_session' || resposta.outcome === 'session_finished') {
       await ctx.reply('Não há pedido em andamento.');
     }
-  } catch (error) {
-    console.error('Erro ao cancelar:', error);
+  } catch {
+    console.error('Erro ao cancelar. Dados privados omitidos.');
     await ctx.reply('Não foi possível cancelar o pedido.');
   }
 }

@@ -88,8 +88,8 @@ describe('OpenAiCompatLlm', () => {
 
   it('400 no modo sem response_format não entra em laço', async () => {
     const { fn } = fetchFalso([
-      { status: 400, body: 'x' },
-      { status: 400, body: 'x' },
+      { status: 400, body: 'json_schema not supported' },
+      { status: 400, body: 'json_object not supported' },
       { status: 400, body: 'pedido inválido' },
     ]);
     await expect(criar(fn).generate(request)).rejects.toThrow(/HTTP 400: pedido inválido/);
@@ -451,4 +451,21 @@ describe('OpenAiCompatLlm: prompt enxuto e reasoning_effort', () => {
     expect(chamadas[0]?.body).not.toHaveProperty('reasoning_effort');
     expect(chamadas[1]?.body.reasoning_effort).toBe('low');
   });
+});
+
+
+it('permite iniciar um modelo em JSON object sem alterar o formato dos outros modelos', async () => {
+  const { fn, chamadas } = fetchFalso([{ status: 200, body: resposta('{}') }, { status: 200, body: resposta('{}') }]);
+  const llm = new OpenAiCompatLlm({ baseUrl: 'https://exemplo.test', models: { fast: 'modelo-rapido', capable: 'modelo-forte' }, initialResponseModes: { 'modelo-forte': 'json_object' }, fetch: fn });
+  await llm.generate({ ...request, tier: 'capable' });
+  await llm.generate(request);
+  expect(chamadas[0]?.body.response_format).toEqual({ type: 'json_object' });
+  expect((chamadas[0]?.body.messages as {content:string}[])[0]?.content).toContain('JSON Schema');
+  expect(chamadas[1]?.body.response_format).toMatchObject({ type: 'json_schema' });
+});
+it('400 de geração ou requisição não abandona JSON nem dispara uma negociação de formato', async () => {
+  const { fn, chamadas } = fetchFalso([{ status: 400, body: { error: { code: 'json_validate_failed', message: 'Failed to generate JSON. PRIVATE_RESPONSE' } } }, { status: 200, body: resposta('{}') }]);
+  const llm = new OpenAiCompatLlm({ baseUrl: 'https://example.invalid', models: { fast: 'f', capable: 'c' }, initialResponseModes: { c: 'json_object' }, fetch: fn });
+  await expect(llm.generate({ ...request, tier: 'capable' })).rejects.toMatchObject({ status: 400 });
+  expect(chamadas).toHaveLength(1); expect(llm.modoDe('c')).toBe('json_object');
 });

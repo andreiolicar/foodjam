@@ -1,5 +1,7 @@
 # Integração do MCP do iFood com o core (Íris)
 
+> **Escopo histórico do guia:** o contrato cotado e os exemplos abaixo são preservados como referência. A integração preliminar já está implementada por `createIfoodDiscoveryCatalog` e `DiscoveryCatalogPort`, conectadas em `src/app.ts`; não existe uma classe pública `CatalogoIfood` pronta com `validateAddress`/`quoteOrder`. Não inventar dados para completar esses métodos. A demo exige MCP e Groq reais, confirma endereço salvo no grupo e mantém carrinhos, pagamento e fechamento bloqueados. Consulte [arquitetura atual](architecture.md), [handoff IF-05](../src/ifood/INTEGRATION-HANDOFF.md) e [IF-06](../src/ifood/IF-06.md).
+
 Guia para o módulo `src/ifood/`: o que implementar para o core usar o catálogo real do iFood e o que fazer com o pedido autorizado. O core **não conhece as ferramentas do MCP** e não importa `src/ifood`: ele define uma porta (`CatalogPort`) no vocabulário dele, e o módulo iFood implementa essa porta traduzindo as ferramentas reais. A ligação acontece em `src/index.ts`.
 
 ```text

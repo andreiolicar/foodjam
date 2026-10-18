@@ -11,6 +11,9 @@ export interface LlmCallRecord {
   error?: string;
   /** Erro que não melhora com nova tentativa (chave, plano, cota diária). */
   fatal?: boolean;
+  failureKind?: 'validation' | 'generation';
+  /** Somente códigos/caminhos do schema; sem valores retornados pelo modelo. */
+  validationIssues?: { code: string; path: (string | number)[] }[];
 }
 
 /** O erro se declara fatal (ex.: LlmHttpError de chave, plano ou cota)? */
@@ -64,9 +67,10 @@ export async function gerarEstruturado<T>(options: GerarEstruturadoOptions<T>): 
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const started = performance.now();
+    let validationIssues: LlmCallRecord['validationIssues'];
     try {
       const raw = await comTimeout(
-        (signal) => llm.generate({ tier, system, prompt, outputName, outputSchema, signal }),
+        (signal) => llm.generate({ tier, system, prompt, outputName, outputSchema, signal, validateOutput: value => schema.safeParse(value).success }),
         timeoutMs,
       );
       const parsed = schema.safeParse(raw);
@@ -74,16 +78,17 @@ export async function gerarEstruturado<T>(options: GerarEstruturadoOptions<T>): 
         registrar?.({ phase, tier, attempt, durationMs: performance.now() - started, ok: true });
         return parsed.data;
       }
+      validationIssues = parsed.error.issues.map(issue => ({ code: issue.code, path: issue.path.map(key => typeof key === 'symbol' ? 'other' : key) }));
       lastError = z.prettifyError(parsed.error);
       prompt = `${options.prompt}\n\nSua resposta anterior não seguiu o formato exigido:\n${lastError}\nResponda de novo seguindo exatamente o schema.`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
-      if (erroFatal(error)) {
-        registrar?.({ phase, tier, attempt, durationMs: performance.now() - started, ok: false, error: lastError, fatal: true });
+      if (erroFatal(error) || (typeof error === 'object' && error !== null && (error as { retryable?: unknown }).retryable === false)) {
+        registrar?.({ phase, tier, attempt, durationMs: performance.now() - started, ok: false, error: lastError, fatal: true, failureKind: 'generation' });
         throw new LlmSaidaInvalidaError(phase, attempt, lastError, true);
       }
     }
-    registrar?.({ phase, tier, attempt, durationMs: performance.now() - started, ok: false, error: lastError });
+    registrar?.({ phase, tier, attempt, durationMs: performance.now() - started, ok: false, error: lastError, failureKind: validationIssues ? 'validation' : 'generation', ...(validationIssues ? { validationIssues } : {}) });
   }
 
   throw new LlmSaidaInvalidaError(phase, maxAttempts, lastError);

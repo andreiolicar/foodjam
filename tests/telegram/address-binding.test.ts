@@ -1,0 +1,21 @@
+import { expect, it } from 'vitest';
+import { criarAgenteDescoberta } from '../../src/core/discovery-agent.js';
+import { criarHarness, GRUPO } from './harness.js';
+it('endereço no grupo só confirma o candidato apresentado e recusa teclado antigo ou outra pessoa', async () => {
+  const addresses = [{ id: 'fixture-a', formatted: 'Rua fictícia A' }, { id: 'fixture-b', formatted: 'Rua fictícia B' }];
+  const agent = criarAgenteDescoberta({ catalog: { listSavedAddresses: async () => addresses, searchStores: async () => [], getStore: async () => { throw new Error('não utilizado'); }, getMenu: async () => ({ items: [], coverage: 'offers_only' }) }, llm: { generate: async () => { throw new Error('IA não participa da confirmação'); } } });
+  const h = criarHarness(agent, { preliminaryOnly: true }); const owner = { id: 61, first_name: 'Pessoa A' }; const stranger = { id: 62, first_name: 'Pessoa B' };
+  await h.texto(owner, '/iniciar');
+  const old = h.enviadas(GRUPO).find(m => m.botoes.some(b => b.text.includes('Confirmar endereço')))!;
+  const confirm = old.botoes.find(b => b.text.includes('Confirmar endereço'))!.callback_data!;
+  const other = old.botoes.find(b => b.text.includes('Corrigir'))!.callback_data!;
+  await h.clicar(stranger, confirm, { chatId: GRUPO, messageId: old.messageId });
+  expect((await agent.obter(String(GRUPO)))?.address?.status).toBe('pending_confirmation');
+  await h.clicar(owner, other, { chatId: GRUPO, messageId: old.messageId });
+  expect((await agent.obter(String(GRUPO)))?.address?.candidate?.id).toBe('fixture-b');
+  await h.clicar(owner, confirm, { chatId: GRUPO, messageId: old.messageId });
+  expect((await agent.obter(String(GRUPO)))?.address?.status).toBe('pending_confirmation');
+  await h.clicarBotao(owner, GRUPO, '✅ Confirmar endereço');
+  expect((await agent.obter(String(GRUPO)))?.address?.confirmed?.id).toBe('fixture-b');
+  expect(h.enviadas(GRUPO).map(m => m.text).join(' ')).toContain('Rua fictícia');
+});

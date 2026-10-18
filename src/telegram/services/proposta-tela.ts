@@ -1,79 +1,177 @@
 import { InlineKeyboard, type Api } from 'grammy';
-
+import { enviarFotoItem, enviarTextoItem, editarMensagemItem, editarResumoProposta, removerFoto } from './fotos-proposta.js';
 import type { Agente, Proposal, Resposta, SessionId } from '../../core/index.js';
 import { apresentarActions, teclado } from './apresentacao.js';
-import { botoesCard, textoProposta } from './card.js';
+import { botoesCard, textoProposta, botoesPreliminares, textoPropostaPreliminar, textosItensPropostaPreliminar, type ItemPropostaPreliminar } from './card.js';
 
-export type ApiCard = Pick<Api, 'sendMessage' | 'editMessageReplyMarkup' | 'editMessageText'>;
-type IrisCard = Pick<Agente, 'nomes' | 'obter'>;
-
-// Mensagem do card com botões em cada grupo: ao desenhar outro card (ou a proposta
-// sair da mesa), os botões do anterior são retirados para ninguém clicar numa sugestão velha.
-const ultimoCard = new Map<SessionId, number>();
+export type ApiCard = Pick<Api, 'sendMessage' | 'editMessageReplyMarkup' | 'editMessageText' | 'sendPhoto' | 'deleteMessage' | 'editMessageCaption'>;
+type IrisCard = Pick<Agente, 'nomes' | 'obter' | 'prepararCarrinho'>;
+interface ItemEnviado { messageId: number; kind: 'photo' | 'text'; texto: string }
+interface CardEnviado {
+  messageId: number; proposalId: string; render: symbol; iris: IrisCard; preliminary: boolean;
+  items: Map<string, ItemEnviado>; retired: Set<number>; pending: Set<string>; uncertain: Set<string>; desired: Map<string, ItemPropostaPreliminar>; keys: string; updates: Promise<void>;
+}
+const ultimoCard = new Map<SessionId, CardEnviado>();
+const renderizando = new Map<SessionId, symbol>();
+export const cardAtual = (sessionId: string, messageId: number) => ultimoCard.get(sessionId)?.messageId === messageId;
+export const propostaDoCard = (sessionId: string, messageId: number) => cardAtual(sessionId, messageId) ? ultimoCard.get(sessionId)?.proposalId : undefined;
+/** Mensagens de revisão pertencem ao resumo e são removidas com ele. */
+export function registrarRevisaoCarrinho(sessionId: string, proposalId: string, messageId: number): boolean {
+  const card = ultimoCard.get(sessionId);
+  if (card?.proposalId !== proposalId) return false;
+  card.retired.add(messageId); return true;
+}
 
 export async function retirarBotoesDoCard(api: ApiCard, sessionId: SessionId): Promise<void> {
-  const messageId = ultimoCard.get(sessionId);
-  if (messageId === undefined) return;
+  renderizando.delete(sessionId);
+  await limparCard(api, sessionId);
+}
+async function limparCard(api: ApiCard, sessionId: SessionId): Promise<void> {
+  const previous = ultimoCard.get(sessionId);
+  if (!previous) return;
   ultimoCard.delete(sessionId);
-  try {
-    await api.editMessageReplyMarkup(sessionId, messageId, { reply_markup: new InlineKeyboard() });
-  } catch {
-    // a mensagem pode já ter sido editada ou apagada; ignora
+  if (previous.preliminary) {
+    // Invalida sincronamente; limpeza remota limitada não segura o próximo resumo.
+    for (const messageId of [previous.messageId, ...[...previous.items.values()].map(i => i.messageId), ...previous.retired]) void removerFoto(api, sessionId, messageId);
+  } else {
+    try { await api.editMessageReplyMarkup(sessionId, previous.messageId, { reply_markup: new InlineKeyboard() }); } catch { /* Card antigo. */ }
   }
 }
-
-/** Texto e botões do card para a proposta da resposta. */
 async function montarCard(iris: IrisCard, sessionId: SessionId, resposta: Resposta, proposal: Proposal) {
-  const sessao = resposta.session ?? (await iris.obter(sessionId));
+  const sessao = resposta.session ?? await iris.obter(sessionId);
   const nomes = await iris.nomes(sessionId);
   const temAlternativa = sessao ? sessao.alternative !== undefined : resposta.alternative !== undefined;
-  const texto = textoProposta({
-    proposal,
-    participantes: sessao?.participants ?? [],
-    ...(nomes && { nomes }),
-    ...(resposta.pendingBudget && { pendentes: resposta.pendingBudget }),
-  });
-  return { texto, opcoes: { parse_mode: 'HTML' as const, reply_markup: teclado(botoesCard(temAlternativa)) } };
+  return { texto: textoProposta({ proposal, participantes: sessao?.participants ?? [], ...(nomes && { nomes }), ...(resposta.pendingBudget && { pendentes: resposta.pendingBudget }) }),
+    items: [] as ItemPropostaPreliminar[], opcoes: { parse_mode: 'HTML' as const, reply_markup: teclado(botoesCard(temAlternativa)) } };
+}
+async function montarPreliminar(iris: IrisCard, sessionId: string, resposta: Resposta) {
+  const session = resposta.session ?? await iris.obter(sessionId);
+  const nomes = await iris.nomes(sessionId);
+  const dados = { proposal: resposta.preliminary!, ...(nomes ? { nomes } : {}), ...(resposta.items ? { items: resposta.items } : {}), ...(resposta.stores ? { stores: resposta.stores } : {}), ...(resposta.collection ? { collection: resposta.collection } : {}) };
+  return { texto: textoPropostaPreliminar(dados) + (iris.prepararCarrinho ? '\n🛒 Preparar carrinho altera os itens na conta iFood; não autoriza entrega, pagamento ou compra.' : ''), items: textosItensPropostaPreliminar(dados),
+    opcoes: { parse_mode: 'HTML' as const, reply_markup: teclado(botoesPreliminares(Boolean(session?.preliminaryAlternative), Boolean(iris.prepararCarrinho))) } };
 }
 
-/**
- * Desenha a proposta da resposta no grupo, com os botões de decisão, e envia as
- * actions (perguntas de valor no privado, avisos). Devolve false se não há proposta.
- */
-export async function exibirProposta(
-  api: ApiCard,
-  iris: IrisCard,
-  sessionId: SessionId,
-  resposta: Resposta,
-  botUsername: string,
-): Promise<boolean> {
-  const proposal = resposta.proposal;
-  if (!proposal) {
-    await apresentarActions(api, resposta, botUsername);
-    return false;
-  }
-
-  const card = await montarCard(iris, sessionId, resposta, proposal);
-  await retirarBotoesDoCard(api, sessionId);
-  const enviada = await api.sendMessage(sessionId, card.texto, card.opcoes);
-  ultimoCard.set(sessionId, enviada.message_id);
-
+export async function exibirProposta(api: ApiCard, iris: IrisCard, sessionId: SessionId, resposta: Resposta, botUsername: string): Promise<boolean> {
+  if (!resposta.proposal && !resposta.preliminary) { await apresentarActions(api, resposta, botUsername); return false; }
+  const previous = ultimoCard.get(sessionId);
+  if (resposta.preliminary && previous?.iris === iris && previous.proposalId === resposta.preliminary.id) await atualizarCard(api, iris, sessionId, resposta);
+  else await desenharCard(api, iris, sessionId, resposta);
   await apresentarActions(api, resposta, botUsername);
   return true;
 }
 
-/**
- * Atualiza o card que já está na tela, sem mandar outro (ex.: alguém aceitou o
- * valor e saiu da lista de espera). Sem card na tela, não faz nada.
- */
-export async function atualizarCard(api: ApiCard, iris: IrisCard, sessionId: SessionId, resposta: Resposta): Promise<void> {
-  const messageId = ultimoCard.get(sessionId);
-  if (messageId === undefined || !resposta.proposal) return;
-
-  const card = await montarCard(iris, sessionId, resposta, resposta.proposal);
-  try {
-    await api.editMessageText(sessionId, messageId, card.texto, card.opcoes);
-  } catch {
-    // texto igual ou mensagem apagada; ignora
+/** Registra tanto resposta imediata quanto tardia, sempre no mesmo envio reservado. */
+function guardarItem(api: ApiCard, sessionId: string, state: CardEnviado, item: ItemPropostaPreliminar,
+  kind: 'photo' | 'text', messageId: number, late: boolean, vigente: () => Promise<boolean>, ativa: () => boolean): void {
+  if (!ativa()) { void removerFoto(api, sessionId, messageId); return; }
+  state.items.set(item.key, { messageId, kind, texto: item.texto });
+  state.uncertain.delete(item.key);
+  if (late) {
+    const catchup = state.updates.catch(() => undefined).then(async () => {
+      const desired = state.desired.get(item.key);
+      if (desired) await atualizarItem(api, sessionId, state, desired, vigente, ativa);
+    });
+    state.updates = catchup;
+    void catchup.catch(() => undefined);
   }
+}
+
+/** Reserva também entregas incertas: a revisão não pode publicar um segundo item. */
+async function registrarItem(api: ApiCard, sessionId: string, state: CardEnviado, item: ItemPropostaPreliminar,
+  vigente: () => Promise<boolean>, ativa: () => boolean): Promise<void> {
+  if (state.items.has(item.key) || state.pending.has(item.key) || state.uncertain.has(item.key) || !ativa()) return;
+  state.pending.add(item.key);
+  try {
+    const photo = await enviarFotoItem(api, sessionId, item.itemImageUrl, item.texto, state.messageId, vigente, ativa,
+      (id, late) => guardarItem(api, sessionId, state, item, 'photo', id, late, vigente, ativa));
+    if (!await vigente() || !ativa()) return;
+    const result = photo === 'not_sent' ? await enviarTextoItem(api, sessionId, item.texto, state.messageId, vigente, ativa,
+      (id, late) => guardarItem(api, sessionId, state, item, 'text', id, late, vigente, ativa)) : photo;
+    if (result === 'uncertain' && ativa() && !state.items.has(item.key)) state.uncertain.add(item.key);
+  } finally { state.pending.delete(item.key); }
+}
+
+async function desenharCard(api: ApiCard, iris: IrisCard, sessionId: SessionId, resposta: Resposta): Promise<void> {
+  const proposalId = (resposta.preliminary ?? resposta.proposal)!.id;
+  const render = Symbol(); renderizando.set(sessionId, render);
+  const ativa = () => renderizando.get(sessionId) === render;
+  const vigente = async () => {
+    if (!ativa()) return false;
+    const session = resposta.preliminary ? await iris.obter(sessionId) : undefined;
+    return ativa() && (!resposta.preliminary || session?.preliminary?.id === proposalId);
+  };
+  const card = resposta.preliminary ? await montarPreliminar(iris, sessionId, resposta) : await montarCard(iris, sessionId, resposta, resposta.proposal!);
+  if (!await vigente() || !ativa()) return;
+  await limparCard(api, sessionId);
+  if (!await vigente() || !ativa()) return;
+  // O resumo e seus botões ficam disponíveis antes de qualquer mídia opcional.
+  const message = await api.sendMessage(sessionId, card.texto, card.opcoes);
+  if (!await vigente() || !ativa()) { await removerFoto(api, sessionId, message.message_id); return; }
+  const state: CardEnviado = { messageId: message.message_id, proposalId, render, iris, preliminary: Boolean(resposta.preliminary), items: new Map(), retired: new Set(), pending: new Set(), uncertain: new Set(), desired: new Map(card.items.map(i => [i.key, i])), keys: JSON.stringify(card.items.map(i => i.key)), updates: Promise.resolve() };
+  ultimoCard.set(sessionId, state);
+  for (const item of card.items) {
+    if (!await vigente() || !ativa()) break;
+    await registrarItem(api, sessionId, state, state.desired.get(item.key) ?? item, vigente, ativa);
+    if (!ativa()) break;
+    if (state.items.has(item.key)) {
+      // Uma atualização da mesma revisão pode ter chegado durante o download.
+      const catchup = state.updates.catch(() => undefined).then(() => atualizarItem(api, sessionId, state, state.desired.get(item.key) ?? item, vigente, ativa));
+      state.updates = catchup;
+      await catchup;
+    }
+  }
+}
+
+async function atualizarItem(api: ApiCard, sessionId: string, state: CardEnviado, item: ItemPropostaPreliminar,
+  vigente: () => Promise<boolean>, ativa: () => boolean): Promise<void> {
+  const previous = state.items.get(item.key);
+  if (!previous || state.uncertain.has(item.key) || previous.texto === item.texto || !await vigente() || !ativa()) return;
+  if (previous.kind !== 'photo' || item.texto.length <= 1024) {
+    const edited = await editarMensagemItem(api, sessionId, previous.messageId, previous.kind, item.texto, ativa);
+    if (!await vigente() || !ativa()) { await removerFoto(api, sessionId, previous.messageId); return; }
+    if (edited) { previous.texto = item.texto; return; }
+  }
+  // Uma substituição só é segura depois de confirmar a remoção do ID antigo.
+  const removed = await removerFoto(api, sessionId, previous.messageId);
+  if (!await vigente() || !ativa()) return;
+  if (!removed) { state.uncertain.add(item.key); return; }
+  state.items.delete(item.key);
+  state.retired.add(previous.messageId);
+  const result = await enviarTextoItem(api, sessionId, item.texto, state.messageId, vigente, ativa,
+    (id, late) => guardarItem(api, sessionId, state, item, 'text', id, late, vigente, ativa));
+  if (result === 'uncertain' && ativa() && !state.items.has(item.key)) state.uncertain.add(item.key);
+}
+
+/** Serializa edições da mesma revisão; uma substituição invalida a fila antiga. */
+export async function atualizarCard(api: ApiCard, iris: IrisCard, sessionId: SessionId, resposta: Resposta): Promise<void> {
+  const previous = ultimoCard.get(sessionId);
+  if (!previous || previous.iris !== iris || !resposta.proposal && !resposta.preliminary) return;
+  const proposalId = (resposta.preliminary ?? resposta.proposal)!.id;
+  if (resposta.preliminary && previous.proposalId !== proposalId) return;
+  const ativa = () => ultimoCard.get(sessionId) === previous && renderizando.get(sessionId) === previous.render;
+  const vigente = async () => {
+    if (!ativa()) return false;
+    const session = resposta.preliminary ? await iris.obter(sessionId) : undefined;
+    return ativa() && (!resposta.preliminary || session?.preliminary?.id === proposalId);
+  };
+  const update = previous.updates.catch(() => undefined).then(async () => {
+    const card = resposta.preliminary ? await montarPreliminar(iris, sessionId, resposta) : await montarCard(iris, sessionId, resposta, resposta.proposal!);
+    if (!await vigente() || !ativa()) return;
+    if (JSON.stringify(card.items.map(i => i.key)) !== previous.keys) { await desenharCard(api, iris, sessionId, resposta); return; }
+    previous.desired = new Map(card.items.map(i => [i.key, i]));
+    await editarResumoProposta(api, sessionId, previous.messageId, card.texto, card.opcoes, ativa);
+    if (!await vigente() || !ativa()) {
+      // Uma edição em voo pode restaurar o teclado depois da primeira limpeza.
+      await removerFoto(api, sessionId, previous.messageId);
+      return;
+    }
+    previous.proposalId = proposalId;
+    for (const item of card.items) {
+      if (!previous.items.has(item.key)) await registrarItem(api, sessionId, previous, item, vigente, ativa);
+      else await atualizarItem(api, sessionId, previous, item, vigente, ativa);
+    }
+  });
+  previous.updates = update;
+  await update;
 }

@@ -1,3 +1,4 @@
+import { registrarEnderecoEnviado } from './callbacks.js';
 import { InlineKeyboard, type Api } from 'grammy';
 
 import type { ParticipantId, Resposta } from '../../core/index.js';
@@ -39,6 +40,11 @@ export async function enviar(api: ApiEnvio, envio: Envio): Promise<void> {
 
   const enviada = await api.sendMessage(envio.chatId, envio.text, envio.botoes && { reply_markup: teclado(envio.botoes) });
 
+  const binding = envio.confirmacaoEndereco ?? envio.privado;
+  if (envio.endereco && binding) {
+    const anteriores = registrarEnderecoEnviado(envio.chatId, enviada.message_id, binding.sessionId, binding.participantId, envio.endereco);
+    for (const old of anteriores) await tirarBotoes(api, old.chatId, old.messageId);
+  }
   if (chave === undefined) return;
   if (anterior) await tirarBotoes(api, anterior.chatId, anterior.messageId);
   if (typeof enviada?.message_id === 'number') {
@@ -59,9 +65,9 @@ export async function apresentarActions(api: ApiEnvio, resposta: Resposta, botUs
 
     try {
       await enviar(api, envio);
-    } catch (error) {
+    } catch {
       if (!envio.privado) {
-        console.error('Não foi possível enviar mensagem ao grupo:', error);
+        console.error('Não foi possível enviar mensagem ao grupo. Dados privados omitidos.');
         continue;
       }
 
@@ -75,8 +81,8 @@ export async function apresentarActions(api: ApiEnvio, resposta: Resposta, botUs
         await api.sendMessage(sessionId, textoAvisoPrivado(nome), {
           reply_markup: new InlineKeyboard().url('Abrir conversa', `https://t.me/${botUsername}?start=pendentes`),
         });
-      } catch (aviso) {
-        console.error('Não foi possível avisar no grupo sobre a mensagem privada:', aviso);
+      } catch {
+        console.error('Não foi possível avisar no grupo sobre a mensagem privada. Dados privados omitidos.');
       }
     }
   }

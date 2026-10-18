@@ -1,0 +1,449 @@
+import { createHash } from 'node:crypto';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createIfoodMcpClient, readIfoodMcpConfig } from '../../src/ifood/index.js';
+import type { IfoodMcpDiagnostic, IfoodMcpTool } from '../../src/ifood/index.js';
+
+const endpoint = 'https://consumer-mcp.ifood.com.br/marketplace';
+const resourceMetadata = 'https://consumer-mcp.ifood.com.br/.well-known/oauth-protected-resource/marketplace';
+const nativeFetch = globalThis.fetch;
+
+async function localCallbackUrl() {
+  const listener = createServer();
+  listener.listen(0, '127.0.0.1');
+  await once(listener, 'listening');
+  const address = listener.address();
+  if (!address || typeof address === 'string') throw new Error('missing test port');
+  await new Promise<void>((resolve) => listener.close(() => resolve()));
+  return `http://127.0.0.1:${address.port}/callback`;
+}
+
+function mockServer(options: {
+  tokenFailure?: boolean; invalidTools?: boolean; alternateIssuer?: boolean;
+  reconnectFailure?: boolean; malformedTokens?: boolean; requirePost?: boolean; clientFailure?: boolean;
+  readCatalog?: boolean; readResult?: unknown;
+  cartCatalog?: IfoodMcpTool[]; cartResult?: unknown;
+  paymentOrderCatalog?: IfoodMcpTool[]; paymentOrderResult?: unknown;
+} = {}) {
+  const requests: { url: string; init: RequestInit | undefined }[] = [];
+  const methods: string[] = [];
+  let tokenRequest: URLSearchParams | undefined;
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = String(input);
+    requests.push({ url, init });
+    if (url === resourceMetadata) return Response.json({
+      resource: endpoint,
+      authorization_servers: [options.alternateIssuer ? 'https://unexpected.example.test' : 'https://id.ifood.com.br'],
+    });
+    if (url.endsWith('/.well-known/oauth-authorization-server')) return new Response(null, { status: 404 });
+    if (url.endsWith('/.well-known/openid-configuration')) return Response.json({
+      issuer: 'https://id.ifood.com.br/3p',
+      authorization_endpoint: 'https://id.ifood.com.br/authorize', token_endpoint: 'https://id.ifood.com.br/token',
+      response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'],
+      token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
+      code_challenge_methods_supported: ['S256'], jwks_uri: 'https://id.ifood.com.br/jwks',
+      subject_types_supported: ['public'], id_token_signing_alg_values_supported: ['RS512'],
+    });
+    if (url === 'https://id.ifood.com.br/token') {
+      tokenRequest = new URLSearchParams(String(init?.body));
+      if (options.requirePost && (new Headers(init?.headers).has('authorization')
+        || tokenRequest.get('client_id') !== 'test-client' || tokenRequest.get('client_secret') !== 'test-secret')) {
+        return Response.json({ error: 'invalid_client', error_description: 'fixture: POST required for this client' }, { status: 401 });
+      }
+      if (options.tokenFailure) return Response.json({ error: 'invalid_grant', error_description: 'private-token' }, { status: 400 });
+      if (options.clientFailure) return Response.json({ error: 'invalid_client', error_description: 'private-token' }, { status: 401 });
+      if (options.malformedTokens) return Response.json({ token_type: 'Bearer', private: 'private-token' });
+      return Response.json({ access_token: 'test-access-token', token_type: 'Bearer', refresh_token: 'test-refresh-token' });
+    }
+    if (url !== endpoint) throw new Error('Unexpected request in offline test.');
+    const headers = new Headers(init?.headers);
+    if (!headers.get('authorization')) return Response.json({ error: 'invalid_token' }, {
+      status: 401, headers: { 'www-authenticate': `Bearer resource_metadata="${resourceMetadata}"` },
+    });
+    if (init?.method === 'GET') return new Response(null, { status: 405 });
+    if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+    if (options.reconnectFailure) return Response.json({ error: 'private-token' }, { status: 403 });
+    const message = JSON.parse(String(init?.body)) as { id?: number; method: string; params?: { cursor?: string } };
+    methods.push(message.method);
+    if (message.method === 'notifications/initialized') return new Response(null, { status: 202 });
+    if (options.paymentOrderCatalog && message.method === 'tools/list') {
+      return Response.json({ jsonrpc: '2.0', id: message.id, result: { tools: options.paymentOrderCatalog } });
+    }
+    if (options.paymentOrderCatalog && message.method === 'tools/call') {
+      return Response.json({ jsonrpc: '2.0', id: message.id, result: options.paymentOrderResult });
+    }
+    if (options.cartCatalog && message.method === 'tools/list') {
+      return Response.json({ jsonrpc: '2.0', id: message.id, result: { tools: options.cartCatalog } });
+    }
+    if (options.cartCatalog && message.method === 'tools/call') {
+      return Response.json({ jsonrpc: '2.0', id: message.id, result: options.cartResult });
+    }
+    if (options.readCatalog && message.method === 'tools/list') {
+      const result = message.params?.cursor ? { tools: [] } : {
+        tools: [{
+          name: 'getUser', inputSchema: { type: 'object', additionalProperties: false },
+          outputSchema: { type: 'object', properties: { fixtureCount: { type: 'number' } }, required: ['fixtureCount'] },
+        }], nextCursor: 'fixture-second-page',
+      };
+      return Response.json({ jsonrpc: '2.0', id: message.id, result });
+    }
+    if (options.readCatalog && message.method === 'tools/call') {
+      return Response.json({ jsonrpc: '2.0', id: message.id, result: options.readResult });
+    }
+    const result = message.method === 'initialize' ? {
+      protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'offline-ifood', version: '1.0' },
+    } : { tools: options.invalidTools ? [{ name: 'invalid' }] : [{
+      name: 'offline_tool', description: 'Fixture, não descoberta real.', inputSchema: { type: 'object', properties: {} },
+    }] };
+    return Response.json({ jsonrpc: '2.0', id: message.id, result }, { headers: { 'mcp-session-id': 'offline-session' } });
+  });
+  return { requests, methods, fetchMock, get tokenRequest() { return tokenRequest; } };
+}
+
+afterEach(() => vi.restoreAllMocks());
+
+describe('SDK v1 real com HTTP externo simulado', () => {
+  // InputSchemas baseados nos metadados observados fornecidos pelo responsável.
+  // OutputSchema abaixo é fixture de teste, não afirmação sobre o servidor real.
+  const paymentOrderCatalog: IfoodMcpTool[] = [
+    { name: 'listPaymentMethods', inputSchema: { type: 'object', properties: { merchantId: { type: 'string', format: 'uuid' } }, required: ['merchantId'] } },
+    { name: 'setCartPayment', inputSchema: { type: 'object', properties: { cartId: { type: 'string', format: 'uuid' }, paymentMethodId: { type: 'string', format: 'uuid' }, cardTokenId: { type: 'string', format: 'uuid' } }, required: ['cartId', 'paymentMethodId'] } },
+    { name: 'getOrder', inputSchema: { type: 'object', properties: { orderId: { type: 'string' } }, required: ['orderId'] } },
+    { name: 'trackOrder', inputSchema: { type: 'object', properties: { orderId: { type: 'string' }, nextPageToken: { type: 'string' } }, required: ['orderId'] },
+      outputSchema: { type: 'object', properties: { history: { type: 'array' } }, required: ['history'] } },
+  ];
+  const paymentOrderCalls: [string, Record<string, unknown>, boolean][] = [
+    ['listPaymentMethods', { merchantId: '00000000-0000-4000-8000-000000000001' }, false],
+    ['setCartPayment', { cartId: '00000000-0000-4000-8000-000000000002', paymentMethodId: '00000000-0000-4000-8000-000000000003' }, true],
+    ['getOrder', { orderId: 'private-order-not-a-uuid' }, false],
+    ['trackOrder', { orderId: 'private-order-not-a-uuid', nextPageToken: 'private-page' }, false],
+  ];
+
+  it.each(paymentOrderCalls.flatMap(([name, args, allowPaymentConfiguration]) => [false, true].map((isError) => ({ name, args, allowPaymentConfiguration, isError }))))(
+    'IF-04 preserva resposta via OAuth/SDK/HTTP simulado: $name isError=$isError', async ({ name, args, allowPaymentConfiguration, isError }) => {
+      const callbackUrl = await localCallbackUrl();
+      const paymentOrderResult = {
+        content: [{ type: 'text', text: 'private-content', _meta: { source: 'private-source' } }], isError,
+        structuredContent: isError ? { detail: 'private-error' } : {
+          cardTokenId: 'private-card', address: 'private-address', document: 'private-document', verificationCode: 'private-code',
+          total: 5779, amount: '57.79', history: [], nextPageToken: 'private-next-page', consultAgainAfterSeconds: 23,
+        }, _meta: { audit: 'private-audit', retryAfter: 23 }, extra: 'private-extra',
+      };
+      const remote = mockServer({ paymentOrderCatalog, paymentOrderResult });
+      const events: IfoodMcpDiagnostic[] = [];
+      const client = createIfoodMcpClient(readIfoodMcpConfig({
+        IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+      }), {
+        allowPaymentConfiguration, onDiagnostic: (event) => events.push(event),
+        openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); },
+      });
+      try {
+        await client.connect();
+        await expect(client.callPaymentOrderTool(name, args)).resolves.toEqual(paymentOrderResult);
+        const requests = remote.requests.filter((request) => request.url === endpoint && request.init?.method === 'POST')
+          .map((request) => JSON.parse(String(request.init?.body)) as { method: string; params?: unknown });
+        expect(requests.filter((request) => request.method === 'tools/call')).toEqual([
+          expect.objectContaining({ method: 'tools/call', params: { name, arguments: args } }),
+        ]);
+        expect(remote.methods).toEqual(['initialize', 'notifications/initialized', 'tools/list', 'tools/call']);
+        expect(events).toContainEqual(expect.objectContaining({ stage: 'tools_payment_order', event: 'http_response', httpStatus: 200 }));
+        expect(events).toContainEqual(expect.objectContaining({ stage: 'tools_payment_order', event: isError ? 'failed' : 'succeeded' }));
+        expect(JSON.stringify(events)).not.toMatch(/private-|test-access-token|test-secret|test-code/);
+      } finally { await client.close(); }
+      expect(remote.requests.some((request) => request.init?.method === 'DELETE')).toBe(true);
+      await expect(nativeFetch(callbackUrl)).rejects.toThrow();
+    },
+  );
+
+  it.each(['setCartPayment', 'submitOrder', 'unknownTool'])('IF-04 bloqueia %s antes de enviar discovery/tools/call ao HTTP', async (name) => {
+    const callbackUrl = await localCallbackUrl();
+    const remote = mockServer({ paymentOrderCatalog, paymentOrderResult: { content: [] } });
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), {
+      allowCartMutations: true,
+      openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); },
+    });
+    try {
+      await client.connect();
+      await expect(client.callPaymentOrderTool(name, { userConsent: true })).rejects.toMatchObject({ diagnostic: {
+        reason: name === 'setCartPayment' ? 'payment_configuration_disabled' : 'payment_order_tool_not_allowed',
+      } });
+      expect(remote.methods).toEqual(['initialize', 'notifications/initialized']);
+    } finally { await client.close(); }
+  });
+
+  // Schemas fictícios, não são contratos oficiais de carrinho.
+  const cartCatalog: IfoodMcpTool[] = [
+    { name: 'getCart', inputSchema: { type: 'object', properties: { cartId: { type: 'string' } }, required: ['cartId'], additionalProperties: false },
+      outputSchema: { type: 'object', properties: { total: { type: 'integer' } }, required: ['total'] } },
+    { name: 'createCart', inputSchema: { type: 'object', properties: { fixtureItems: { type: 'array', items: { type: 'string' } } }, required: ['fixtureItems'], additionalProperties: false },
+      outputSchema: { type: 'object', properties: { cartId: { type: 'string' } }, required: ['cartId'] } },
+  ];
+
+  it('executa getCart com SDK real em modo leitura mesmo com readOnlyHint false', async () => {
+    const callbackUrl = await localCallbackUrl();
+    const cartResult = { content: [], structuredContent: { total: 5779 }, _meta: { requestId: 'private-audit' } };
+    const remote = mockServer({
+      cartCatalog: [{ ...cartCatalog[0]!, annotations: { readOnlyHint: false, title: 'private-title' } }], cartResult,
+    });
+    const events: IfoodMcpDiagnostic[] = [];
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), {
+      onDiagnostic: (event) => events.push(event),
+      openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); },
+    });
+    try {
+      await client.connect();
+      await expect(client.callCartTool('getCart', { cartId: 'remote-cart' })).resolves.toEqual(cartResult);
+      expect(remote.methods).toEqual(['initialize', 'notifications/initialized', 'tools/list', 'tools/call']);
+      expect(events.filter((event) => event.event === 'annotation_mismatch')).toEqual([{ stage: 'tools_cart', event: 'annotation_mismatch' }]);
+      expect(JSON.stringify(events)).not.toMatch(/private-|remote-cart|test-secret|test-code|test-access-token/);
+    } finally { await client.close(); }
+  });
+
+  it.each([
+    ['getCart', { cartId: 'remote-cart' }, false, { content: [], structuredContent: { total: 5779, benefits: [{ amount: 1000 }], discounts: 0 }, _meta: { requestId: 'private-audit' } }],
+    ['createCart', { fixtureItems: ['remote-product'] }, true, { content: [], structuredContent: { cartId: 'remote-cart' } }],
+    ['getCart', { cartId: 'remote-cart' }, false, { content: [{ type: 'text', text: 'private-failure' }], isError: true, structuredContent: { failure: 'private-detail' } }],
+    ['createCart', { fixtureItems: ['remote-product'] }, true, { content: [], isError: true, structuredContent: { failure: 'private-detail' } }],
+  ] as const)('executa carrinho via SDK com HTTP 200 e preserva sucesso ou isError: %s', async (name, args, allowCartMutations, cartResult) => {
+    const callbackUrl = await localCallbackUrl();
+    const remote = mockServer({ cartCatalog, cartResult });
+    const events: IfoodMcpDiagnostic[] = [];
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), {
+      allowCartMutations, onDiagnostic: (event) => events.push(event),
+      openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); },
+    });
+    try {
+      await client.connect();
+      await expect(client.callCartTool(name, args)).resolves.toEqual(cartResult);
+      const calls = remote.requests.filter((request) => request.url === endpoint && request.init?.method === 'POST')
+        .map((request) => JSON.parse(String(request.init?.body)) as { method: string; params?: unknown })
+        .filter((body) => body.method === 'tools/call');
+      expect(calls).toEqual([expect.objectContaining({ method: 'tools/call', params: { name, arguments: args } })]);
+      expect(events).toContainEqual(expect.objectContaining({ stage: 'tools_cart', event: 'http_response', httpStatus: 200 }));
+      if ('isError' in cartResult) {
+        expect(events).toContainEqual(expect.objectContaining({ stage: 'tools_cart', event: 'failed', reason: 'cart_tool_failed' }));
+        expect(events).not.toContainEqual(expect.objectContaining({ stage: 'tools_cart', event: 'succeeded' }));
+      }
+      expect(JSON.stringify(events)).not.toContain('private-');
+    } finally { await client.close(); }
+  });
+
+  it('não envia tools/call de mutação ao SDK/HTTP sem habilitação explícita', async () => {
+    const callbackUrl = await localCallbackUrl();
+    const remote = mockServer({ cartCatalog, cartResult: { content: [] } });
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), { openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); } });
+    try {
+      await client.connect();
+      await expect(client.callCartTool('createCart', { fixtureItems: ['remote-product'] })).rejects.toMatchObject({ diagnostic: { reason: 'cart_mutations_disabled' } });
+      expect(remote.methods).toEqual(['initialize', 'notifications/initialized']);
+    } finally { await client.close(); }
+  });
+
+  it.each([
+    [{ content: [{ type: 'text', text: 'private-profile' }], structuredContent: { fixtureCount: 2, extra: 'private-extra' } }, false],
+    [{ content: [{ type: 'text', text: 'private-failure' }], isError: true }, false],
+    [{ content: [], structuredContent: { fixtureCount: 'private-invalid-type' } }, true],
+  ] as const)('executa tools/call real, preservando resultado ou rejeitando outputSchema incompatível', async (readResult, invalid) => {
+    const callbackUrl = await localCallbackUrl();
+    const remote = mockServer({ readCatalog: true, readResult });
+    const diagnostics: IfoodMcpDiagnostic[] = [];
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), {
+      onDiagnostic: (event) => diagnostics.push(event),
+      openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); },
+    });
+    try {
+      await client.connect();
+      if (invalid) await expect(client.callReadTool('getUser', {})).rejects.toMatchObject({ diagnostic: { stage: 'tools_read', reason: 'read_result_invalid' } });
+      else await expect(client.callReadTool('getUser', {})).resolves.toEqual(readResult);
+      const requestBodies = remote.requests.filter((request) => request.url === endpoint && request.init?.method === 'POST')
+        .map((request) => JSON.parse(String(request.init?.body)) as { method: string; params?: unknown });
+      expect(requestBodies.filter((body) => body.method === 'tools/call')).toEqual([
+        expect.objectContaining({ method: 'tools/call', params: { name: 'getUser', arguments: {} } }),
+      ]);
+      expect(remote.methods).toEqual(['initialize', 'notifications/initialized', 'tools/list', 'tools/list', 'tools/call']);
+      expect(JSON.stringify(diagnostics)).not.toContain('private-');
+    } finally { await client.close(); }
+  });
+
+  it('executa OAuth com PKCE, valida callback, reconecta e faz apenas tools/list', async () => {
+    const callbackUrl = await localCallbackUrl();
+    const remote = mockServer({ requirePost: true });
+    const diagnostics: IfoodMcpDiagnostic[] = [];
+    let challenge: string | null = null;
+    const openBrowser = vi.fn(async (url: URL) => {
+      expect(url.origin).toBe('https://id.ifood.com.br');
+      expect(url.searchParams.get('redirect_uri')).toBe(callbackUrl);
+      expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+      expect(url.searchParams.get('resource')).toBe(endpoint);
+      challenge = url.searchParams.get('code_challenge');
+      const target = new URL(callbackUrl);
+      target.searchParams.set('state', url.searchParams.get('state')!);
+      target.searchParams.set('code', 'test-authorization-code');
+      await nativeFetch(target);
+    });
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), { openBrowser, onDiagnostic: (event) => diagnostics.push(event) });
+    try {
+      await expect(client.connect()).resolves.toEqual({ name: 'offline-ifood', version: '1.0' });
+      await expect(client.listTools()).resolves.toMatchObject([{ name: 'offline_tool', inputSchema: { type: 'object' } }]);
+      expect(openBrowser).toHaveBeenCalledOnce();
+      expect(remote.tokenRequest?.get('redirect_uri')).toBe(callbackUrl);
+      expect(remote.tokenRequest?.get('code')).toBe('test-authorization-code');
+      expect(remote.tokenRequest?.get('grant_type')).toBe('authorization_code');
+      expect(createHash('sha256').update(remote.tokenRequest!.get('code_verifier')!).digest('base64url')).toBe(challenge);
+      const tokenHeaders = new Headers(remote.requests.find((request) => request.url.endsWith('/token'))?.init?.headers);
+      expect(tokenHeaders.has('authorization')).toBe(false);
+      expect(tokenHeaders.get('content-type')).toBe('application/x-www-form-urlencoded');
+      expect(remote.tokenRequest?.getAll('client_id')).toEqual(['test-client']);
+      expect(remote.tokenRequest?.getAll('client_secret')).toEqual(['test-secret']);
+      expect(remote.requests.filter((request) => request.url.endsWith('/token'))).toHaveLength(1);
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        stage: 'oauth_token_exchange', event: 'http_response', httpStatus: 200, clientAuthMethod: 'client_secret_post',
+      }));
+      expect(remote.methods).toEqual(['initialize', 'notifications/initialized', 'tools/list']);
+      for (const stage of ['oauth_callback', 'oauth_state_validation', 'oauth_token_exchange', 'oauth_tokens_storage', 'mcp_reconnect', 'tools_list']) {
+        expect(diagnostics).toContainEqual(expect.objectContaining({ stage, event: 'succeeded' }));
+      }
+      expect(JSON.stringify(diagnostics)).not.toMatch(/test-access-token|test-refresh-token|test-authorization-code|test-secret/);
+    } finally {
+      await client.close();
+    }
+    expect(remote.requests.some((request) => request.init?.method === 'DELETE')).toBe(true);
+    await expect(nativeFetch(callbackUrl)).rejects.toThrow();
+  });
+
+  it.each([
+    ['tokenFailure', 'oauth_token_exchange', 'InvalidGrantError'],
+    ['clientFailure', 'oauth_token_exchange', 'InvalidClientError'],
+    ['malformedTokens', 'oauth_token_exchange', 'ZodError'],
+    ['reconnectFailure', 'mcp_reconnect', 'StreamableHTTPError'],
+    ['invalidTools', 'tools_list', '$ZodError'],
+  ] as const)('identifica exatamente a falha %s após callback aceito', async (failure, stage, errorType) => {
+    const callbackUrl = await localCallbackUrl();
+    const remote = mockServer({ [failure]: true });
+    const diagnostics: IfoodMcpDiagnostic[] = [];
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), {
+      onDiagnostic: (event) => diagnostics.push(event),
+      openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); },
+    });
+    try {
+      let caught: unknown;
+      try { await client.connect(); await client.listTools(); } catch (error) { caught = error; }
+      expect(caught).toMatchObject({ diagnostic: { stage, event: 'failed', errorType } });
+      expect(diagnostics).toContainEqual(expect.objectContaining({ stage: 'oauth_state_validation', event: 'succeeded' }));
+      expect(diagnostics).toContainEqual(expect.objectContaining({ stage, event: 'failed', errorType }));
+      if (failure === 'tokenFailure') {
+        expect(caught).toMatchObject({ diagnostic: { httpStatus: 400, oauthError: 'invalid_grant' } });
+        expect(diagnostics.some((event) => event.stage === 'oauth_tokens_storage')).toBe(false);
+      }
+      if (failure === 'clientFailure') {
+        expect(caught).toMatchObject({ diagnostic: { httpStatus: 401, oauthError: 'invalid_client', clientAuthMethod: 'client_secret_post' } });
+        const tokenRequests = remote.requests.filter((request) => request.url.endsWith('/token'));
+        expect(tokenRequests.length).toBeGreaterThan(0);
+        for (const request of tokenRequests) {
+          expect(new Headers(request.init?.headers).has('authorization')).toBe(false);
+          expect(new URLSearchParams(String(request.init?.body)).get('client_secret')).toBe('test-secret');
+        }
+      }
+      if (failure === 'reconnectFailure') {
+        expect(caught).toMatchObject({ diagnostic: { httpStatus: 403 } });
+        expect(diagnostics).toContainEqual(expect.objectContaining({ stage: 'oauth_tokens_storage', event: 'succeeded' }));
+      }
+      expect(JSON.stringify(diagnostics)).not.toMatch(/private-token|test-secret|test-code|test-access-token|test-refresh-token/);
+      expect((caught as Error).cause).toBeUndefined();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each(['tokenFailure', 'invalidTools'] as const)('sanitiza %s sem reter causa sensível', async (failure) => {
+    const callbackUrl = await localCallbackUrl();
+    mockServer({ [failure]: true });
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), { openBrowser: async (url) => {
+      await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`);
+    } });
+    try {
+      let caught: unknown;
+      try {
+        await client.connect();
+        await client.listTools();
+      } catch (error) { caught = error; }
+      expect(caught).toBeInstanceOf(Error);
+      expect(String(caught)).not.toMatch(/private-token|test-secret|test-code/);
+      expect((caught as Error).cause).toBeUndefined();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('recusa enviar credenciais a outro authorization server', async () => {
+    const remote = mockServer({ alternateIssuer: true });
+    const openBrowser = vi.fn();
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret',
+      IFOOD_MCP_CALLBACK_URL: await localCallbackUrl(),
+    }), { openBrowser });
+    try {
+      await expect(client.connect()).rejects.toThrow('autenticação');
+      expect(openBrowser).not.toHaveBeenCalled();
+      expect(remote.tokenRequest).toBeUndefined();
+      expect(remote.requests.every((request) => !String(request.init?.body).includes('test-secret'))).toBe(true);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('distingue state inválido de falha na troca de tokens e não envia código ao AS', async () => {
+    const callbackUrl = await localCallbackUrl();
+    const remote = mockServer();
+    const diagnostics: IfoodMcpDiagnostic[] = [];
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), {
+      onDiagnostic: (event) => diagnostics.push(event),
+      openBrowser: async () => { await nativeFetch(`${callbackUrl}?state=private-invalid-state&code=private-code`); },
+    });
+    try {
+      await expect(client.connect()).rejects.toMatchObject({ diagnostic: { stage: 'oauth_state_validation', event: 'failed' } });
+      expect(remote.tokenRequest).toBeUndefined();
+      expect(diagnostics).toContainEqual(expect.objectContaining({ stage: 'oauth_state_validation', event: 'failed' }));
+      expect(diagnostics.some((event) => event.stage === 'oauth_token_exchange')).toBe(false);
+      expect(JSON.stringify(diagnostics)).not.toMatch(/private-invalid-state|private-code/);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('close cancela uma autenticação pendente e libera a porta do callback', async () => {
+    const callbackUrl = await localCallbackUrl();
+    mockServer();
+    let browserOpened: () => void;
+    const browser = new Promise<void>((resolve) => { browserOpened = resolve; });
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), { openBrowser: async () => { browserOpened(); } });
+    const connecting = client.connect();
+    const result = expect(connecting).rejects.toThrow('autenticação');
+    await browser;
+    await client.close();
+    await result;
+    await expect(nativeFetch(callbackUrl)).rejects.toThrow();
+    await expect(client.connect()).rejects.toThrow('encerrado');
+  });
+});

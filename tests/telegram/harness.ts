@@ -40,8 +40,8 @@ const BOT_INFO = {
   has_main_web_app: false,
 } as UserFromGetMe;
 
-export function criarHarness(iris: Agente, opcoes: { semPrivado?: number[]; aoAutorizar?: ExecutorPedido } = {}) {
-  const { bot, agrupador } = criarBot('123:TESTE', iris, opcoes.aoAutorizar ? { aoAutorizar: opcoes.aoAutorizar } : {});
+export function criarHarness(iris: Agente, opcoes: { semPrivado?: number[]; aoAutorizar?: ExecutorPedido; preliminaryOnly?: boolean } = {}) {
+  const { bot, agrupador } = criarBot('123:TESTE', iris, { ...(opcoes.aoAutorizar ? { aoAutorizar: opcoes.aoAutorizar } : {}), ...(opcoes.preliminaryOnly ? { preliminaryOnly: true } : {}) });
   bot.botInfo = BOT_INFO;
 
   const chamadas: Chamada[] = [];

@@ -1,7 +1,7 @@
 import { FakeLlm, responderHeuristico } from './fakes/llm-fake.js';
 import type { ProvedorDaCascata, TrocaDeProvedor } from './llm-cascata.js';
 import { LlmEmCascata } from './llm-cascata.js';
-import type { OpenAiCompatOptions, ReasoningEffort } from './llm-openai.js';
+import type { OpenAiCompatOptions, ReasoningEffort, ResponseMode } from './llm-openai.js';
 import { ESFORCOS, OpenAiCompatLlm } from './llm-openai.js';
 import type { LlmPort, LlmTier } from './ports.js';
 
@@ -23,11 +23,16 @@ export interface LlmEnv {
   AI_REASONING_EFFORT_FAST?: string | undefined;
   AI_REASONING_EFFORT_CAPABLE?: string | undefined;
   AI_API_KEY?: string | undefined;
-  /** Tempo máximo de cada provedor da cascata antes de passar ao próximo. Padrão: 10000. */
+  /** Tempo máximo de cada provedor da cascata antes de passar ao próximo. Padrão: 8000. */
   AI_TIMEOUT_POR_PROVEDOR_MS?: string | undefined;
 }
 
 export interface OpcoesLlmAmbiente {
+  fetch?: typeof fetch;
+  now?: () => number;
+  /** Produção observada também aplica prazo/cooldown quando há só um provedor. */
+  sempreUsarCascata?: boolean;
+  initialResponseModes?: Readonly<Partial<Record<string, ResponseMode>>>;
   /** Avisado quando a cascata pula um provedor (para o log). */
   aoTrocar?: (troca: TrocaDeProvedor) => void;
 }
@@ -81,7 +86,7 @@ function nomeDoProvedor(baseUrl: string): string {
   try {
     return new URL(baseUrl).hostname;
   } catch {
-    return baseUrl;
+    return 'provedor-invalido';
   }
 }
 
@@ -145,23 +150,24 @@ export function criarLlmDoAmbiente(env: LlmEnv, opcoes: OpcoesLlmAmbiente = {}):
     case 'fake':
       return new FakeLlm(responderHeuristico);
     case 'openai-compat': {
+      const configComDependencias = (config: OpenAiCompatOptions): OpenAiCompatOptions => ({ ...config, ...(opcoes.fetch && { fetch: opcoes.fetch }), ...(opcoes.now && { now: opcoes.now }), ...(opcoes.initialResponseModes && { initialResponseModes: opcoes.initialResponseModes }) });
       const configs = [lerProvedor(env, prefixoDoProvedor(1))];
       for (let n = 2; n <= MAX_PROVEDORES; n++) {
         const prefixo = prefixoDoProvedor(n);
         if (env[`${prefixo}BASE_URL`]?.trim()) configs.push(lerProvedor(env, prefixo));
       }
       const [unico] = configs;
-      if (configs.length === 1 && unico) return new OpenAiCompatLlm(unico);
+      if (configs.length === 1 && unico && !opcoes.sempreUsarCascata) return new OpenAiCompatLlm(configComDependencias(unico));
 
-      // Na cascata, 429 e 5xx passam ao próximo provedor na hora em vez de esperar;
-      // só o último da lista ainda espera e tenta de novo.
-      const provedores: ProvedorDaCascata[] = configs.map((config, i) => ({
+      // Uma passagem por provedor, sem espera/retry HTTP que multiplique a cascata.
+      const provedores: ProvedorDaCascata[] = configs.map((config) => ({
         nome: nomeDoProvedor(config.baseUrl),
-        llm: new OpenAiCompatLlm(i < configs.length - 1 ? { ...config, maxRateLimitRetries: 0 } : config),
+        llm: new OpenAiCompatLlm(configComDependencias({ ...config, maxRateLimitRetries: 0, deferModelFallback: true })),
       }));
       const timeoutPorProvedorMs = lerTimeout(env.AI_TIMEOUT_POR_PROVEDOR_MS);
       return new LlmEmCascata({
         provedores,
+        ...(opcoes.now && { now: opcoes.now }),
         ...(timeoutPorProvedorMs !== undefined && { timeoutPorProvedorMs }),
         ...(opcoes.aoTrocar && { aoTrocar: opcoes.aoTrocar }),
       });
