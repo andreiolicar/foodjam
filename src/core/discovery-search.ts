@@ -97,13 +97,20 @@ export async function buscarDescoberta(port: DiscoveryCatalogPort, participants:
     const menu = await read(() => port.getMenu(id, address));
     if (menu === undefined) break;
     if (menu.storeOpen === false) { closed.add(id); continue; }
-    stores.push(current);
+    const listed = known.get(id);
+    // Avaliação é só apresentação. A releitura prevalece como par nota/contagem;
+    // nunca acopla a nota atual à quantidade antiga de outra observação.
+    const review = current.reviewRating === undefined && listed?.name === current.name
+      ? { ...(listed.reviewRating === undefined ? {} : { reviewRating: listed.reviewRating }),
+          ...(listed.ratingCount === undefined ? {} : { ratingCount: listed.ratingCount }) } : {};
+    stores.push({ ...current, ...review });
     if (menu.coverage !== 'complete') limited('catalog_partial');
     if (menu.truncated === true) limited('pagination_truncated');
     const merged = new Map<string, DiscoveryItem>();
     for (const item of [...(seeds.get(id) ?? []), ...menu.items]) {
       if (item.storeId !== id) throw new Error('Produto fora do estabelecimento.');
-      merged.set(item.id, item);
+      const image = item.itemImageUrl ?? merged.get(item.id)?.itemImageUrl;
+      merged.set(item.id, { ...item, ...(image === undefined ? {} : { itemImageUrl: image }) });
     }
     const available = [...merged.values()].filter(i => i.available !== false);
     const selected = limitarCandidatos(available, [...matchesByTerm.values()], limits.maxItemsPerStore);

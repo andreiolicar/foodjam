@@ -222,8 +222,15 @@ export interface AuthorizedOrder {
 }
 
 /** Descoberta real antes da cotação: ausência significa não comprovado. */
-export type DiscoveryStore = Omit<Store, 'deliveryFeeCents'> & { deliveryFeeCents?: MoneyCents };
+export type DiscoveryStore = Omit<Store, 'deliveryFeeCents'> & {
+  deliveryFeeCents?: MoneyCents;
+  /** Metadados informativos do estabelecimento; nunca participam da seleção. */
+  reviewRating?: number;
+  ratingCount?: number;
+};
 export type DiscoveryItem = Omit<MenuItem, 'priceCents' | 'available'> & {
+  /** Foto principal validada, opcional e exclusivamente visual. */
+  itemImageUrl?: string;
   priceCents?: MoneyCents;
   /** Preço base conhecido; promoção/valor aplicável ainda não comprovado. */
   basePriceCents?: MoneyCents;

@@ -2,6 +2,7 @@ import type {
   AuthorizedOrder,
   PreliminaryProposal,
   DiscoveryItem,
+  DiscoveryStore,
   MoneyCents,
   NomesCatalogo,
   Participant,
@@ -151,7 +152,7 @@ export function botoesCard(temAlternativa: boolean): Botao[][] {
 
 /** Exploração sem cotação: valores ausentes não recebem zero ou disponibilidade implícita. */
 export function textoPropostaPreliminar(dados: {
-  proposal: PreliminaryProposal; nomes?: NomesCatalogo; items?: readonly DiscoveryItem[];
+  proposal: PreliminaryProposal; nomes?: NomesCatalogo; items?: readonly DiscoveryItem[]; stores?: readonly DiscoveryStore[];
   collection?: readonly { participantId: string; displayName: string; included: boolean }[];
 }): string {
   const { proposal } = dados;
@@ -160,6 +161,13 @@ export function textoPropostaPreliminar(dados: {
     const storeName = dados.nomes?.lojas[storeId];
     if (!storeName) throw new Error('Nome do estabelecimento não confirmado.');
     lines.push('', `🏪 <b>${escapar(storeName)}</b>`);
+    const store = dados.stores?.find(s => s.id === storeId);
+    const rating = store?.reviewRating;
+    if (typeof rating === 'number' && Number.isFinite(rating) && rating >= 0 && rating <= 5) {
+      const count = store?.ratingCount;
+      const votes = typeof count === 'number' && Number.isSafeInteger(count) && count >= 0 ? ` (${count} ${count === 1 ? 'avaliação' : 'avaliações'})` : '';
+      lines.push(`⭐ ${rating.toFixed(1).replace('.', ',')}${votes}`);
+    }
     for (const chosen of proposal.items.filter(i => i.storeId === storeId)) {
       const name = dados.nomes?.itens[chosen.menuItemId];
       const person = proposal.participants.find(p => p.id === chosen.participantId);

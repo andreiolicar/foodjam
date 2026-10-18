@@ -1,3 +1,4 @@
+import { merchantReview, validatedItemImageUrl } from './visual-metadata.js';
 import type { DiscoveryCatalogPort } from '../core/ports.js';
 import type { DiscoveryItem, DiscoveryStore } from '../core/contracts.js';
 import type { IfoodMcpClient } from './client.js';
@@ -22,20 +23,22 @@ export function createIfoodDiscoveryCatalog(client: Pick<IfoodMcpClient, 'callRe
   }
   function store(value: unknown): DiscoveryStore {
     const row = catalogMerchantIdentity(value);
-    const result: DiscoveryStore = { id: row.merchantId, name: row.merchantName, isOpen: row.isOpen };
+    const result: DiscoveryStore = { id: row.merchantId, name: row.merchantName, isOpen: row.isOpen, ...merchantReview(value) };
     if (unit && value && typeof value === 'object' && 'deliveryMethod' in value) {
       const method = value.deliveryMethod;
       if (method && typeof method === 'object' && !('fee' in method)) return result;
-      try { return mapMerchant(value, unit); }
+      try { return { ...mapMerchant(value, unit), ...merchantReview(value) }; }
       catch (e) { if (!(e instanceof IfoodCatalogError) || e.reason !== 'delivery_fee_unconfirmed') throw e; }
     }
     return result;
   }
   function item(value: unknown, storeId: string): DiscoveryItem {
     const row = catalogDiscoveryItem(value, storeId);
+    const image = validatedItemImageUrl((value as Record<string, unknown>).itemImageUrl);
     const base = itemUnit && row.unitPrice !== undefined ? catalogMoneyCents(row.unitPrice, itemUnit) : undefined;
     const pricesEqual = row.promotionalUnitPrice === undefined || itemUnit && catalogMoneyCents(row.promotionalUnitPrice, itemUnit) === base;
     return { id: row.itemId, storeId: row.merchantId, name: row.itemName,
+      ...(image === undefined ? {} : { itemImageUrl: image }),
       ...(row.description === undefined ? {} : { description: row.description }),
       ...(row.category === undefined ? {} : { category: row.category }),
       ...(row.available === undefined ? {} : { available: row.available }),
@@ -47,7 +50,17 @@ export function createIfoodDiscoveryCatalog(client: Pick<IfoodMcpClient, 'callRe
     let nextPageToken: string | undefined;
     for (let n = 0; n < maxPages; n++) {
       const page = catalogPage(await read(name, { ...args, ...(options.pageSize ? { pageSize: options.pageSize } : {}), ...(nextPageToken ? { nextPageToken } : {}) }), kind);
-      for (const value of page.results) addCatalogRecord(rows, map(value));
+      for (const value of page.results) {
+        const row = map(value);
+        const previous = rows.get(row.id);
+        // Identidade/preço/escopo continuam estritos; metadados opcionais não
+        // transformam duas observações do mesmo registro em conflito estrutural.
+        const structural = (entry: T) => Object.fromEntries(Object.entries(entry).filter(([key]) => !['itemImageUrl', 'reviewRating', 'ratingCount'].includes(key)));
+        const checked = new Map<string, Record<string, unknown> & { id: string }>();
+        if (previous) checked.set(previous.id, { ...structural(previous), id: previous.id });
+        addCatalogRecord(checked, { ...structural(row), id: row.id });
+        rows.set(row.id, { ...previous, ...row });
+      }
       if (!page.nextPageToken) return { rows: [...rows.values()], truncated: false };
       if (tokens.has(page.nextPageToken)) throw new IfoodCatalogError('pagination_cycle');
       tokens.add(page.nextPageToken); nextPageToken = page.nextPageToken;

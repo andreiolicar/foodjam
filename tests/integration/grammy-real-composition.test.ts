@@ -25,6 +25,7 @@ const http = vi.fn(async (_url: unknown, init?: RequestInit) => {
   }
   return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(output) } }] }), { status: 200 });
 });
+const defaultHttp = http.getMockImplementation()!;
 beforeEach(() => {
   merchant = randomUUID(); products = [randomUUID(), randomUUID()]; isOpen = true;
   transport.connect.mockResolvedValue(undefined); transport.list.mockResolvedValue([]); transport.close.mockResolvedValue(undefined);
@@ -159,5 +160,66 @@ it('composição real prioriza lojas abertas por desejo mesmo com ITEM fechado, 
       if (name === 'searchOffers') expect(args).toMatchObject({ merchantType: 'RESTAURANT', refinements: { onlyOpen: true } });
     }
     expect(transport.factory).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ allowCartMutations: false, allowPaymentConfiguration: false }));
+  } finally { await h.runtime.close(); }
+});
+
+it.each([false, true])('composição real apresenta avaliação getMerchant e fotos escolhidas; falha de envio=%s preserva fluxo', async failPhoto => {
+  const originalRead = transport.read.getMockImplementation()!;
+  transport.read.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+    const result = await originalRead(name, args);
+    const data = JSON.parse(result.content[0].text);
+    if (name === 'getMerchant') Object.assign(data, { reviewRating: 4.7000001, ratingCount: 850 });
+    if (args.resultKind === 'MERCHANT') for (const row of data.results) Object.assign(row, { reviewRating: 1.2, ratingCount: 1 });
+    if (args.resultKind === 'ITEM') for (const row of data.results) row.itemImageUrl = `https://static.ifood-static.com.br/${row.itemId}.jpg?signature=controlled`;
+    return envelope(data);
+  });
+  const originalHttp = defaultHttp;
+  http.mockImplementation(async (url, init) => new URL(String(url)).hostname === 'static.ifood-static.com.br'
+    ? new Response(new Uint8Array([255, 216, 255]), { headers: { 'content-type': 'image/jpeg' } }) : originalHttp(url, init));
+  const h = await setup();
+  const media: { card: number; caption: string; buttons: unknown }[] = [];
+  const removed: number[] = [];
+  const alerts: string[] = [];
+  h.runtime.bot.api.config.use(async (prev, method, payload) => {
+    const p = payload as Record<string, unknown>;
+    if (method === 'sendPhoto') {
+      const card = (p.reply_parameters as { message_id: number }).message_id;
+      expect(h.sent.some(m => m.id === card && m.text.includes('Sugestão preliminar'))).toBe(true);
+      if (failPhoto) return { ok: false, error_code: 400, description: 'Controlled media failure' } as never;
+      media.push({ card, caption: String(p.caption), buttons: p.reply_markup });
+      return { ok: true, result: { message_id: 900 + media.length, date: 0, chat: { id: group }, photo: [] } } as never;
+    }
+    if (method === 'deleteMessage') removed.push(Number(p.message_id));
+    if (method === 'answerCallbackQuery' && p.show_alert) alerts.push(String(p.text));
+    return prev(method, payload);
+  });
+  try {
+    await h.text(71, 'Hambúrguer'); await h.text(72, 'Hambúrguer'); await h.text(71, '/montar');
+    const old = h.button('Outra opção');
+    expect(old.m.text).toContain('⭐ 4,7 (850 avaliações)'); expect(old.m.text).not.toContain('⭐ 1,2');
+    const chosen = (await h.runtime.iris.obter(String(group)))!.preliminary!.items.map(i => i.menuItemId);
+    if (!failPhoto) {
+      expect(media.length).toBeGreaterThan(0); expect(media.length).toBeLessThanOrEqual(2);
+      expect(media.every(m => chosen.some(id => m.caption === `Hambúrguer MCP ${products.indexOf(id) + 1}`) && !m.buttons)).toBe(true);
+    }
+    const before = media.length;
+    await h.click(71, old.data, group, old.m.id);
+    const alternative = h.button('Outra opção');
+    expect(alternative.m.id).not.toBe(old.m.id);
+    if (!failPhoto) expect(removed.length).toBe(before);
+    const snapshot = await h.runtime.iris.obter(String(group));
+    await h.click(71, old.data, group, old.m.id);
+    // Callbacks em fotos também não têm identidade de card.
+    await h.click(71, 'proposta:cancelar', group, 901);
+    expect(await h.runtime.iris.obter(String(group))).toEqual(snapshot);
+    expect(alerts.filter(text => text.includes('substituída')).length).toBeGreaterThanOrEqual(2);
+    await h.click(71, 'proposta:confirmar', group, alternative.m.id);
+    expect((await h.runtime.iris.obter(String(group)))?.status).not.toBe('closed');
+    expect(transport.factory).toHaveBeenCalledWith(expect.anything(), { allowCartMutations: false, allowPaymentConfiguration: false });
+    expect(transport.read.mock.calls.every(([name]) => ['listAddresses', 'searchOffers', 'getMerchant', 'browseOffers'].includes(name))).toBe(true);
+    expect(transport.read.mock.calls.every(([, args]) => !(args.refinements && 'minRating' in args.refinements))).toBe(true);
+    expect(JSON.stringify(h.runtime.diagnostico())).not.toContain('signature=');
+    expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain('signature=');
+    expect(h.runtime.bot.isRunning()).toBe(false);
   } finally { await h.runtime.close(); }
 });
