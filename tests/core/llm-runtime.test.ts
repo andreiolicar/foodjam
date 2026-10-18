@@ -11,7 +11,7 @@ it('preserva fase/modelo/TPM/espera sem prompt, erro bruto ou cabeçalhos privad
   expect(observed.http).toEqual([expect.objectContaining({phase:'coleta_lote',tier:'fast',model:'qwen/qwen3.8-27b',status:429,dimension:'tokens_per_minute',retryAfterMs:60000,nextAttemptAt:new Date(70000).toISOString(),remainingTokensPerMinute:0,remainingRequestsPerDay:800})]);
   expect(JSON.stringify(observed.http)).not.toMatch(/PRIVATE_|private-api|private-header|x-sensitive/);
 });
-it('429 sem espera comprovada bloqueia novas chamadas, sem presumir minuto nem acionar reserva', async () => {
+it('429 sem espera comprovada usa cooldown local sem inventar Retry-After nem repetir a credencial', async () => {
   const fetch=vi.fn(async()=>new Response('{}',{status:429}));
   const observed=criarLlmObservado(env,{fetch});
   const request={tier:'fast' as const,outputName:'coleta_lote',system:'',prompt:'',outputSchema:{}};

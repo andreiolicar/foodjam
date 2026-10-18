@@ -17,7 +17,7 @@ O objetivo do MVP é ajudar um grupo a fazer um pedido em conjunto:
 
 - **Core (Íris):** coleta de preferências em linguagem natural (em lote), endereço de entrega, proposta com 1 ou 2 lojas e alternativa, rateio em centavos com entrega e taxa de serviço, orçamento resolvido no privado, ajustes por texto e fechamento idempotente com `AuthorizedOrder`. Veja [a API do core](docs/api-core.md).
 - **Bot do Telegram (grammY):** início por menção ou `/iniciar`, endereço confirmado no grupo e confirmações individuais de orçamento no privado, card da proposta com botões, `/montar` e `/cancelar`.
-- **Modelo de IA em produção:** Groq real obrigatório. Configuração ausente ou falha do provedor interrompe a operação; não há fallback silencioso para modelo fake.
+- **Modelo de IA em produção:** Groq real como principal, Gemini e OpenRouter como reservas configuráveis pela cascata da equipe (`AI_2_*`, `AI_3_*`). Não há fallback para modelo fake.
 - **Catálogo em produção:** adaptador MCP real da IF-05, com uma conexão autenticada compartilhada durante a execução. Preços e disponibilidade desconhecidos permanecem pendentes.
 - **Demo integrada:** o bot mostra uma proposta preliminar, com revisão, outra opção, ajustes e cancelamento. Preparação comercial e aceites financeiros ficam pendentes; nenhuma compra ou criação automática de carrinho é executada. Veja [a experiência coletiva IF-06](src/ifood/IF-06.md) e [o handoff grammY + IF-05](src/ifood/GRAMMY-INTEGRATION.md).
 
@@ -77,6 +77,7 @@ cp .env.example .env
 | Endereço de entrega | Na demo real, selecionado de `listAddresses` e confirmado pelo organizador no grupo; não é inferido de `ENDERECO_PADRAO`. |
 | `IFOOD_MCP_ENDPOINT` | Endpoint informado: `https://consumer-mcp.ifood.com.br/marketplace`. |
 | `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` | Modelo de IA (API compatível com OpenAI). Os opcionais por nível e de reserva estão comentados no `.env.example`. |
+| `AI_2_*`, `AI_3_*` | Reservas da aplicação real: Gemini e OpenRouter, nesta ordem, com endpoint, chave e modelos próprios por tier. O Core genérico admite até `AI_9_*` nos simuladores. |
 
 O MCP exige `IFOOD_MCP_CLIENT_ID`, `IFOOD_MCP_CLIENT_SECRET` e `IFOOD_MCP_CALLBACK_URL`, além de OAuth interativo local. Consulte [a inicialização do iFood](src/ifood/README.md).
 

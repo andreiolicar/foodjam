@@ -29,7 +29,9 @@ export type { Descarte, ItemIncerto } from './proposta.js';
 
 // Modelo: escolha pelo ambiente (AI_PROVIDER etc.) e registro de chamadas.
 export { criarLlmDoAmbiente, temProvedorReal } from './llm-ambiente.js';
-export type { LlmEnv } from './llm-ambiente.js';
+export type { LlmEnv, OpcoesLlmAmbiente } from './llm-ambiente.js';
+export { LlmEmCascata } from './llm-cascata.js';
+export type { TrocaDeProvedor } from './llm-cascata.js';
 export type { LlmCallRecord } from './llm.js';
 
 // Fakes para desenvolver e testar a integração sem iFood nem modelo real.

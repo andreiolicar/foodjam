@@ -38,7 +38,21 @@ Arquivos centrais da adaptação: `src/app.ts`, `src/index.ts`, `src/core/discov
 - Cancelamento e revisão são restritos ao organizador; callbacks de cards substituídos são rejeitados. Mensagens privadas e botões de orçamento da interface original permanecem, assim como os testes do fluxo cotado. No modo preliminar, nenhum clique registra aceite de valor desconhecido.
 - `Revisar proposta preliminar` substitui `Confirmar pedido` na produção. Mesmo um callback antigo/forjado de confirmação não chama `fechar` ou executor. A fachada real também bloqueia `fechar`.
 
-## Execução futura no Mac
+## Reconciliação da cascata com a main
+
+A composição real reutiliza a fábrica `criarLlmDoAmbiente` e a `LlmEmCascata` da equipe. Ordem de produção: Groq (`AI_*`) → Gemini (`AI_2_*`) → OpenRouter (`AI_3_*`). Cada reserva configurada exige endpoint HTTPS, chave própria e modelos fast/capable; configuração parcial ou ordem incorreta impede a inicialização. Ausência de reservas permite somente Groq, sem promessa de resiliência entre provedores. Não há fallback fake. O modo `json_object` do Groq 120B e os modelos configurados são preservados.
+
+Cada operação percorre provedores elegíveis uma única vez. Na cascata não há repetição HTTP nem troca interna de modelo após 429: prioriza-se outro provedor. Os modelos reserva continuam disponíveis no adaptador simples dos simuladores. HTTP 429, 5xx, autenticação, rede, timeout, JSON inválido e saída fora do schema Zod permitem fallback. O cooldown é por provedor: 60 s para 429/erro genérico, 30 s para indisponibilidade/rede/timeout, 1 h para autenticação/cota/plano. `Retry-After` numérico ou HTTP-date pode ampliar a espera. Sem evidência de espera, esses prazos são política local, não promessa do servidor. Saída inválida não impõe cooldown; cada provedor ainda recebe no máximo uma tentativa por operação.
+
+Prazo padrão: 8 s por provedor, incluindo o último, configurável por `AI_TIMEOUT_POR_PROVEDOR_MS`; o limite total de 30 s por geração e o cancelamento do Core prevalecem. Negociação de formato pode consumir até três requisições por provedor dentro desse prazo. Todos falhando/em cooldown: erro controlado, sem repetir a cascata automaticamente, preservando sessão/preferências. Logs contêm somente fase, tier, modelo, fonte, status, contagens e motivos sanitizados. Nenhuma operação comercial foi liberada.
+
+### Smoke test posterior — exige autorização separada
+
+1. Configurar localmente as reservas com os modelos aprovados, sem enviar credenciais ao chat ou ao Git. Conferir presença e ordem; não mudar os modelos para obter cota silenciosamente.
+2. Em processo sem polling, executar uma coleta fast e uma classificação capable por provedor (máximo seis gerações) usando o catálogo previamente validado, sem carrinhos. Respeitar qualquer `Retry-After`; parar por cota/autenticação. Isso verifica acesso e schemas reais, não comprova disponibilidade permanente.
+3. Após autorização de troca controlada, iniciar somente uma instância no worktree de integração e conferir `catalog=ifood-mcp llm=groq cascade=groq,gemini,openrouter`. Repetir o ensaio de duas pessoas, endereço no grupo e revisão preliminar. A cascata simulada não substitui esse smoke real.
+
+## Execução histórica no Mac
 
 **Não executar enquanto o bot antigo usa o mesmo token.** Após revisão do responsável pelo Telegram e troca controlada autorizada do processo, usar:
 
@@ -53,7 +67,7 @@ node --env-file="$HOME/.local/share/foodjam-validation/telegram-demo.env" \
 
 O override fast 20B é o temporário já aprovado para a demo; o `.env` e o modelo capable da equipe ficam intactos. Ele não comprova cota disponível. Não configurar outra reserva silenciosamente.
 
-Os arquivos privados permanecem separados: Telegram via `--env-file`; MCP/Groq via `--env`. OAuth pode exigir navegador e usa tokens em memória. A conexão é mantida durante o processo, com encerramento controlado em SIGINT/SIGTERM. Ausência de MCP, Groq ou endereço comprovado não gera proposta fake. HTTP 429 respeita espera comprovada; sem espera confiável, o gate bloqueia novas chamadas naquela instância.
+Os arquivos privados permanecem separados: Telegram via `--env-file`; MCP/Groq via `--env`. OAuth pode exigir navegador e usa tokens em memória. A conexão é mantida durante o processo, com encerramento controlado em SIGINT/SIGTERM. Ausência de MCP, Groq ou endereço comprovado não gera proposta fake. O gate global antigo foi substituído pelo cooldown independente descrito acima.
 
 Diagnóstico esperado: `catalog=ifood-mcp llm=groq modo=preliminar interface=grammy`. Não são registrados tokens, endereços, prompts, payloads ou erros brutos.
 
@@ -65,7 +79,11 @@ Diagnóstico esperado: `catalog=ifood-mcp llm=groq modo=preliminar interface=gra
 4. O organizador usa `/montar` (ou `/finalizar`). Conferir no card os dois participantes, os atendidos e os que ficaram sem item. Não presumir cobertura completa.
 5. Testar revisão, outra opção quando disponível, ajuste por texto, voltar para a coleta e cancelamento. Nenhuma etapa cria carrinho ou compra.
 
-## Cobertura e limites reais
+## Registro histórico da migração inicial
+
+As seções a seguir registram o primeiro checkpoint da migração. O ensaio coletivo posterior, endereço no grupo, busca por desejos e preços unitários comprovados estão em [IF-06.md](IF-06.md); não confundir esses registros com homologação comercial.
+
+### Cobertura e limites iniciais
 
 A nova composição foi verificada com a API grammY real e respostas MCP/Groq controladas, pela mesma fábrica usada na produção. O teste faz os IDs aleatórios do adaptador chegarem ao Core e os nomes ao card; os construtores fake são proibidos. Também verifica autorização, confirmação bloqueada, callbacks antigos, alternativas, ajustes e cancelamento. Isso **não equivale a um ensaio real desta nova interface no grupo**: não houve chamadas reais MCP/Groq/Telegram nem polling novo nesta migração.
 

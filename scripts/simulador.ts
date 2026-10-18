@@ -21,6 +21,7 @@ import type { PessoaClassificada } from '../src/core/regras/combinacoes.js';
 import { comTaxas, cotarTaxas, diferencasDeTaxa, taxasDa } from '../src/core/taxas.js';
 import type { LlmCallRecord } from '../src/core/llm.js';
 import { criarLlmDoAmbiente, temProvedorReal } from '../src/core/llm-ambiente.js';
+import { LlmEmCascata } from '../src/core/llm-cascata.js';
 import { OpenAiCompatLlm } from '../src/core/llm-openai.js';
 import { propor } from '../src/core/proposta.js';
 import type { TimedCatalogSnapshot } from '../src/core/regras/validar-escolhas.js';
@@ -83,7 +84,7 @@ const nomeItem = (id: string) => catalogoProposta?.menuItems.find((i) => i.id ==
 const nomeLoja = (id: string) => catalogoProposta?.stores.find((s) => s.id === id)?.name ?? id;
 
 /** Uso de tokens informado pelo provedor (só com o adaptador real). */
-const usos = () => (llm instanceof OpenAiCompatLlm ? llm.usos : []);
+const usos = () => (llm instanceof OpenAiCompatLlm || llm instanceof LlmEmCascata ? llm.usos : []);
 
 function mostrarTokens(desde: number): void {
   const lista = usos().slice(desde);
@@ -98,6 +99,7 @@ function mostrarTokens(desde: number): void {
     );
   }
   if (llm instanceof OpenAiCompatLlm) console.log(`  modo de saída estruturada: ${llm.mode}`);
+  if (llm instanceof LlmEmCascata) for (const t of llm.trocas.splice(0)) console.log(`  IA: ${t.de} falhou (${t.motivo}) → ${t.para ?? 'nenhum restante'}`);
 }
 
 function mostrarSessao(): void {

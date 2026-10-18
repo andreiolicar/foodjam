@@ -70,7 +70,7 @@ export async function gerarEstruturado<T>(options: GerarEstruturadoOptions<T>): 
     let validationIssues: LlmCallRecord['validationIssues'];
     try {
       const raw = await comTimeout(
-        (signal) => llm.generate({ tier, system, prompt, outputName, outputSchema, signal }),
+        (signal) => llm.generate({ tier, system, prompt, outputName, outputSchema, signal, validateOutput: value => schema.safeParse(value).success }),
         timeoutMs,
       );
       const parsed = schema.safeParse(raw);
@@ -83,7 +83,7 @@ export async function gerarEstruturado<T>(options: GerarEstruturadoOptions<T>): 
       prompt = `${options.prompt}\n\nSua resposta anterior não seguiu o formato exigido:\n${lastError}\nResponda de novo seguindo exatamente o schema.`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
-      if (erroFatal(error)) {
+      if (erroFatal(error) || (typeof error === 'object' && error !== null && (error as { retryable?: unknown }).retryable === false)) {
         registrar?.({ phase, tier, attempt, durationMs: performance.now() - started, ok: false, error: lastError, fatal: true, failureKind: 'generation' });
         throw new LlmSaidaInvalidaError(phase, attempt, lastError, true);
       }

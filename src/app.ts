@@ -9,8 +9,10 @@ import type { LlmCallRecord } from './core/llm.js';
 export async function criarAplicacaoReal(env: NodeJS.ProcessEnv) {
   const token = env.TELEGRAM_BOT_TOKEN?.trim();
   if (!token) throw new Error('TELEGRAM_BOT_TOKEN obrigatório.');
+  let groq = false;
+  try { const url = new URL(env.AI_BASE_URL ?? ''); groq = url.hostname === 'api.groq.com' && url.protocol === 'https:'; } catch { /* Erro de configuração sanitizado abaixo. */ }
   if (!temProvedorReal(env) || env.AI_PROVIDER?.trim().toLowerCase() !== 'openai-compat'
-    || !env.AI_BASE_URL || new URL(env.AI_BASE_URL).hostname !== 'api.groq.com' || new URL(env.AI_BASE_URL).protocol !== 'https:') throw new Error('A aplicação exige Groq real configurado; simulação desabilitada.');
+    || !groq) throw new Error('A aplicação exige Groq real configurado; simulação desabilitada.');
   const unit = env.IFOOD_CATALOG_MONEY_UNIT;
   if (unit !== undefined && unit !== 'BRL' && unit !== 'cents') throw new Error('Unidade monetária não homologada.');
   const option = (name: string, fallback: number) => {
@@ -48,8 +50,8 @@ export async function criarAplicacaoReal(env: NodeJS.ProcessEnv) {
       try { if (bot.isRunning()) await bot.stop(); await agrupador.esvaziarTudo(); }
       finally { await client.close(); }
     })();
-    console.info('FoodJam fontes: catalog=ifood-mcp llm=groq modo=preliminar interface=grammy');
-    return { bot, agrupador, iris, close, diagnostico: () => structuredClone({ catalog: 'ifood-mcp', llm: 'groq', mode: 'preliminary', reads, http: observation.http, calls }) };
+    console.info(`FoodJam fontes: catalog=ifood-mcp llm=groq cascade=${observation.providers.join(',')} modo=preliminar interface=grammy`);
+    return { bot, agrupador, iris, close, diagnostico: () => structuredClone({ catalog: 'ifood-mcp', llm: 'groq', mode: 'preliminary', providers: observation.providers, reads, http: observation.http, switches: observation.switches, calls }) };
   } catch (error) {
     await client.close().catch(() => undefined);
     throw new Error('Não foi possível inicializar a integração real.', { cause: error });

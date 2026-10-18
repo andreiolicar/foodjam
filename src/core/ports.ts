@@ -86,6 +86,8 @@ export interface LlmRequest {
   outputName: string;
   /** JSON Schema da saída, gerado do schema Zod, para o provedor forçar o formato. */
   outputSchema: Record<string, unknown>;
+  /** Validação Zod do chamador, executada por candidato antes de aceitar a resposta. */
+  validateOutput?: (value: unknown) => boolean;
   signal?: AbortSignal;
 }
 

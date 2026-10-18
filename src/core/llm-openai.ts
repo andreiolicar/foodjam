@@ -28,6 +28,8 @@ export interface OpenAiCompatOptions {
   now?: () => number;
   /** Novas tentativas em 429 de limite por minuto. Padrão: 3. */
   maxRateLimitRetries?: number;
+  /** Em cascata, prioriza credenciais/provedores independentes após falha. */
+  deferModelFallback?: boolean;
   /** Espera máxima aceitável num 429; se o provedor pedir mais, desiste. Padrão: 10 s. */
   maxRateLimitWaitMs?: number;
   /** Injetável para testes; padrão: setTimeout que respeita o AbortSignal. */
@@ -69,6 +71,7 @@ export type LlmErrorKind = 'auth' | 'plan_or_quota' | 'rate_limit' | 'unavailabl
 
 export class LlmHttpError extends Error {
   readonly kind: LlmErrorKind;
+  retryAfterMs?: number;
   /** Mensagem do provedor (corpo da resposta), sem a chave. */
   readonly providerMessage: string;
 
@@ -110,9 +113,14 @@ export function classificarErro(status: number, body: string): LlmErrorKind {
  * Quanto esperar num 429, em ms: header Retry-After, "retryDelay": "23s"
  * (Gemini) ou "try again in 1m2.5s" / "in 450ms" (Groq/OpenAI).
  */
-export function tempoDeEspera(headers: Headers, body: string): number | undefined {
+export function tempoDeEspera(headers: Headers, body: string, now = Date.now()): number | undefined {
   const header = headers.get('retry-after');
   if (header && /^\d+(\.\d+)?$/.test(header.trim())) return Math.ceil(Number(header) * 1000);
+
+  if (header) {
+    const date = Date.parse(header);
+    if (Number.isFinite(date)) return Math.max(0, date - now);
+  }
 
   const retryDelay = /retry_?delay"?\s*:\s*"(\d+(?:\.\d+)?)s"/i.exec(body);
   if (retryDelay?.[1]) return Math.ceil(Number(retryDelay[1]) * 1000);
@@ -202,16 +210,25 @@ export class OpenAiCompatLlm implements LlmPort {
     for (;;) {
       const response = await this.post(request, model);
       if (response.ok) {
-        const data = (await response.json()) as unknown;
+        const texto = await response.text();
+        let data: unknown;
+        try {
+          data = JSON.parse(texto);
+        } catch {
+          // 200 com corpo que não é JSON (ex.: "OK" de um proxy): falha do provedor, não do modelo.
+          throw new LlmHttpError(response.status, 'resposta não é JSON');
+        }
         this.registrarUso(request.tier, model, data);
         return extrairJson(data);
       }
       const body = await response.text();
       const error = new LlmHttpError(response.status, body);
+      const esperaInformada = tempoDeEspera(response.headers, body, this.now());
+      if (esperaInformada !== undefined && Number.isFinite(esperaInformada)) error.retryAfterMs = esperaInformada;
 
       // 429 no principal (cota por minuto ou por dia) com reserva configurado: troca na hora.
-      if (response.status === 429 && reserva && model === principal) {
-        const espera = tempoDeEspera(response.headers, body) ?? (error.kind === 'plan_or_quota' ? 3_600_000 : 60_000);
+      if (response.status === 429 && reserva && model === principal && !this.options.deferModelFallback) {
+        const espera = tempoDeEspera(response.headers, body, this.now()) ?? (error.kind === 'plan_or_quota' ? 3_600_000 : 60_000);
         this.bloqueadoAte.set(principal, this.now() + espera);
         this.trocas.push({ tier: request.tier, de: principal, para: reserva, motivo: error.kind, esperaMs: espera });
         model = reserva;
@@ -220,7 +237,7 @@ export class OpenAiCompatLlm implements LlmPort {
       if (error.fatal) throw error;
 
       if (error.kind === 'rate_limit' || error.kind === 'unavailable') {
-        const espera = tempoDeEspera(response.headers, body) ?? 1000 * 2 ** rateLimitRetries;
+        const espera = tempoDeEspera(response.headers, body, this.now()) ?? 1000 * 2 ** rateLimitRetries;
         if (rateLimitRetries >= maxRetries || espera > maxWait) throw error;
         rateLimitRetries++;
         await this.sleep(espera, request.signal);
