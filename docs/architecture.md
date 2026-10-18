@@ -1,58 +1,45 @@
 # Arquitetura do foodjam
 
-## Escopo desta entrega
+## Estado atual
 
-Bootstrap do projeto para três desenvolvedores trabalharem em paralelo. Há apenas pontos de entrada de módulos, tipos compartilhados, carregamento opcional de ambiente e uma confirmação de inicialização. Não há bot ativo, agente de IA, estado persistente, conexão MCP ou checkout, real ou simulado.
+O fluxo Telegram → core funciona de ponta a ponta: o bot (grammY) traduz o Telegram para chamadas ao agente do core (a Íris), que controla sessões, coleta, proposta, rateio, orçamento e fechamento. O core fala com o catálogo e com o modelo de IA por portas próprias; nesta versão, o catálogo é o fake (`CatalogoFake`) e o modelo é qualquer API compatível com OpenAI (ou o fake, sem chave). O cliente MCP do iFood está em `feat/ifood-mcp`; ligá-lo à porta de catálogo é o próximo passo. Não há executor de compra: o core entrega o pedido autorizado e não compra nada.
 
-## Fluxo previsto
+## Fluxo
 
 ```text
 Telegram → Core / Agente IA → Integração MCP → iFood
 Telegram ← Core / Agente IA ← Integração MCP ← iFood
 ```
 
-O fluxo representa a arquitetura futura, não conexões executadas pelo bootstrap.
-
-1. **Telegram (`src/telegram/`)** traduz mensagens e interações da plataforma para os contratos internos e apresenta as ações produzidas pelo core.
-2. **Core (`src/core/`)** controla as regras de negócio, sessões, participantes, preferências, orçamento e autorização. A integração com o modelo de IA e a orquestração de ferramentas ficam sob seu controle.
-3. **Integração MCP (`src/ifood/`)** concentra autenticação, transporte, descoberta e execução das ferramentas realmente disponibilizadas pelo iFood, com tratamento de resultados e erros.
-4. **iFood** é o sistema externo acessado pelo MCP; seus nomes de ferramentas, parâmetros, permissões e mecanismos de autenticação ainda precisam ser descobertos.
+1. **Telegram (`src/telegram/`)** traduz mensagens, menções, comandos e cliques para chamadas à fachada do core e apresenta as `actions` que ela devolve (mensagens no grupo ou no privado, botões, card da proposta, resumo do pedido). Não decide regras de negócio: quem pode clicar, valores e fases são do core. Detalhes em [api-core.md](api-core.md).
+2. **Core (`src/core/`)** controla as regras de negócio, sessões, participantes, preferências, orçamento e autorização. A integração com o modelo de IA e as portas de catálogo ficam sob seu controle.
+3. **Integração MCP (`src/ifood/`)** concentra autenticação, transporte, descoberta e execução das ferramentas do iFood, e implementará a `CatalogPort` do core.
+4. **iFood** é o sistema externo acessado pelo MCP.
 
 ## Dependências e limites
 
-- `src/index.ts` é o ponto único de composição. Hoje carrega dotenv e confirma a inicialização; não importa adaptadores para abrir conexões.
-- Telegram poderá consumir a API pública do core e seus contratos. Não importa a integração iFood diretamente nem decide regras comerciais.
-- O core deve permanecer independente de tipos do Telegram e de detalhes de transporte do SDK MCP. Quando houver ferramentas reais descobertas, a equipe definirá a menor interface interna necessária para conectá-las ao core pelo ponto de composição.
-- O adaptador iFood não controla conversas, orçamento, rateio ou autorização de compra. Importar qualquer módulo não deve abrir conexões ou iniciar processos automaticamente.
-- Ainda não existem interfaces de clientes, implementações simuladas ou camadas de persistência. Serão adicionadas somente quando a integração exigir.
+- `src/index.ts` é o ponto único de composição: carrega o `.env`, monta o agente (catálogo, modelo, endereço padrão) e o bot, e inicia o polling. Sem `TELEGRAM_BOT_TOKEN`, só confirma a inicialização e encerra.
+- Telegram consome a API pública do core (`src/core/index.ts`). Não importa a integração iFood diretamente nem decide regras comerciais.
+- O core não importa grammY, `src/telegram` nem `src/ifood`, e não configura transporte MCP. Ele define portas no vocabulário do domínio (`CatalogPort`, `LlmPort`, `SessionStore`) e não presume nomes de ferramentas do MCP.
+- O adaptador iFood não controla conversas, orçamento, rateio ou autorização de compra. Importar qualquer módulo não abre conexões nem inicia processos.
+- Sessões ficam em memória (`SessoesEmMemoria`); reiniciar o processo perde os pedidos em andamento. A porta `SessionStore` permite trocar por persistência sem mudar o agente.
 
-## Contratos iniciais
+## Contratos
 
-`src/core/contracts.ts` contém identificadores de sessão e participante, preferências/restrições, participante, estado de sessão, mensagem de entrada e ações de saída para a interface conversacional. `src/core/index.ts` reexporta esses tipos.
+`src/core/contracts.ts` contém sessão, participante e preferências, mensagens de entrada, ações de saída para a interface (`CoreAction`), loja e item de catálogo, proposta (`Proposal`, com pedidos por loja e rateio) e o pedido autorizado (`AuthorizedOrder`), que é a fronteira com quem executar a compra. São compartilhados entre os módulos: alterações devem ser mínimas e combinadas com a equipe.
 
-São contratos internos provisórios. Identificadores são strings opacas para o core; a interface Telegram fará o mapeamento necessário. Nenhum nome de ferramenta oficial do iFood é presumido. Não há contrato de checkout ou compra autorizada nesta fase.
+Identificadores são strings opacas para o core; no Telegram, `sessionId` é o id do chat e `participantId` é o id do usuário.
 
-Todos os valores monetários são **centavos inteiros de BRL**. Por exemplo, R$ 25,90 corresponde a `2590`. O alias `MoneyCents` documenta essa unidade, mas é um `number` e não valida valores em runtime. Nas futuras fronteiras de entrada, o core deverá exigir inteiros seguros e não negativos, usando `Number.isSafeInteger`, e validar também os resultados. Não realizar cálculos financeiros em reais decimais com ponto flutuante.
+Todos os valores monetários são **centavos inteiros de BRL** (`MoneyCents`). Por exemplo, R$ 25,90 corresponde a `2590`. O core valida inteiros seguros e não negativos nas fronteiras e nunca calcula dinheiro em ponto flutuante; o bot só formata valores que o core calculou.
 
 ## IA, finanças e autorização
 
-O modelo poderá interpretar linguagem natural e sugerir ações. O core deve validar toda proposta antes de executá-la. O modelo de IA **não deve calcular o rateio financeiro nem autorizar a compra final**.
+O modelo interpreta linguagem natural (preferências, ajustes) e classifica itens do cardápio; o core valida tudo o que vem dele com Zod. O modelo **não calcula valores, rateio nem autoriza a compra**: elegibilidade, combinações, rateio e orçamento são funções determinísticas, verificadas por testes.
 
-As futuras regras de rateio, arredondamento e distribuição de centavos deverão ser funções determinísticas, verificadas por testes. O fechamento dependerá de uma autorização explícita da pessoa responsável, validada pelo core para a sessão e o pedido em questão. Texto gerado pelo modelo ou conteúdo recebido de ferramentas não constitui autorização. Os mecanismos concretos ainda serão implementados no MVP.
+O fechamento exige a autorização explícita do organizador (botão "Confirmar pedido"), validada pelo core para a sessão e a proposta em questão; no clique, o core reconsulta as lojas e recota a taxa de serviço. Texto gerado pelo modelo ou conteúdo recebido de ferramentas não constitui autorização. O fechamento é idempotente: repetir devolve o mesmo pedido.
 
 ## Integrações e configuração
 
-O endpoint informado é `https://consumer-mcp.ifood.com.br/marketplace`. Nenhuma chamada foi necessária para construir o bootstrap. O mecanismo de autenticação e as capacidades aceitas pelo servidor devem ser confirmados antes da integração; não há variável de autenticação iFood inventada.
+O endpoint do MCP é `https://consumer-mcp.ifood.com.br/marketplace`. O cliente MCP (SDK v1, OAuth) está em `feat/ifood-mcp`; as variáveis de autenticação do iFood serão definidas por esse módulo.
 
-grammY e o SDK MCP estão instalados, mas não instanciados. O pacote solicitado `@modelcontextprotocol/sdk` é a linha v1 em manutenção; a [documentação oficial](https://ts.sdk.modelcontextprotocol.io/) descreve a existência da linha v2 em pacotes separados. A compatibilidade de protocolo com o endpoint do iFood ainda não foi validada. Andrei deverá confirmá-la e avaliar eventual migração quando houver evidências da integração. Zod está instalado por ser peer obrigatório do SDK v1.
-
-Provedor, modelo e credenciais de IA continuam em aberto. Nenhum SDK de IA foi adicionado antes dessa escolha.
-
-## Sequência recomendada após o bootstrap
-
-1. Andrei confirma autenticação, protocolo e ferramentas MCP e compartilha suas descobertas com o core.
-2. Desenvolvedor 2 define o fluxo conversacional e o mapeamento entre identificadores Telegram e contratos internos.
-3. Desenvolvedor 3 refina os contratos com a equipe e implementa regras determinísticas antes da integração do modelo.
-4. As APIs públicas são integradas por `src/index.ts`, em pull requests pequenos para `main` e com verificações locais passando.
-
-Essa sequência não faz parte da implementação desta entrega.
+O modelo de IA é acessado por um cliente HTTP enxuto (`fetch`), compatível com a API da OpenAI, configurado por `AI_*` no `.env` (com modelos por nível e de reserva). Escolhas e medições em [core-decisoes.md](core-decisoes.md).

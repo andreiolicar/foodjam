@@ -38,11 +38,11 @@
 
     <!-- Stepper de Demonstração -->
     <div class="hidden lg:flex items-center gap-2 bg-slate-950/70 p-1.5 rounded-xl border border-slate-800">
-      <button onclick="irParaPasso(1)" id="btn-step-1" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all bg-red-600 text-white shadow">1. Endereço</button>
+      <button onclick="irParaPasso(1)" id="btn-step-1" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all bg-red-600 text-white shadow">1. Início e Endereço</button>
       <button onclick="irParaPasso(2)" id="btn-step-2" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">2. Coleta em Lote</button>
-      <button onclick="irParaPasso(3)" id="btn-step-3" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">3. DM Orçamento</button>
-      <button onclick="irParaPasso(4)" id="btn-step-4" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">4. Proposta & Rateio</button>
-      <button onclick="irParaPasso(5)" id="btn-step-5" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">5. Fechamento</button>
+      <button onclick="irParaPasso(3)" id="btn-step-3" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">3. Proposta & Rateio</button>
+      <button onclick="irParaPasso(4)" id="btn-step-4" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">4. Valor no Privado</button>
+      <button onclick="irParaPasso(5)" id="btn-step-5" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">5. Pedido Confirmado</button>
     </div>
 
     <div class="flex items-center gap-2 text-xs">
@@ -56,7 +56,7 @@
 
     <!-- Coluna da Esquerda: Interface do Telegram (7 cols) -->
     <div class="lg:col-span-7 flex flex-col bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden shadow-2xl">
-      
+
       <!-- Chat Header -->
       <div class="bg-slate-850 px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
         <div class="flex items-center gap-3">
@@ -75,11 +75,11 @@
           </div>
         </div>
 
-        <!-- Seletor de Chat (Grupo vs DM Privada) -->
+        <!-- Seletor de Chat (Grupo vs Privado) -->
         <div class="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
           <button onclick="trocarChat('grupo')" id="tab-grupo" class="px-2.5 py-1 rounded font-medium bg-slate-800 text-white transition">Grupo</button>
           <button onclick="trocarChat('privado')" id="tab-privado" class="px-2.5 py-1 rounded font-medium text-slate-400 hover:text-white transition flex items-center gap-1">
-            <span>DM com Bia</span>
+            <span id="tab-privado-nome">Privado</span>
             <span id="badge-dm" class="hidden w-2 h-2 rounded-full bg-red-500"></span>
           </button>
         </div>
@@ -120,51 +120,54 @@
             <div class="text-slate-400 mb-1">Organizador</div>
             <div class="font-semibold text-slate-200 flex items-center gap-1.5">
               <span class="w-2 h-2 rounded-full bg-blue-400"></span>
-              Ana Paula (@Ana)
+              Ana
             </div>
           </div>
           <div class="bg-slate-950/70 p-3 rounded-xl border border-slate-800/80">
-            <div class="text-slate-400 mb-1">Participantes Ativos</div>
+            <div class="text-slate-400 mb-1">Participantes</div>
             <div id="fsm-participants" class="font-semibold text-slate-200">
-              3 pessoas
+              1 pessoa
             </div>
           </div>
           <div class="bg-slate-950/70 p-3 rounded-xl border border-slate-800/80 col-span-2">
-            <div class="text-slate-400 mb-1">Endereço Confirmado</div>
+            <div class="text-slate-400 mb-1">Endereço de Entrega</div>
             <div id="fsm-address" class="font-mono text-slate-300 truncate">
-              Av. Paulista, 1000 - Bela Vista, SP
+              aguardando o organizador
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Card de Telemetria do Provedor de IA (Groq) & MCP iFood -->
+      <!-- Card de Telemetria do Provedor de IA & Catálogo iFood -->
       <div class="bg-slate-900 rounded-2xl border border-slate-800 p-5 shadow-xl flex-1 flex flex-col">
         <div class="flex items-center justify-between pb-3 border-b border-slate-800">
           <h3 class="font-bold text-sm flex items-center gap-2">
             <span class="text-base">⚡</span>
-            <span>Telemetria em Tempo Real</span>
+            <span>Telemetria</span>
           </h3>
-          <span class="text-xs text-slate-400 font-mono">Groq + iFood MCP</span>
+          <span class="text-xs text-slate-400 font-mono">LLM + Catálogo iFood</span>
         </div>
 
         <!-- Métricas Rápidas -->
         <div class="grid grid-cols-3 gap-2 mt-4">
           <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 text-center">
-            <div class="text-[10px] text-slate-400 uppercase font-bold">Latência P95</div>
-            <div id="telemetry-latency" class="text-sm font-bold text-emerald-400 mt-0.5">441 ms</div>
+            <div class="text-[10px] text-slate-400 uppercase font-bold">Latência</div>
+            <div id="telemetry-latency" class="text-sm font-bold text-emerald-400 mt-0.5">—</div>
           </div>
           <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 text-center">
-            <div class="text-[10px] text-slate-400 uppercase font-bold">Tokens Gastos</div>
-            <div id="telemetry-tokens" class="text-sm font-bold text-amber-400 mt-0.5">1.530 tok</div>
+            <div class="text-[10px] text-slate-400 uppercase font-bold">Tokens</div>
+            <div id="telemetry-tokens" class="text-sm font-bold text-amber-400 mt-0.5">—</div>
           </div>
           <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 text-center">
-            <div class="text-[10px] text-slate-400 uppercase font-bold">Economia Batch</div>
+            <div class="text-[10px] text-slate-400 uppercase font-bold">Economia Lote</div>
             <div class="text-sm font-bold text-sky-400 mt-0.5">-70%</div>
           </div>
         </div>
+        <p class="text-[10px] text-slate-500 mt-2">
+          Coleta (441 ms, 1.530 tokens para 10 pessoas, −70%): medições em <code>docs/core-decisoes.md</code>. Demais valores são ilustrativos.
+        </p>
 
-        <!-- Terminal de Logs do MCP e LLM -->
+        <!-- Terminal de Eventos -->
         <div class="mt-4 flex-1 flex flex-col">
           <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center justify-between">
             <span>Terminal de Eventos</span>
@@ -185,335 +188,210 @@
     let passoAtual = 1;
     let chatAtivo = 'grupo'; // 'grupo' ou 'privado'
 
+    // Blocos de mensagem reutilizados nas telas.
+    const pessoa = (inicial, nome, texto, cor = 'bg-slate-700', destaque = 'text-slate-300', reacao = '') => `
+      <div class="flex items-start gap-2.5">
+        <div class="w-7 h-7 rounded-full ${cor} flex items-center justify-center text-xs font-bold text-white shrink-0">${inicial}</div>
+        <div class="relative bg-slate-800/80 rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] text-xs border border-slate-700/50">
+          <span class="font-bold ${destaque} block text-[11px] mb-0.5">${nome}</span>
+          ${texto}
+          ${reacao ? `<span class="absolute -bottom-2 -right-2 text-[11px] bg-slate-900 border border-slate-700 rounded-full px-1.5">${reacao}</span>` : ''}
+        </div>
+      </div>`;
+
+    const iris = (conteudo, titulo = 'Íris', borda = 'border-slate-700') => `
+      <div class="flex items-start gap-2.5">
+        <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
+        <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[92%] text-xs border ${borda} shadow-md space-y-2">
+          <span class="font-bold ifood-red-text block text-[11px]">${titulo}</span>
+          ${conteudo}
+        </div>
+      </div>`;
+
+    const botoes = (lista) => `
+      <div class="pt-1 grid gap-1.5" style="grid-template-columns: repeat(${Math.min(lista.length, 2)}, minmax(0, 1fr))">
+        ${lista.map(([texto, passo]) => `
+          <button ${passo === 'privado' ? `onclick="trocarChat('privado')"` : passo ? `onclick="irParaPasso(${passo})"` : ''} class="px-3 py-1.5 rounded-lg ${passo ? 'bg-red-600 hover:bg-red-500 text-white font-bold' : 'bg-slate-800 text-slate-300 hover:text-white'} text-[11px] shadow transition">
+            ${texto}
+          </button>`).join('')}
+      </div>`;
+
+    const linha = (esq, dir, classe = 'text-slate-300') => `<div class="flex justify-between ${classe}"><span>${esq}</span><span class="font-mono">${dir}</span></div>`;
+
+    const nadaNoPrivado = (texto) => `<div class="text-center py-8 text-slate-500 text-xs">${texto}</div>`;
+
+    // Exemplo coerente com as regras do core: o item da Bia (R$ 27,90) cabe no limite dela
+    // (R$ 30); com a parte da entrega e da taxa de serviço, o total dela passa (R$ 31,40).
+    const card = (pendente) => iris(`
+      <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+        <span class="font-bold text-slate-100 text-xs">🍽️ Sugestão da Íris</span>
+        <span class="text-[10px] bg-red-950 text-red-400 px-2 py-0.5 rounded font-mono">1 loja</span>
+      </div>
+      <p class="italic text-slate-400 text-[11px]">Uma loja atende os três, com opção vegetariana para a Bia.</p>
+      <div>
+        <h4 class="font-bold text-slate-100 text-sm">🏪 Corta Pra Mim Hamburgueria</h4>
+        <div class="mt-2 space-y-1 text-[11px]">
+          ${linha('• Andrei: Tradicional One', 'R$ 35,90')}
+          ${linha('• Caio: Nuggets Frango (10 un)', 'R$ 29,90')}
+          ${linha('• Bia: Vegetariano Burger 🌱', 'R$ 27,90')}
+          ${linha('Entrega: R$ 7,50 · Taxa de serviço: R$ 2,99', '', 'text-slate-400 pt-1')}
+          ${linha('Total da loja:', 'R$ 104,19', 'font-bold text-slate-100')}
+        </div>
+      </div>
+      <div class="p-2.5 bg-slate-900/60 rounded-xl text-[11px] border border-slate-800/80">
+        <span class="font-bold text-slate-300 block mb-1">💰 Quanto cada um paga</span>
+        <div class="space-y-0.5 text-slate-400 font-mono text-[10px]">
+          ${linha('Andrei (35,90 + 2,50 + 1,00)', '<strong class="text-slate-200">R$ 39,40</strong>', '')}
+          ${linha('Caio (29,90 + 2,50 + 0,99)', '<strong class="text-slate-200">R$ 33,39</strong>', '')}
+          ${linha('Bia (27,90 + 2,50 + 1,00)', '<strong class="text-slate-200">R$ 31,40</strong>', '')}
+          ${linha('Total do pedido', '<strong class="text-emerald-400">R$ 104,19</strong>', 'pt-1 border-t border-slate-800')}
+        </div>
+      </div>
+      ${pendente ? `
+      <div class="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px]">
+        ⏳ Aguardando confirmação de valor no privado: <strong>Bia</strong>
+      </div>` : ''}
+      ${botoes([['✅ Confirmar pedido', pendente ? 0 : 5], ['↩️ Voltar para a coleta', 2], ['❌ Cancelar pedido', 0]])}
+    `, 'Íris', 'border-slate-700 shadow-xl');
+
     const dados = {
       1: {
-        fsm: 'collecting (address)',
+        fsm: 'collecting · endereço',
         fsmBadgeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-        latency: '310 ms',
-        tokens: '425 tok',
+        participantes: '1 pessoa',
+        endereco: 'aguardando o organizador',
+        latency: '—',
+        tokens: '0 (sem modelo)',
+        privadoDe: 'Ana',
         logs: [
-          '<span class="text-slate-400">12:00:01</span> [core] Sessão iniciada pelo organizador @Ana',
-          '<span class="text-blue-400">12:00:02</span> [mcp] ifood_validateAddress("Av. Paulista, 1000")',
-          '<span class="text-emerald-400">12:00:02</span> [mcp] Resposta: { ok: true, formatted: "Av. Paulista, 1000 - Bela Vista" }',
-          '<span class="text-amber-400">12:00:03</span> [fsm] Aguardando confirmação do endereço pelo organizador'
+          '<span class="text-slate-400">12:00:01</span> [core] iniciar(): Ana mencionou a Íris e virou organizadora',
+          '<span class="text-amber-400">12:00:01</span> [core] request_address → privado da Ana (a coleta já começa no grupo)',
+          '<span class="text-blue-400">12:00:09</span> [catálogo] validateAddress("Av. Paulista, 1000 ...") → ok',
+          '<span class="text-amber-400">12:00:09</span> [core] confirm_address (digitado) → [Confirmar] [Corrigir]',
+          '<span class="text-emerald-400">12:00:12</span> [core] Endereço confirmado pela organizadora'
         ],
         chatGrupo: `
-          <div class="flex items-start gap-2.5">
-            <div class="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold text-white shrink-0">A</div>
-            <div class="bg-slate-800/80 rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] text-xs border border-slate-700/50">
-              <span class="font-bold text-blue-400 block text-[11px] mb-1">Ana Paula (Organizador)</span>
-              /iniciar
-            </div>
-          </div>
-
-          <div class="flex items-start gap-2.5">
-            <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
-            <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[90%] text-xs border border-slate-700 shadow-md space-y-2">
-              <span class="font-bold ifood-red-text block text-[11px]">Íris (Agente iFood)</span>
-              <p>Olá, pessoal! Sessão de pedido coletivo aberta por @Ana. 🍕</p>
-              <div class="bg-slate-900 p-2.5 rounded-xl border border-slate-800 text-[11px] text-slate-300">
-                📍 <strong>Endereço de entrega:</strong><br>
-                Av. Paulista, 1000 - Bela Vista, São Paulo - SP
-              </div>
-              <div class="pt-1 flex gap-2">
-                <button onclick="irParaPasso(2)" class="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 font-bold text-white text-[11px] shadow transition">
-                  ✓ Confirmar Endereço
-                </button>
-                <button class="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white text-[11px] transition">
-                  Digitar Outro
-                </button>
-              </div>
-            </div>
-          </div>
+          ${pessoa('A', 'Ana (organizadora)', '@iris_bot bora pedir o almoço?', 'bg-blue-600', 'text-blue-400')}
+          ${iris(`<p>Pedido iniciado por Ana! Mandem aqui o que querem comer, restrições e limite de valor.</p>
+                  <p>Ana, te chamei no privado para combinar o endereço de entrega. Quando todos tiverem falado, use /montar.</p>
+                  ${botoes([['Ver o privado da Ana →', 'privado']])}`)}
         `,
         chatPrivado: `
-          <div class="text-center py-8 text-slate-500 text-xs">
-            Nenhuma mensagem privada no momento.<br>A Íris só entra em contato no privado para tratar limites de orçamento e dados sensíveis.
-          </div>
+          ${iris('<p>Qual o endereço de entrega? Digite rua, número, bairro e cidade.</p>', 'Íris (privado)')}
+          ${pessoa('A', 'Ana', 'Av. Paulista, 1000 - Bela Vista, São Paulo - SP', 'bg-blue-600', 'text-blue-400')}
+          ${iris(`<p>Encontrei este endereço: Av. Paulista, 1000 - Bela Vista, São Paulo - SP. Está certo?</p>
+                  ${botoes([['Confirmar', 2], ['Corrigir', 0]])}`, 'Íris (privado)')}
         `
       },
       2: {
-        fsm: 'collecting (batch wishes)',
+        fsm: 'collecting · coleta',
         fsmBadgeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+        participantes: '3 pessoas',
+        endereco: 'Av. Paulista, 1000 - Bela Vista, SP',
         latency: '441 ms',
         tokens: '1.530 tok',
+        privadoDe: 'Ana',
         logs: [
-          '<span class="text-emerald-400">12:00:15</span> [core] Endereço confirmado por @Ana',
-          '<span class="text-purple-400">12:00:18</span> [debounce] Agrupador acumulou 3 mensagens (Andrei, Caio, Bia)',
-          '<span class="text-sky-400">12:00:19</span> [llm:fast] Qwen 27B extraiu 3 perfis estruturados via JSON Schema',
-          '<span class="text-slate-400">12:00:20</span> [core] Restrição detectada: Bia = [vegetariano] (Rígida)',
-          '<span class="text-slate-400">12:00:20</span> [core] Orçamentos privados salvos em centavos: Caio=3500, Bia=3000'
+          '<span class="text-purple-400">12:00:18</span> [agrupador] 3 mensagens em ~2 s (Andrei, Caio, Bia) → 1 lote',
+          '<span class="text-sky-400">12:00:19</span> [llm:fast] mensagens(): 3 perfis extraídos via JSON Schema',
+          '<span class="text-slate-400">12:00:20</span> [core] Restrição rígida: Bia = vegetariana',
+          '<span class="text-slate-400">12:00:20</span> [core] Orçamentos privados em centavos: Caio=3500, Bia=3000',
+          '<span class="text-emerald-400">12:00:20</span> [bot] 👍 nas mensagens com preferência registrada'
         ],
         chatGrupo: `
-          <div class="flex items-start gap-2.5">
-            <div class="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white shrink-0">AN</div>
-            <div class="bg-slate-800/80 rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] text-xs border border-slate-700/50">
-              <span class="font-bold text-slate-300 block text-[11px] mb-0.5">Andrei</span>
-              Pra mim pode ser um hambúrguer tradicional caprichado! 🍔
-            </div>
-          </div>
-
-          <div class="flex items-start gap-2.5">
-            <div class="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white shrink-0">C</div>
-            <div class="bg-slate-800/80 rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] text-xs border border-slate-700/50">
-              <span class="font-bold text-slate-300 block text-[11px] mb-0.5">Caio</span>
-              Quero porção de nuggets de frango crocante, até uns 35 conto!
-            </div>
-          </div>
-
-          <div class="flex items-start gap-2.5">
-            <div class="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white shrink-0">B</div>
-            <div class="bg-slate-800/80 rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] text-xs border border-slate-700/50">
-              <span class="font-bold text-slate-300 block text-[11px] mb-0.5">Bia</span>
-              Gente, sou vegetariana! Quero um burger sem carne até 30 reais por favor 🌱
-            </div>
-          </div>
-
-          <div class="flex items-start gap-2.5">
-            <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
-            <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[90%] text-xs border border-slate-700 shadow-md space-y-2">
-              <span class="font-bold ifood-red-text block text-[11px]">Íris (Agente iFood)</span>
-              <p>Entendido! Desejos e restrições coletados:</p>
-              <ul class="space-y-1 text-slate-300 text-[11px]">
-                <li>• <strong>Andrei:</strong> Hambúrguer tradicional</li>
-                <li>• <strong>Caio:</strong> Nuggets / Frango crocante</li>
-                <li>• <strong>Bia:</strong> Burger vegetariano (restrição rigorosa)</li>
-              </ul>
-              <div class="pt-1">
-                <button onclick="irParaPasso(3)" class="w-full px-3 py-2 rounded-lg bg-red-600 hover:bg-red-500 font-bold text-white text-[11px] shadow transition">
-                  🔍 Otimizar e Buscar Melhores Lojas no iFood
-                </button>
-              </div>
-            </div>
-          </div>
+          ${pessoa('AN', 'Andrei', 'Pra mim pode ser um hambúrguer tradicional caprichado! 🍔', 'bg-slate-700', 'text-slate-300', '👍')}
+          ${pessoa('C', 'Caio', 'Quero nuggets de frango crocante, até uns 35 conto!', 'bg-slate-700', 'text-slate-300', '👍')}
+          ${pessoa('B', 'Bia', 'Sou vegetariana! Quero um burger sem carne, até 30 reais 🌱', 'bg-slate-700', 'text-slate-300', '👍')}
+          ${pessoa('A', 'Ana (organizadora)', '/montar', 'bg-blue-600', 'text-blue-400')}
+          ${iris(`<p>Montando a sugestão com o que vocês mandaram...</p>${botoes([['Ver a sugestão →', 3]])}`)}
         `,
-        chatPrivado: `
-          <div class="text-center py-8 text-slate-500 text-xs">
-            Nenhuma notificação privada por enquanto.
-          </div>
-        `
+        chatPrivado: nadaNoPrivado('Endereço confirmado. A Íris só volta ao privado para endereço e valores.')
       },
       3: {
-        fsm: 'reviewing (budget question)',
+        fsm: 'reviewing',
         fsmBadgeColor: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
-        latency: '380 ms',
-        tokens: '2.100 tok',
+        participantes: '3 pessoas',
+        endereco: 'Av. Paulista, 1000 - Bela Vista, SP',
+        latency: '~2 s (ilustrativo)',
+        tokens: 'ilustrativo',
+        privadoDe: 'Bia',
         logs: [
-          '<span class="text-blue-400">12:00:30</span> [mcp] ifood_searchOffers + ifood_browseOffers (hamburgueria, vegetariano)',
-          '<span class="text-emerald-400">12:00:32</span> [core] Loja selecionada: Corta Pra Mim Hamburgueria Artesanal',
-          '<span class="text-sky-400">12:00:33</span> [mcp] quoteOrder: Itens=108,70 | Frete=0,00 | TaxaServiço=2,17',
-          '<span class="text-red-400">12:00:34</span> [budget] Bia: Burger Veggie (39,90) + Taxa (0,73) = R$ 40,63 (Estourou R$ 30,00)',
-          '<span class="text-amber-400">12:00:34</span> [privacy] Disparada notificação privada para @Bia via DM no Telegram'
+          '<span class="text-blue-400">12:00:30</span> [catálogo] searchStores() + getMenu() no endereço confirmado',
+          '<span class="text-slate-400">12:00:31</span> [core] Elegibilidade: item acima do limite ou que fere restrição sai',
+          '<span class="text-sky-400">12:00:32</span> [llm:capable] Classificação atende / substituto + justificativa',
+          '<span class="text-emerald-400">12:00:33</span> [core] Combinações de 1–2 lojas → melhor proposta escolhida pelo código',
+          '<span class="text-blue-400">12:00:33</span> [catálogo] quoteOrder() → taxa de serviço R$ 2,99',
+          '<span class="text-red-400">12:00:34</span> [orçamento] Bia: 27,90 + 2,50 + 1,00 = R$ 31,40 > limite → pergunta no privado'
         ],
-        chatGrupo: `
-          <div class="flex items-start gap-2.5">
-            <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
-            <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[90%] text-xs border border-slate-700 shadow-md space-y-2">
-              <span class="font-bold ifood-red-text block text-[11px]">Íris (Agente iFood)</span>
-              <p>Encontrei uma excelente opção que atende a todos no mesmo restaurante! 🎯</p>
-              <div class="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px] flex items-center gap-2">
-                <span class="animate-spin">⏳</span>
-                <span>Aguardando confirmação privada de valores de: <strong>@Bia</strong></span>
-              </div>
-              <p class="text-slate-400 text-[10px]">
-                💡 <em>A Íris trata limites financeiros em sigilo para evitar constrangimentos no grupo.</em>
-              </p>
-            </div>
-          </div>
-        `,
-        chatPrivado: `
-          <div class="flex items-start gap-2.5">
-            <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
-            <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[92%] text-xs border border-slate-700 shadow-md space-y-2.5">
-              <span class="font-bold ifood-red-text block text-[11px]">Íris (Mensagem Privada)</span>
-              <p class="text-slate-200">Oi, Bia! Tudo bem? 👋</p>
-              <p class="text-slate-300">
-                A melhor hamburgueria que atende ao grupo tem o <strong>"Vegetariano Burger"</strong> por R$ 39,90. 
-                Com o rateio da taxa de serviço do iFood, sua parte ficaria em <strong>R$ 40,63</strong> (você havia citado até R$ 30,00).
-              </p>
-              <p class="text-slate-400 text-[11px]">Como você prefere proceder?</p>
-              <div class="space-y-1.5 pt-1">
-                <button onclick="irParaPasso(4)" class="w-full px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-bold text-white text-[11px] shadow transition text-left flex items-center justify-between">
-                  <span>✓ Aceito pagar R$ 40,63</span>
-                  <span class="text-[10px] opacity-80">Avançar</span>
-                </button>
-                <button class="w-full px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-[11px] transition text-left">
-                  🔄 Quero outro item mais barato
-                </button>
-                <button class="w-full px-3 py-2 rounded-lg bg-slate-900 text-slate-500 hover:text-red-400 text-[11px] transition text-left">
-                  ✕ Ficar sem item neste pedido
-                </button>
-              </div>
-            </div>
-          </div>
-        `
+        chatGrupo: card(true),
+        chatPrivado: nadaNoPrivado('A pergunta de valor da Bia chegou no privado dela. Avance para o passo 4.')
       },
       4: {
-        fsm: 'reviewing (proposal ready)',
-        fsmBadgeColor: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-        latency: '340 ms',
-        tokens: '3.238 tok',
+        fsm: 'reviewing · valor pendente',
+        fsmBadgeColor: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+        participantes: '3 pessoas',
+        endereco: 'Av. Paulista, 1000 - Bela Vista, SP',
+        latency: 'instantâneo',
+        tokens: '0 (código)',
+        privadoDe: 'Bia',
         logs: [
-          '<span class="text-emerald-400">12:00:45</span> [budget] Bia autorizou o valor de R$ 40,63 na DM',
-          '<span class="text-blue-400">12:00:46</span> [core] Rateio recalculado: 8.087 centavos conferidos',
-          '<span class="text-emerald-400">12:00:46</span> [core] Distribuição de taxas por maiores resíduos: Andrei 72¢, Bia 73¢, Caio 72¢',
-          '<span class="text-sky-400">12:00:47</span> [fsm] Proposta pronta. Bloqueada aguardando autorização do organizador'
+          '<span class="text-amber-400">12:00:34</span> [privado] budget_question → Bia: [Aceito] [Quero outro]',
+          '<span class="text-slate-400">12:00:34</span> [grupo] Card mostra só o nome de quem falta, nunca valores',
+          '<span class="text-emerald-400">12:00:45</span> [orçamento] Bia aceitou R$ 31,40 → card atualizado no lugar',
+          '<span class="text-sky-400">12:00:45</span> [grupo] "Todos confirmaram os valores": Confirmar liberado'
         ],
         chatGrupo: `
-          <div class="flex items-start gap-2.5">
-            <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
-            <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-3.5 max-w-[95%] text-xs border border-slate-700 shadow-xl space-y-3">
-              <div class="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span class="font-bold ifood-red-text text-xs">🎉 Proposta Selecionada</span>
-                <span class="text-[10px] bg-red-950 text-red-400 px-2 py-0.5 rounded font-mono">1 Loja Parceira</span>
-              </div>
-
-              <div>
-                <h4 class="font-bold text-slate-100 text-sm flex items-center gap-1.5">
-                  <span>🏪 Corta Pra Mim Hamburgueria Artesanal</span>
-                </h4>
-                <div class="mt-2 space-y-1 text-slate-300 text-[11px]">
-                  <div class="flex justify-between">
-                    <span>• Andrei: 1× Tradicional One</span>
-                    <span class="font-mono text-slate-400">R$ 35,90</span>
-                  </div>
-                  <div class="flex justify-between">
-                    <span>• Bia: 1× Vegetariano Burger 🌱</span>
-                    <span class="font-mono text-slate-400">R$ 39,90</span>
-                  </div>
-                  <div class="flex justify-between">
-                    <span>• Caio: 1× Nuggets Frango (12 un)</span>
-                    <span class="font-mono text-slate-400">R$ 32,90</span>
-                  </div>
-                </div>
-              </div>
-
-              <div class="p-2.5 bg-slate-900 rounded-xl text-[11px] space-y-1 border border-slate-800">
-                <div class="flex justify-between text-slate-400">
-                  <span>Subtotal Itens:</span>
-                  <span class="font-mono">R$ 108,70</span>
-                </div>
-                <div class="flex justify-between text-emerald-400">
-                  <span>Taxa de Entrega:</span>
-                  <span class="font-mono">R$ 0,00 (Grátis)</span>
-                </div>
-                <div class="flex justify-between text-slate-400">
-                  <span>Taxa de Serviço iFood:</span>
-                  <span class="font-mono">R$ 2,17</span>
-                </div>
-                <div class="flex justify-between font-bold text-slate-100 pt-1 border-t border-slate-800">
-                  <span>Total Geral:</span>
-                  <span class="font-mono text-emerald-400">R$ 110,87</span>
-                </div>
-              </div>
-
-              <!-- Rateio -->
-              <div class="p-2.5 bg-slate-900/60 rounded-xl text-[11px] border border-slate-800/80">
-                <span class="font-bold text-slate-300 block mb-1">💰 Divisão Transparente por Pessoa:</span>
-                <div class="space-y-0.5 text-slate-400 font-mono text-[10px]">
-                  <div class="flex justify-between"><span>Andrei: R$ 35,90 + 0,72</span><strong class="text-slate-200">R$ 36,62</strong></div>
-                  <div class="flex justify-between"><span>Bia: R$ 39,90 + 0,73</span><strong class="text-slate-200">R$ 40,63</strong></div>
-                  <div class="flex justify-between"><span>Caio: R$ 32,90 + 0,72</span><strong class="text-slate-200">R$ 33,62</strong></div>
-                </div>
-              </div>
-
-              <div class="space-y-2 pt-1">
-                <button onclick="irParaPasso(5)" class="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-500 font-bold text-white text-xs shadow-lg shadow-red-950/40 transition flex items-center justify-center gap-2">
-                  <span>🔒 Autorizar e Fechar Pedido</span>
-                  <span class="text-[10px] bg-red-800 px-1.5 py-0.5 rounded">Só @Ana</span>
-                </button>
-                <div class="grid grid-cols-2 gap-2">
-                  <button onclick="irParaPasso(4)" class="py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-[11px] transition">
-                    🔄 Outra Opção
-                  </button>
-                  <button onclick="irParaPasso(2)" class="py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-[11px] transition">
-                    ↩️ Voltar Coleta
-                  </button>
-                </div>
-              </div>
-
-            </div>
-          </div>
+          ${card(false)}
+          ${iris('<p>✅ Todos confirmaram os valores. Quem organizou já pode confirmar o pedido.</p>')}
         `,
         chatPrivado: `
-          <div class="text-center py-8 text-slate-400 text-xs">
-            ✓ Seu orçamento foi atualizado com sucesso. O grupo já está vendo a proposta pronta!
-          </div>
+          ${iris(`<p>Seu pedido fica em <strong>R$ 31,40</strong> com entrega e taxa de serviço, acima do seu orçamento. Pode ser?</p>
+                  ${botoes([['Aceito', 5], ['Quero outro', 0]])}
+                  <p class="text-[10px] text-slate-500">[Quero outro] sugere o item mais parecido que caiba no limite: [Aceito a sugestão] [Fico sem].</p>`, 'Íris (privado)')}
+          ${iris('<p>Combinado: valor confirmado.</p>', 'Íris (privado)')}
         `
       },
       5: {
-        fsm: 'closed (AuthorizedOrder)',
+        fsm: 'closed · AuthorizedOrder',
         fsmBadgeColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-        latency: '290 ms',
-        tokens: '0 tok (Código Puro)',
+        participantes: '3 pessoas',
+        endereco: 'Av. Paulista, 1000 - Bela Vista, SP',
+        latency: '—',
+        tokens: '0 (código)',
+        privadoDe: 'Bia',
         logs: [
-          '<span class="text-emerald-400">12:01:05</span> [core] Autorização confirmada pelo organizador @Ana',
-          '<span class="text-blue-400">12:01:05</span> [core] Revalidação relâmpago de catálogo (< 60s): Preços mantidos',
-          '<span class="text-emerald-400">12:01:06</span> [mcp] ifood_createCart & ifood_submitOrder efetuados com sucesso',
-          '<span class="text-sky-400">12:01:06</span> [core] AuthorizedOrder gerado: #84920. Idempotência salva'
+          '<span class="text-emerald-400">12:01:05</span> [core] fechar(): só a organizadora autoriza',
+          '<span class="text-blue-400">12:01:05</span> [catálogo] Reconsulta das lojas da proposta: itens e preços mantidos',
+          '<span class="text-blue-400">12:01:05</span> [catálogo] quoteOrder() de novo: taxa de serviço igual',
+          '<span class="text-sky-400">12:01:06</span> [core] AuthorizedOrder emitido (chave: proposalId). Clique repetido → already_closed',
+          '<span class="text-slate-500">12:01:06</span> [bot] Pedido entregue ao executor (aoAutorizar) uma única vez'
         ],
         chatGrupo: `
-          <div class="flex items-start gap-2.5">
-            <div class="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold text-white shrink-0">A</div>
-            <div class="bg-slate-800/80 rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] text-xs border border-slate-700/50">
-              <span class="font-bold text-blue-400 block text-[11px] mb-1">Ana Paula (Organizador)</span>
-              [Autorizou o fechamento do pedido]
+          ${iris(`
+            <div class="text-emerald-400 font-bold text-xs">✅ Pedido confirmado!</div>
+            <p class="text-slate-300 text-[11px]">📍 Entrega em: Av. Paulista, 1000 - Bela Vista, São Paulo - SP</p>
+            <div class="text-[11px] space-y-1">
+              <div class="font-bold text-slate-100">🏪 Corta Pra Mim Hamburgueria</div>
+              ${linha('• Andrei: Tradicional One', 'R$ 35,90')}
+              ${linha('• Caio: Nuggets Frango (10 un)', 'R$ 29,90')}
+              ${linha('• Bia: Vegetariano Burger', 'R$ 27,90')}
+              ${linha('Entrega: R$ 7,50 · Taxa de serviço: R$ 2,99', '', 'text-slate-400')}
             </div>
-          </div>
-
-          <div class="flex items-start gap-2.5">
-            <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
-            <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-4 max-w-[95%] text-xs border border-emerald-500/50 shadow-2xl space-y-3">
-              <div class="flex items-center gap-2 text-emerald-400 font-bold text-xs">
-                <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
-                <span>🚀 PEDIDO CONFIRMADO NO IFOOD!</span>
-              </div>
-
-              <p class="text-slate-300 text-xs">
-                O pedido da <strong>Corta Pra Mim Hamburgueria</strong> foi submetido. Previsão de entrega: <strong>39 a 49 minutos</strong>.
-              </p>
-
-              <div class="p-3 bg-slate-900 rounded-xl border border-slate-800 text-[11px] space-y-1.5">
-                <div class="flex items-center justify-between text-slate-200">
-                  <span>Código de Rastreio iFood:</span>
-                  <a href="#" class="text-red-400 font-mono font-bold hover:underline">#84920 ↗</a>
-                </div>
-                <div class="text-slate-400 text-[10px]">
-                  Endereço: Av. Paulista, 1000 - Bela Vista
-                </div>
-              </div>
-
-              <!-- Cobrança Pix dos Membros -->
-              <div class="p-3 bg-red-950/20 border border-red-900/30 rounded-xl text-[11px] space-y-2">
-                <div class="font-bold text-red-300">📲 Acerto de Contas com @Ana (Chave Pix: ana@firma.com.br):</div>
-                <div class="grid grid-cols-3 gap-2 text-center">
-                  <div class="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
-                    <div class="text-[10px] text-slate-400">Andrei</div>
-                    <div class="font-mono font-bold text-slate-100 text-xs mt-0.5">R$ 36,62</div>
-                  </div>
-                  <div class="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
-                    <div class="text-[10px] text-slate-400">Bia</div>
-                    <div class="font-mono font-bold text-slate-100 text-xs mt-0.5">R$ 40,63</div>
-                  </div>
-                  <div class="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
-                    <div class="text-[10px] text-slate-400">Caio</div>
-                    <div class="font-mono font-bold text-slate-100 text-xs mt-0.5">R$ 33,62</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="text-center text-slate-400 text-[11px] pt-1">
-                Bom apetite a todos! 🍔🍟🥤
-              </div>
-
+            <div class="p-2.5 bg-slate-900 rounded-xl border border-slate-800 text-[11px] space-y-0.5 font-mono">
+              ${linha('Andrei', 'R$ 39,40')}
+              ${linha('Caio', 'R$ 33,39')}
+              ${linha('Bia', 'R$ 31,40')}
+              ${linha('Total do pedido', 'R$ 104,19', 'font-bold text-emerald-400 pt-1 border-t border-slate-800')}
             </div>
+            <p class="text-slate-400 text-[10px]">Autorizado por Ana · pedido <code>-1001234567890-p1</code></p>
+            <p class="text-slate-400 text-[11px]">Para um novo pedido, me mencione ou use /iniciar.</p>
+          `, 'Íris', 'border-emerald-500/50')}
+          <div class="p-3 rounded-xl border border-dashed border-slate-700 text-[11px] text-slate-400 space-y-1">
+            <div class="font-bold text-slate-300">🛣️ Próximos passos (fora do MVP)</div>
+            <p>O core entrega o <code>AuthorizedOrder</code> e não compra nada. Submeter o pedido no iFood, link de rastreio e cobrança por Pix ficam para o executor de pedidos, ainda não implementado.</p>
           </div>
         `,
-        chatPrivado: `
-          <div class="text-center py-8 text-slate-400 text-xs">
-            ✓ Pedido autorizado! O link de rastreio e valores finais já estão no grupo.
-          </div>
-        `
+        chatPrivado: nadaNoPrivado('Nada novo no privado: o resumo do pedido está no grupo.')
       }
     };
 
@@ -534,6 +412,8 @@
       const badge = document.getElementById('fsm-status-badge');
       badge.textContent = stepData.fsm;
       badge.className = `px-2.5 py-1 rounded-md text-xs font-mono font-bold ${stepData.fsmBadgeColor}`;
+      document.getElementById('fsm-participants').textContent = stepData.participantes;
+      document.getElementById('fsm-address').textContent = stepData.endereco;
 
       // Atualiza Telemetria
       document.getElementById('telemetry-latency').textContent = stepData.latency;
@@ -544,9 +424,10 @@
       logsEl.innerHTML = stepData.logs.map(l => `<div>${l}</div>`).join('');
       logsEl.scrollTop = logsEl.scrollHeight;
 
-      // Badge DM
+      // Aba do privado: de quem é a conversa neste passo, com aviso quando há mensagem nova
+      document.getElementById('tab-privado-nome').textContent = `Privado de ${stepData.privadoDe}`;
       const badgeDm = document.getElementById('badge-dm');
-      if (passoAtual === 3) {
+      if (passoAtual === 1 || passoAtual === 4) {
         badgeDm.classList.remove('hidden');
       } else {
         badgeDm.classList.add('hidden');
@@ -568,8 +449,8 @@
         chatAvatar.className = 'w-10 h-10 rounded-full bg-gradient-to-tr from-amber-600 to-red-600 flex items-center justify-center font-bold text-white shadow';
         chatContainer.innerHTML = stepData.chatGrupo;
       } else {
-        chatTitle.innerHTML = `<span>Bia (Mensagem Privada)</span> <span class="text-xs text-slate-400 font-normal">🔒 Sigiloso</span>`;
-        chatAvatar.innerHTML = 'B';
+        chatTitle.innerHTML = `<span>${stepData.privadoDe} (Mensagem Privada)</span> <span class="text-xs text-slate-400 font-normal">🔒 Sigiloso</span>`;
+        chatAvatar.innerHTML = stepData.privadoDe[0];
         chatAvatar.className = 'w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center font-bold text-white shadow';
         chatContainer.innerHTML = stepData.chatPrivado;
       }
@@ -577,30 +458,27 @@
       chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 
+    function marcarAba(tipo) {
+      document.getElementById('tab-grupo').className = tipo === 'grupo'
+        ? 'px-2.5 py-1 rounded font-medium bg-slate-800 text-white transition'
+        : 'px-2.5 py-1 rounded font-medium text-slate-400 hover:text-white transition';
+      document.getElementById('tab-privado').className = tipo === 'privado'
+        ? 'px-2.5 py-1 rounded font-medium bg-slate-800 text-white transition flex items-center gap-1'
+        : 'px-2.5 py-1 rounded font-medium text-slate-400 hover:text-white transition flex items-center gap-1';
+    }
+
     function irParaPasso(passo) {
+      if (!passo) return;
       passoAtual = passo;
-      // Se for passo 3, sugere a DM
-      if (passo === 3 && chatAtivo === 'grupo') {
-        chatAtivo = 'privado';
-        document.getElementById('tab-privado').className = 'px-2.5 py-1 rounded font-medium bg-slate-800 text-white transition flex items-center gap-1';
-        document.getElementById('tab-grupo').className = 'px-2.5 py-1 rounded font-medium text-slate-400 hover:text-white transition';
-      } else if (passo !== 3 && chatAtivo === 'privado') {
-        chatAtivo = 'grupo';
-        document.getElementById('tab-grupo').className = 'px-2.5 py-1 rounded font-medium bg-slate-800 text-white transition';
-        document.getElementById('tab-privado').className = 'px-2.5 py-1 rounded font-medium text-slate-400 hover:text-white transition flex items-center gap-1';
-      }
+      // Passo 4 acontece no privado da Bia; os outros abrem no grupo.
+      chatAtivo = passo === 4 ? 'privado' : 'grupo';
+      marcarAba(chatAtivo);
       renderizar();
     }
 
     function trocarChat(tipo) {
       chatAtivo = tipo;
-      if (tipo === 'grupo') {
-        document.getElementById('tab-grupo').className = 'px-2.5 py-1 rounded font-medium bg-slate-800 text-white transition';
-        document.getElementById('tab-privado').className = 'px-2.5 py-1 rounded font-medium text-slate-400 hover:text-white transition flex items-center gap-1';
-      } else {
-        document.getElementById('tab-privado').className = 'px-2.5 py-1 rounded font-medium bg-slate-800 text-white transition flex items-center gap-1';
-        document.getElementById('tab-grupo').className = 'px-2.5 py-1 rounded font-medium text-slate-400 hover:text-white transition';
-      }
+      marcarAba(tipo);
       atualizarChat();
     }
 
@@ -609,4 +487,3 @@
   </script>
 </body>
 </html>
-

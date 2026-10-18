@@ -34,35 +34,32 @@ Diferente de agentes ReAct autônomos que podem entrar em loops infinitos ou tom
 
 ```mermaid
 stateDiagram-v2
-    [*] --> collecting: /iniciar (Organizador)
-    
+    [*] --> collecting: menção ou /iniciar (organizador)
+
     state collecting {
-        [*] --> aguardando_endereco
-        aguardando_endereco --> coletando_desejos: Endereço Validado & Confirmado
-        coletando_desejos --> coletando_desejos: Mensagens dos Participantes (Lote/Debounce)
+        coletando_desejos --> coletando_desejos: Mensagens do grupo (lote/debounce)
+        --
+        endereco_no_privado --> endereco_confirmado: Organizador digita e confirma no privado
     }
 
-    collecting --> reviewing: /propor (Organizador)
-    
+    collecting --> reviewing: /montar (exige endereço confirmado)
+
     state reviewing {
-        [*] --> gerando_combinacoes
-        gerando_combinacoes --> cotando_taxas: Melhores 1 e 2 Lojas Selecionadas
-        cotando_taxas --> resolvendo_orcamento: Taxas de Serviço do iFood Cotadas
-        resolvendo_orcamento --> proposta_pronta: Perguntas Privadas Respondidas
-        proposta_pronta --> gerando_combinacoes: Ajuste de Item Solicitado (/ajustar)
-        proposta_pronta --> gerando_combinacoes: Troca por Alternativa (/outra)
+        [*] --> proposta_na_mesa
+        proposta_na_mesa --> proposta_na_mesa: Ajuste por texto no grupo ("troca o meu por...")
+        proposta_na_mesa --> proposta_na_mesa: [Outra opção] (troca com a alternativa)
+        proposta_na_mesa --> proposta_na_mesa: Respostas de valor no privado
     }
 
-    reviewing --> collecting: /voltar
-    reviewing --> awaiting_confirmation: pedirConfirmacao()
-    
-    awaiting_confirmation --> closed: fechar() [Autorização Explícita do Organizador]
-    
-    collecting --> cancelled: /cancelar
-    reviewing --> cancelled: /cancelar
-    awaiting_confirmation --> cancelled: /cancelar
+    reviewing --> collecting: [Voltar para a coleta] ou troca de endereço
+    reviewing --> awaiting_confirmation: [Confirmar pedido] (organizador)
+    awaiting_confirmation --> reviewing: Recusa (valor pendente, taxa ou catálogo mudou)
+    awaiting_confirmation --> closed: Tudo íntegro: AuthorizedOrder emitido
 
-    closed --> [*]: Entrega do AuthorizedOrder ao MCP
+    collecting --> cancelled: [Cancelar pedido] ou /cancelar
+    reviewing --> cancelled: [Cancelar pedido] ou /cancelar
+
+    closed --> [*]: AuthorizedOrder entregue ao executor do pedido
     cancelled --> [*]
 ```
 
@@ -71,7 +68,7 @@ stateDiagram-v2
 ```mermaid
 flowchart TD
     %% Setup Inicial
-    START([1. Iniciar no Grupo]):::setup --> INICIAR["iris.iniciar()"]:::action
+    START([1. Menção ou /iniciar no grupo]):::setup --> INICIAR["iris.iniciar()"]:::action
     INICIAR --> CHECK_ADDR{Endereço Padrão?}:::decision
 
     %% Ramo de Endereço (Privado)
@@ -93,7 +90,7 @@ flowchart TD
     AGRLOTE --> COLETANDO
 
     %% Ação: Montar Pedido
-    COLETANDO --> BTN_PROPOR{"Organizador clica:\n[Montar Pedido]"}:::decision
+    COLETANDO --> BTN_PROPOR{"Organizador usa:\n/montar"}:::decision
     BTN_PROPOR -- Endereço pendente --> ERR_ADDR["outcome: address_required\n(Pede confirmação do endereço)"]:::warning
     ERR_ADDR --> COLETANDO
     BTN_PROPOR -- Endereço OK --> EXEC_PROPOR["iris.propor()\n(Busca MCP + LLM + Combinações 1-2 lojas)"]:::action
@@ -116,7 +113,7 @@ flowchart TD
     PROPOSTA_LIBERADA --> BTN_OPCAO{"Ações no Card da Proposta"}:::decision
 
     %% Botão Outra Opção
-    BTN_OPCAO -- "[🔄 Outra Opção]\n(Se alternative existir)" --> BTN_OUTRA["iris.outraOpcao()"]:::action
+    BTN_OPCAO -- "[🔄 Outra opção]\n(Se alternative existir)" --> BTN_OUTRA["iris.outraOpcao()"]:::action
     BTN_OUTRA --> SWITCH_ALT["Inverte proposta atual com alternativa\n(Zero LLM, Instantâneo)"]:::action
     SWITCH_ALT --> REVIEWING
 
@@ -126,22 +123,24 @@ flowchart TD
     APLICA_AJUSTE --> REVIEWING
 
     %% Botão Voltar para a Coleta
-    BTN_OPCAO -- "[↩️ Voltar para a Coleta]" --> BTN_VOLTAR["iris.reabrirColeta()"]:::action
+    BTN_OPCAO -- "[↩️ Voltar para a coleta]" --> BTN_VOLTAR["iris.reabrirColeta()"]:::action
     BTN_VOLTAR --> REABRE["Descarta proposta, alternativa e orçamentos\nVolta para collecting"]:::action
     REABRE --> COLETANDO
 
     %% Botão Cancelar
-    BTN_OPCAO -- "[❌ Cancelar Pedido]" --> BTN_CANC["iris.cancelar()"]:::action
+    BTN_OPCAO -- "[❌ Cancelar pedido]" --> BTN_CANC["iris.cancelar()"]:::action
     BTN_CANC --> CANCELLED["FASE: cancelled (Encerrada)"]:::finish
 
     %% Botão Confirmar Pedido
-    BTN_OPCAO -- "[✅ Confirmar Pedido]" --> BTN_FECHAR["iris.fechar()"]:::action
+    BTN_OPCAO -- "[✅ Confirmar pedido]" --> BTN_FECHAR["iris.fechar()"]:::action
     BTN_FECHAR --> VAL_FECHAR{Validações de Fechamento}:::decision
     VAL_FECHAR -- Orçamento pendente na DM --> ERR_BUD["outcome: budget_pending\n(Avisa no grupo quem falta responder)"]:::warning
     ERR_BUD --> REVIEWING
-    VAL_FECHAR -- Catálogo > 60s ou Taxa mudou --> ERR_TAXA["outcome: close_rejected\n(Recota e atualiza a proposta)"]:::warning
+    VAL_FECHAR -- Taxa de serviço mudou --> ERR_TAXA["outcome: close_rejected\n(Recota e atualiza a proposta)"]:::warning
     ERR_TAXA --> REVIEWING
-    VAL_FECHAR -- Tudo Íntegro & Aprovado --> CLOSED["FASE: closed\n(AuthorizedOrder emitido para o iFood MCP)"]:::finish
+    VAL_FECHAR -- "Item, loja ou preço mudou\n(reconsulta das lojas)" --> ERR_CAT["outcome: close_rejected\n(Voltar para a coleta ou /montar)"]:::warning
+    ERR_CAT --> REVIEWING
+    VAL_FECHAR -- Tudo Íntegro & Aprovado --> CLOSED["FASE: closed\n(AuthorizedOrder entregue ao executor)"]:::finish
 
     classDef setup fill:#1e293b,stroke:#64748b,color:#f8fafc
     classDef state fill:#0f172a,stroke:#3b82f6,stroke-width:2px,color:#f8fafc
@@ -159,10 +158,10 @@ flowchart TD
 ## 3. O Fluxo de Solução Passo a Passo
 
 ### Etapa 1: Início e Confirmação de Endereço
-1. O organizador adiciona a Íris ao grupo e digita `/iniciar`.
-2. A Íris propõe o endereço padrão do organizador ou solicita um novo no privado.
-3. O endereço textual é normalizado e verificado pelo endpoint `validateAddress` do adaptador MCP do iFood.
-4. Somente após a confirmação do organizador a sessão de compras é liberada.
+1. O organizador adiciona a Íris ao grupo e a menciona (ou digita `/iniciar`): ele vira o organizador do pedido.
+2. A Íris propõe o endereço padrão ([Sim] [Outro endereço]) ou pede que o organizador digite o endereço, **no privado**.
+3. O endereço textual é normalizado e verificado pela porta do catálogo (`CatalogPort.validateAddress`), implementada pelo adaptador do MCP do iFood; válido, volta com [Confirmar] [Corrigir].
+4. A coleta no grupo **não espera** o endereço; montar a proposta e fechar o pedido exigem endereço confirmado.
 
 ### Etapa 2: Coleta de Preferências em Linguagem Natural
 1. Os membros do grupo mandam mensagens espontâneas no chat: *"quero um x-bacon"*, *"algo vegetariano até R$ 35"*, *"não gosto de cebola"*.
@@ -185,7 +184,7 @@ flowchart TD
 4. O motor guarda a melhor proposta (`proposal`) e a segunda melhor (`alternative`), permitindo alternância instantânea pelo botão *"Outra Opção"*.
 
 ### Etapa 5: Cotação Oficial de Taxas e Rateio Justo
-1. O Core aciona `CatalogPort.quoteOrder` para obter os valores reais de taxa de entrega e taxa de serviço do iFood.
+1. A taxa de entrega vem do catálogo da loja; a **taxa de serviço** é cotada no iFood por `CatalogPort.quoteOrder`, uma vez por loja da proposta (e de novo no fechamento).
 2. O rateio é calculado em centavos inteiros (`MoneyCents`):
    - Cada participante assume o valor exato dos seus itens.
    - O frete e a taxa de serviço de cada loja são divididos igualmente entre quem pediu naquela loja.
@@ -193,15 +192,17 @@ flowchart TD
 
 ### Etapa 6: Resolução Privada de Orçamento
 1. Se a soma (itens + frete rateado + taxa de serviço) exceder o limite privado do participante:
-   - A Íris **chama a pessoa no privado** com botões inline: `[Aceitar]` ou `[Quero outro]`.
-   - Se escolher `[Quero outro]`, o código sugere o item compatível mais próximo que caiba no orçamento (`[Aceito sugestão]` ou `[Fico sem]`).
-   - O grupo é notificado apenas de quem falta responder, preservando total sigilo sobre valores.
+   - A Íris **chama a pessoa no privado** com botões inline: `[Aceito]` ou `[Quero outro]`.
+   - Se escolher `[Quero outro]`, o código sugere o item compatível mais próximo que caiba no orçamento (`[Aceito a sugestão]` ou `[Fico sem]`).
+   - O grupo vê apenas o nome de quem falta responder, preservando total sigilo sobre valores; o fechamento fica bloqueado até todos responderem.
+   - Efeito cascata: se alguém troca de item ou sai, a entrega e a taxa são redivididas; quem passar a estourar recebe uma pergunta nova.
 
 ### Etapa 7: Fechamento com Autorização Sagrada
-1. O organizador clica em `[Autorizar e Fechar Pedido]`.
-2. O sistema verifica se o catálogo foi consultado há menos de 60 segundos e recota a taxa de serviço no MCP.
-3. Se qualquer preço ou item tiver mudado, a operação é interrompida com alerta e atualização da proposta.
-4. Estando tudo válido, é gerado o contrato assinado `AuthorizedOrder` e despachado para a camada de submissão do iFood.
+1. O organizador clica em `[✅ Confirmar pedido]` (só ele pode; os demais recebem um aviso no próprio botão).
+2. O core reconsulta no iFood as lojas da proposta (itens, preços, loja aberta) e recota a taxa de serviço.
+3. Se a taxa mudou, a proposta volta atualizada para o grupo confirmar de novo; se um item esgotou ou um preço mudou, o fechamento é recusado e o organizador volta para a coleta ou usa `/montar`. Em qualquer recusa a proposta continua em revisão.
+4. Estando tudo válido, é emitido o `AuthorizedOrder` (pedidos por loja, rateio, endereço e autorização), entregue uma única vez ao executor do pedido. Clicar de novo devolve o mesmo pedido, sem duplicar.
+5. **Fora do MVP:** o core não compra nada. Submeter o pedido no iFood, rastreio e cobrança ficam para o executor de pedidos, ainda não implementado.
 
 ---
 
@@ -217,44 +218,51 @@ sequenceDiagram
     participant LLM as Provedor de IA (Groq)
     participant MCP as Servidor MCP iFood
 
-    Org->>Bot: /iniciar pedido no grupo
-    Bot->>Core: iniciarSessao()
+    Org->>Bot: Menciona a Íris (ou /iniciar) no grupo
+    Bot->>Core: iris.iniciar()
+    Core-->>Org: No privado: "Qual o endereço de entrega?"
+    Org->>Bot: Digita o endereço no privado
+    Bot->>Core: iris.mensagem() (com o sessionId do grupo)
     Core->>MCP: validateAddress(endereco)
-    MCP-->>Core: Endereço normalizado OK
-    Core-->>Org: Confirmação de endereço (Botão)
-    Org->>Bot: [Confirmar Endereço]
+    MCP-->>Core: Endereço normalizado
+    Core-->>Org: No privado: [Confirmar] [Corrigir]
+    Org->>Bot: [Confirmar]
+    Bot->>Core: iris.confirmarEndereco()
 
-    loop Coleta de Desejos
+    loop Coleta de Desejos (em paralelo ao endereço)
         Grupo->>Bot: Mensagens informais ("quero burger", "vegetariano max 30")
-        Bot->>Core: mensagensEmLote() (Debounce)
+        Bot->>Core: agrupador.adicionar() → iris.mensagens() (lote)
         Core->>LLM: Extração estruturada (JSON Schema)
         LLM-->>Core: Preferências, restrições e orçamentos
+        Bot-->>Grupo: 👍 em quem teve a preferência registrada
     end
 
-    Org->>Bot: /propor
+    Org->>Bot: /montar
+    Bot->>Core: iris.propor()
     Core->>MCP: searchStores() & getMenu()
     MCP-->>Core: Lojas e itens em tempo real
     Core->>Core: Filtros de elegibilidade & restrições
     Core->>LLM: Matching semântico (atende/substituto)
     Core->>Core: Otimização combinatória (1-2 lojas)
-    Core->>MCP: quoteOrder() (Cotação de taxa de serviço e frete)
-    MCP-->>Core: Taxas oficiais calculadas
+    Core->>MCP: quoteOrder() (taxa de serviço)
+    MCP-->>Core: Taxa de serviço cotada
+    Core-->>Bot: Proposta, alternativa e perguntas de valor
+    Bot-->>Grupo: Card com lojas, itens, rateio e quem falta confirmar o valor
 
-    opt Participante ultrapassou orçamento
-        Core-->>Bot: Enviar pergunta privada (DM)
-        Bot-->>Grupo: Pergunta via botão privado ([Aceito] / [Quero outro])
-        Grupo->>Bot: Resposta privada
+    opt Participante ultrapassou o orçamento
+        Bot-->>Grupo: (no privado da pessoa) [Aceito] / [Quero outro]
+        Grupo->>Bot: Resposta no privado
+        Bot->>Core: iris.responderOrcamento()
         Core->>Core: Recálculo em cascata do rateio
+        Bot-->>Grupo: Card atualizado
     end
 
-    Core-->>Bot: Apresentar Proposta no Grupo com Rateio
-    Bot-->>Grupo: Card com restaurantes, itens e divisão exata
-
-    Org->>Bot: [Autorizar e Fechar Pedido]
-    Core->>MCP: Revalidação de catálogo (< 60s) e recotação
+    Org->>Bot: [✅ Confirmar pedido]
+    Bot->>Core: iris.fechar()
+    Core->>MCP: Reconsulta das lojas e recotação da taxa de serviço
     MCP-->>Core: Valores íntegros confirmados
     Core-->>Bot: AuthorizedOrder emitido
-    Bot->>MCP: ifood_createCart & ifood_submitOrder
-    Bot-->>Grupo: Pedido confirmado! Link de rastreio e comprovante do rateio.
+    Bot-->>Grupo: Pedido confirmado: endereço, lojas, rateio e chave do pedido
+    Note over Bot,MCP: Fora do MVP: executor submete o pedido no iFood (rastreio, cobrança)
 ```
 

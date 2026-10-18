@@ -9,10 +9,11 @@
 ## 1. Diretrizes de Interface e Design System
 
 A interface da Íris foi concebida para viver nativamente no **Telegram**, aproveitando componentes de alta usabilidade:
-- **Mensagens Formatadas em Markdown:** Uso de hierarquia tipográfica, emojis funcionais de status (🏪, 🛵, 🧾, 🔒) e clareza nos valores numéricos.
-- **Inline Keyboards:** Botões de ação rápida acoplados às mensagens, eliminando a digitação desnecessária de comandos.
-- **Identidade Visual Híbrida:** A fluidez do Telegram combinada à paleta oficial de confiabilidade do iFood (*Vermelho #EA1D2C, Cinza Escuro e Branco*).
-- **Protótipo Standalone Navegável:** Arquivo interativo [`04-prototipo-interativo.html`](04-prototipo-interativo.html) anexo para demonstração ao vivo para a banca de jurados.
+- **Mensagens formatadas:** hierarquia tipográfica, emojis funcionais de status (🏪, 💰, ⏳, ✅, 📍) e clareza nos valores, sempre calculados pelo código em centavos.
+- **Inline Keyboards:** botões de ação rápida acoplados às mensagens. Os únicos comandos digitados são `/iniciar` (ou mencionar a Íris), `/montar` e `/cancelar`.
+- **Grupo para o coletivo, privado para o individual:** endereço e valores de cada pessoa vão no privado; no grupo aparecem só a proposta, o rateio e os nomes de quem falta responder.
+- **Identidade Visual Híbrida:** a fluidez do Telegram combinada à paleta oficial de confiabilidade do iFood (*Vermelho #EA1D2C, Cinza Escuro e Branco*).
+- **Protótipo Standalone Navegável:** arquivo interativo [`04-prototipo-interativo.html`](04-prototipo-interativo.html) anexo para demonstração ao vivo para a banca de jurados.
 
 ---
 
@@ -22,146 +23,158 @@ A interface da Íris foi concebida para viver nativamente no **Telegram**, aprov
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                            FLUXO DE TELAS DA ÍRIS                           │
 │                                                                             │
-│  [Tela 1: Endereço]  ──▶  [Tela 2: Coleta Coletiva] ──▶ [Tela 3: DM Orçamento]│
-│  Validação via MCP        Chat livre no grupo          Resolução sigilosa   │
+│  [Tela 1: Início e Endereço] ──▶ [Tela 2: Coleta] ──▶ [Tela 3: Proposta]    │
+│  Grupo + privado do organizador   Chat livre no grupo   Card com rateio      │
 │                                                                │            │
-│  [Tela 5: Checkout Autorizado] ◀── [Tela 4: Card de Proposta & Rateio] ◀─────┘
-│  Pix individual e status iFood     Lojas, itens e divisão exata centavo     │
+│  [Tela 5: Pedido Confirmado] ◀── [Tela 4: Valor no Privado] ◀───┘            │
+│  Resumo e pedido autorizado       Resolução sigilosa por pessoa              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+O exemplo usa números coerentes com as regras do core: o item da Bia (R$ 27,90) cabe no limite dela (R$ 30,00); com a parte da entrega e da taxa de serviço, o total dela passa (R$ 31,40), e a Íris pergunta no privado.
+
 ---
 
-### Tela 1: Início de Sessão e Validação de Endereço (Organizador)
+### Tela 1: Início de Sessão e Endereço (Grupo + Privado da Ana)
 
-O organizador aciona a Íris no grupo. Como a disponibilidade de restaurantes e o frete dependem do local de entrega, o agente valida o endereço em tempo real via MCP antes de abrir a coleta.
+A Ana menciona a Íris no grupo e vira a organizadora. A coleta começa na hora; o endereço é combinado em paralelo, **no privado dela**, e validado pela porta do catálogo do iFood.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
 │ 💬 GRUPO: "Almoço da Firma - Squad Inovação"                           │
 ├────────────────────────────────────────────────────────────────────────┤
-│ [Ana]: /iniciar                                                        │
+│ [Ana]: @iris_bot bora pedir o almoço?                                  │
 │                                                                        │
 │ 🤖 [Íris]:                                                             │
-│ Olá, equipe! Sessão de pedido coletivo iniciada por @Ana.              │
-│                                                                        │
-│ 📍 Endereço de entrega detectado:                                      │
-│ Av. Paulista, 1000 - Bela Vista, São Paulo - SP                       │
-│                                                                        │
-│ 🔘 [Confirmar este Endereço]   🔘 [Informar Outro Endereço]           │
+│ Pedido iniciado por Ana! Mandem aqui o que querem comer, restrições    │
+│ e limite de valor.                                                     │
+│ Ana, te chamei no privado para combinar o endereço de entrega. Quando  │
+│ todos tiverem falado, use /montar.                                     │
+└────────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────────┐
+│ 🔒 PRIVADO: Íris ↔ Ana                                                 │
+├────────────────────────────────────────────────────────────────────────┤
+│ 🤖 Qual o endereço de entrega? Digite rua, número, bairro e cidade.    │
+│ [Ana]: Av. Paulista, 1000 - Bela Vista, São Paulo - SP                 │
+│ 🤖 Encontrei este endereço: Av. Paulista, 1000 - Bela Vista, São Paulo │
+│    - SP. Está certo?                                                   │
+│ 🔘 [Confirmar]   🔘 [Corrigir]                                          │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+*(Com um endereço padrão configurado, a pergunta é "Entregar em …?" com [Sim] [Outro endereço].)*
 
 ---
 
 ### Tela 2: Coleta de Preferências em Linguagem Natural
 
-Os participantes conversam livremente. O agrupador em lote da Íris processa mensagens simultâneas sem engasgar e sem exigir comandos rígidos.
+Os participantes conversam livremente. O agrupador junta as mensagens quase simultâneas num lote só (uma chamada ao modelo), e a Íris reage com 👍 a quem teve a preferência registrada, sem poluir o grupo.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
 │ 💬 GRUPO: "Almoço da Firma - Squad Inovação"                           │
 ├────────────────────────────────────────────────────────────────────────┤
-│ [Andrei]: Pra mim pode ser um hambúrguer caprichado!                   │
-│ [Caio]: Quero nuggets ou algo crocante de frango, até 35 reais.        │
-│ [Bia]: Sou vegetariana, quero um burger sem carne até uns 30 reais.    │
+│ [Andrei]: Pra mim pode ser um hambúrguer tradicional caprichado!   👍  │
+│ [Caio]: Quero nuggets de frango crocante, até uns 35 conto!        👍  │
+│ [Bia]: Sou vegetariana! Quero um burger sem carne, até 30 reais.   👍  │
+│ [Ana]: /montar                                                         │
 │                                                                        │
-│ 🤖 [Íris]:                                                             │
-│ Anotado! 📝                                                            │
-│ • Andrei: Hambúrguer                                                   │
-│ • Caio: Frango / Nuggets (limite privado registrado)                   │
-│ • Bia: Opção vegetariana (restrição rígida registrada)                 │
-│                                                                        │
-│ Quando estiverem prontos, @Ana pode tocar no botão abaixo:             │
-│ 🔘 [Buscar Melhores Opções no iFood]                                   │
+│ 🤖 [Íris]: Montando a sugestão com o que vocês mandaram...             │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### Tela 3: Notificação Privada de Orçamento (DM no Telegram com Bia)
+### Tela 3: Card da Proposta e Rateio Transparente
 
-O prato vegetariano disponível no restaurante mais votado somado ao frete e taxa resultou em R$ 38,50 (superando o limite de R$ 30,00 da Bia). **A Íris protege a Bia e resolve no privado:**
-
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│ 🔒 CONVERSA PRIVADA: Íris ↔ Bia                                        │
-├────────────────────────────────────────────────────────────────────────┤
-│ 🤖 [Íris]:                                                             │
-│ Oi Bia! 👋                                                             │
-│                                                                        │
-│ O restaurante selecionado para o grupo tem o "Vegetariano Burger",     │
-│ mas com o frete e a taxa de serviço de conveniência, a sua parte       │
-│ ficará em R$ 38,50 (seu limite informado era de R$ 30,00).             │
-│                                                                        │
-│ Como você gostaria de proceder?                                        │
-│                                                                        │
-│ 🔘 [Aceitar R$ 38,50]                                                  │
-│ 🔘 [Quero outro item mais em conta]                                    │
-│ 🔘 [Ficar sem item neste pedido]                                       │
-└────────────────────────────────────────────────────────────────────────┘
-```
-*(No grupo público, a Íris apenas envia: "⏳ Aguardando confirmação individual de valores de @Bia...")*
-
----
-
-### Tela 4: Card Consolidado da Proposta e Rateio Transparente
-
-Com as lojas filtradas, taxas cotadas no iFood e orçamentos aprovados, o card final é postado no grupo:
+O código filtra itens que ferem restrições ou passam do limite, combina 1 ou 2 lojas, cota a taxa de serviço no iFood e calcula o rateio. O card vai para o grupo **sem nenhum orçamento**: só o nome de quem precisa confirmar o valor no privado.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
 │ 💬 GRUPO: "Almoço da Firma - Squad Inovação"                           │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 🤖 [Íris]:                                                             │
-│ 🎉 Encontrei a melhor combinação para vocês!                          │
+│ 🍽️ Sugestão da Íris                                                    │
+│ Uma loja atende os três, com opção vegetariana para a Bia.             │
 │                                                                        │
-│ 🏪 Corta Pra Mim Hamburgueria Artesanal                                │
-│ • Andrei: 1× Tradicional One (R$ 35,90)                                │
-│ • Bia: 1× Vegetariano Burger (R$ 39,90)                                │
-│ • Caio: 1× Nuggets Frango 12 un (R$ 32,90)                             │
-│ 🛵 Entrega Padrão: R$ 0,00 (Frete Grátis)                              │
-│ 🧾 Taxa de Serviço iFood: R$ 2,17                                      │
-│ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                      │
-│ 💰 Rateio Final por Pessoa (Itens + Frete + Taxa iFood):              │
-│ • Andrei: R$ 35,90 + R$ 0,72 = R$ 36,62                                │
-│ • Bia:    R$ 39,90 + R$ 0,73 = R$ 40,63                                │
-│ • Caio:   R$ 32,90 + R$ 0,72 = R$ 33,62                                │
-│ ────────────────────────────────────────────────                      │
-│ 💵 Total Geral do Carrinho: R$ 110,87                                  │
+│ 🏪 Corta Pra Mim Hamburgueria                                           │
+│ • Andrei: Tradicional One — R$ 35,90                                   │
+│ • Caio: Nuggets Frango (10 un) — R$ 29,90                              │
+│ • Bia: Vegetariano Burger — R$ 27,90                                   │
+│ Entrega: R$ 7,50 · Taxa de serviço: R$ 2,99                            │
+│ Total da loja: R$ 104,19                                               │
 │                                                                        │
-│ @Ana, podemos autorizar o envio do pedido ao iFood?                    │
+│ 💰 Quanto cada um paga                                                 │
+│ • Andrei: R$ 39,40 (itens R$ 35,90 + entrega R$ 2,50 + taxa R$ 1,00)   │
+│ • Caio:   R$ 33,39 (itens R$ 29,90 + entrega R$ 2,50 + taxa R$ 0,99)   │
+│ • Bia:    R$ 31,40 (itens R$ 27,90 + entrega R$ 2,50 + taxa R$ 1,00)   │
+│ Total do pedido: R$ 104,19                                             │
 │                                                                        │
-│ 🔘 [✅ Autorizar e Fechar Pedido]   🔘 [🔄 Ver Outra Opção de Loja]     │
+│ ⏳ Aguardando confirmação de valor no privado: Bia                     │
+│                                                                        │
+│ 🔘 [✅ Confirmar pedido]                                                │
+│ 🔘 [🔄 Outra opção]          (só quando há uma segunda combinação)      │
+│ 🔘 [↩️ Voltar para a coleta]                                            │
+│ 🔘 [❌ Cancelar pedido]                                                 │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
+Quem quiser trocar o próprio item escreve no grupo (*"troca o meu por um café"*) e a Íris redesenha o card.
+
 ---
 
-### Tela 5: Pedido Fechado e Prestação de Contas Instantânea
+### Tela 4: Valor no Privado (Bia)
 
-Após o organizador autorizar, o pedido é submetido via MCP e o bot publica a confirmação com o link de rastreio e dados de pagamento.
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│ 🔒 PRIVADO: Íris ↔ Bia                                                 │
+├────────────────────────────────────────────────────────────────────────┤
+│ 🤖 Seu pedido fica em R$ 31,40 com entrega e taxa de serviço, acima do │
+│    seu orçamento. Pode ser?                                            │
+│ 🔘 [Aceito]   🔘 [Quero outro]                                          │
+│                                                                        │
+│ [Bia toca em Aceito]                                                   │
+│ 🤖 Combinado: valor confirmado.                                        │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+- **[Quero outro]:** a Íris sugere o item mais parecido que caiba no limite, nas lojas do pedido: [Aceito a sugestão] [Fico sem].
+- **No grupo:** o card é atualizado no lugar (a Bia sai da lista de espera) e a Íris avisa: *"✅ Todos confirmaram os valores. Quem organizou já pode confirmar o pedido."*
+- Se outra pessoa sair do pedido e a entrega for redividida, quem passar a estourar recebe uma pergunta nova, e os botões da pergunta antiga somem.
+
+---
+
+### Tela 5: Pedido Confirmado
+
+Só a Ana pode confirmar. A Íris reconsulta as lojas e a taxa de serviço no iFood; com tudo igual, emite o pedido autorizado (`AuthorizedOrder`) e publica o resumo.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
 │ 💬 GRUPO: "Almoço da Firma - Squad Inovação"                           │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 🤖 [Íris]:                                                             │
-│ 🚀 PEDIDO CONFIRMADO NO IFOOD COM SUCESSO!                             │
+│ ✅ Pedido confirmado!                                                  │
+│ 📍 Entrega em: Av. Paulista, 1000 - Bela Vista, São Paulo - SP         │
 │                                                                        │
-│ Pedido #84920 · Previsão de entrega: 39 a 49 minutos                   │
+│ 🏪 Corta Pra Mim Hamburgueria                                           │
+│ • Andrei: Tradicional One — R$ 35,90                                   │
+│ • Caio: Nuggets Frango (10 un) — R$ 29,90                              │
+│ • Bia: Vegetariano Burger — R$ 27,90                                   │
+│ Entrega: R$ 7,50 · Taxa de serviço: R$ 2,99                            │
+│ Total da loja: R$ 104,19                                               │
 │                                                                        │
-│ 📲 Acompanhe em tempo real:                                            │
-│ https://ifood.com.br/pedidos/track/84920                               │
+│ 💰 Quanto cada um paga                                                 │
+│ • Andrei: R$ 39,40 · Caio: R$ 33,39 · Bia: R$ 31,40                    │
+│ Total do pedido: R$ 104,19                                             │
 │                                                                        │
-│ 💳 Acerto de Contas com @Ana (Chave Pix: ana@firma.com.br):            │
-│ • Andrei: R$ 36,62 (copiar Pix)                                        │
-│ • Bia:    R$ 40,63 (copiar Pix)                                        │
-│ • Caio:   R$ 33,62 (copiar Pix)                                        │
-│                                                                        │
-│ Bom apetite a todos! 🍔🍟                                              │
+│ Autorizado por Ana · pedido -1001234567890-p1                          │
+│ Para um novo pedido, me mencione ou use /iniciar.                      │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+- **Clique repetido** em Confirmar mostra *"Este pedido já estava confirmado"* com o mesmo resumo, sem gerar outro pedido.
+- **Se algo mudou no iFood:** taxa nova → o card volta atualizado para confirmar de novo; item esgotado ou preço novo → a Íris avisa e a Ana volta para a coleta ou usa `/montar`.
+
+**Próximos passos (fora do MVP):** o core entrega o `AuthorizedOrder` e não compra nada. Submeter o pedido no iFood, link de rastreio e cobrança individual por Pix ficam para o executor de pedidos, ainda não implementado.
 
 ---
 
@@ -171,7 +184,6 @@ Para experimentar o fluxo dinamicamente, abra o arquivo anexo no navegador:
 👉 [`04-prototipo-interativo.html`](04-prototipo-interativo.html)
 
 ### Recursos do Protótipo:
-- **Simulador Interativo Passo a Passo:** Permite avançar pelas 5 etapas com animações e trocas de tela em tempo real.
-- **Alternador de Visão de Chat:** Alterne entre a visão do Grupo e a visão da Mensagem Privada da Bia.
-- **Painel de Telemetria ao Vivo:** Visualize em tempo real o estado da Máquina de Estados, tokens gastos e chamadas MCP geradas.
-
+- **Passo a passo:** as 5 telas acima, com os mesmos textos e botões do bot.
+- **Grupo e privado:** alterne entre o grupo e o privado (da Ana no endereço, da Bia no valor).
+- **Painel de telemetria:** estado da sessão, eventos do core, do catálogo e do modelo. As métricas da coleta vêm das medições em `docs/core-decisoes.md`; as demais são ilustrativas.

@@ -10,7 +10,7 @@
 
 A **Íris** é uma agente inteligente para o **Telegram** conectada ao **Model Context Protocol (MCP) do iFood**, projetada para resolver de ponta a ponta o caos dos **pedidos de comida coletivos** (no trabalho, na faculdade ou entre amigos).
 
-A Íris entra no grupo, compreende conversas informais e gírias, cruza cardápios reais de restaurantes no iFood, atende 100% das restrições alimentares duras (vegetarianismo, alergias), preserva a **privacidade de orçamentos individuais via DM**, otimiza a cesta para **no máximo 2 lojas** e calcula um **rateio exato ao centavo** com taxa de serviço e frete oficiais. Tudo sob uma **fronteira de autorização sagrada** (o humano tem sempre o controle do fechamento).
+A Íris entra no grupo, compreende conversas informais e gírias, cruza cardápios reais de restaurantes no iFood, atende 100% das restrições alimentares duras (vegetarianismo, alergias), preserva a **privacidade de orçamentos individuais via DM**, otimiza a cesta para **no máximo 2 lojas** e calcula um **rateio exato ao centavo** com a entrega da loja e a taxa de serviço cotada no iFood. Tudo sob uma **fronteira de autorização sagrada** (o humano tem sempre o controle do fechamento).
 
 ---
 
@@ -38,17 +38,23 @@ entregaveis/04-prototipo-interativo.html
 ```
 *Você poderá navegar passo a passo pelas 5 etapas do pedido, alternar entre a visão do Grupo e a Mensagem Privada da Bia, e acompanhar a telemetria do Core e do MCP em tempo real.*
 
-### 2. Simulador de Conversa no Terminal
-Para rodar o simulador completo de terminal com o catálogo do iFood:
+### 2. Bot no Telegram
+Com `TELEGRAM_BOT_TOKEN` (e, para o modelo real, as variáveis `AI_*`) no `.env` da raiz:
+```bash
+npm run bot:dev
+```
+No grupo: mencione o bot ou use `/iniciar`; cada pessoa escreve o que quer; o organizador usa `/montar` e decide pelos botões do card (Confirmar pedido, Outra opção, Voltar para a coleta, Cancelar pedido). Endereço e valores individuais chegam no privado; cada pessoa precisa mandar `/start` ao bot uma vez. Nesta versão o catálogo é o fake (5 lojas fictícias; endereço com número, em São Paulo).
+
+### 3. Simulador de Conversa no Terminal
+Para rodar o simulador de terminal com o catálogo fake:
 ```bash
 npm run simular -- Ana
 ```
 *(Permite interagir como qualquer participante no terminal: `Andrei: quero burger`, `/propor`, `/outra`, `/orcamento`, `/fechar`).*
 
-### 3. Validação da Qualidade e Testes do Código
+### 4. Validação da Qualidade e Testes do Código
 ```bash
-npm run lint         # Verificação estrita de estilo sem advertências
-npm run typecheck    # Verificação estrita de tipos do TypeScript
+npm run check        # lint + typecheck + testes (regras de negócio do core e fluxos do bot)
 ```
 
 ---
@@ -56,7 +62,7 @@ npm run typecheck    # Verificação estrita de tipos do TypeScript
 ## 🏆 Checklist de Alinhamento com a Banca do iFood
 
 - [x] **Aderência ao Desafio "Vendendo com Agentes":** O agente atua ativamente vendendo refeições em grupo e aumentando a taxa de conversão do marketplace.
-- [x] **Uso Genuíno do MCP:** Integração mapeada com `searchOffers`, `browseOffers`, `getItem`, `createCart`, `getCartDeliveryMethods` e `getCart`.
+- [x] **Uso Genuíno do MCP:** Cliente MCP com OAuth testado contra o endpoint oficial (`searchOffers`, `browseOffers`, `getItem`, `createCart`, `getCartDeliveryMethods`, `getCart`); a ligação do catálogo do core a essas ferramentas é o próximo passo (hoje o bot roda com o catálogo fake).
 - [x] **Segurança e Integridade Financeira:** Nenhum valor monetário é confiado a cálculos de LLM; dinheiro é tratado em centavos inteiros (`MoneyCents`).
 - [x] **Feedback Real para a Engenharia do iFood:** Relato minucioso baseado em testes reais com logs de payload e propostas de melhoria de APIs.
 

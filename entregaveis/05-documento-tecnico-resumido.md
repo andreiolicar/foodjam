@@ -70,10 +70,12 @@ Um dos maiores erros em aplicações financeiras com LLMs é permitir que a IA c
 
 ## 4. Uso e Integração com o MCP do iFood
 
-A Íris conecta-se ao endpoint oficial `https://consumer-mcp.ifood.com.br/marketplace` via cliente MCP remoto com autenticação OAuth.
+O módulo iFood (branch `feat/ifood-mcp`) conecta-se ao endpoint oficial `https://consumer-mcp.ifood.com.br/marketplace` via cliente MCP remoto com autenticação OAuth, já testado com leitura de ofertas, itens e carrinho.
+
+**Estado atual:** o core fala só com a porta `CatalogPort`, no vocabulário do domínio. A ponte entre essa porta e as ferramentas do MCP é o próximo passo de integração; até lá, o bot e o simulador rodam com o catálogo fake (`CatalogoFake`), que implementa a mesma porta. O mapeamento planejado, com base nos testes reais do MCP (`docs/feedback-mcp`), é:
 
 ```text
-CatalogPort (Interface do Domínio)         Ferramenta Real MCP iFood
+CatalogPort (Interface do Domínio)         Ferramenta MCP iFood (mapeamento planejado)
 ├── validateAddress(text)           ──▶     ifood_validateAddress / ifood_listAddresses
 ├── searchStores(query, address)    ──▶     ifood_searchOffers / ifood_browseOffers
 ├── getMenu(storeId, address)       ──▶     ifood_browseOffers / ifood_getItem
@@ -114,6 +116,6 @@ Em grupos de chat, os membros costumam responder em rajadas de mensagens quase s
 
 1. **Proteção contra Prompt Injection:** Toda mensagem de usuário entra isolada em tags XML sanitizadas (`<mensagem_usuario>`, `<catalogo>`). O prompt de sistema orienta a IA a tratar o conteúdo exclusivamente como dado textual inerte.
 2. **Confidencialidade de Limites Financeiros:** O orçamento (`budgetCents`) é extraído diretamente pelo código e armazenado na sessão. **Ele nunca é enviado de volta ao prompt da IA**, eliminando riscos de vazamento por ataque de extração de contexto.
-3. **Revalidação Relâmpago (< 60 segundos):** No fechamento do pedido, o catálogo é revalidado. Se algum item esgotou ou mudou de preço entre a proposta e o clique de confirmação, o fechamento é suspenso e o grupo é alertado com a proposta recalculada.
-4. **Idempotência de Autorização:** A confirmação do organizador gera uma assinatura única baseada em `${proposalId}:${authorizedAt}`. Cliques acidentais ou repetidos devolvem o mesmo `AuthorizedOrder` sem duplicar cobrança.
+3. **Revalidação no Fechamento:** No clique de confirmação, o core reconsulta as lojas da proposta (só aceita um retrato com no máximo 60 segundos) e recota a taxa de serviço. Se a taxa mudou, o grupo recebe a proposta atualizada para confirmar de novo; se um item esgotou ou um preço mudou, o fechamento é recusado e o grupo é avisado. Em qualquer recusa a proposta continua em revisão (dá para ajustar, voltar para a coleta ou montar de novo).
+4. **Idempotência de Autorização:** O `proposalId` é a chave do pedido autorizado (`${proposalId}:${authorizedAt}` se o executor guardar histórico entre reinícios). Cliques acidentais ou repetidos devolvem o mesmo `AuthorizedOrder` (`already_closed`), e o bot entrega o pedido ao executor uma única vez.
 

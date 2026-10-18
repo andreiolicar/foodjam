@@ -2,7 +2,16 @@ import { interpretarAjuste } from './ajuste.js';
 import { atualizarCatalogo } from './catalogo.js';
 import type { ItemLote } from './coleta.js';
 import { coletar, coletarLote } from './coleta.js';
-import type { AuthorizedOrder, CoreAction, IncomingMessage, ParticipantId, Proposal, SessionId } from './contracts.js';
+import type {
+  AuthorizedOrder,
+  CoreAction,
+  IncomingMessage,
+  MenuItemId,
+  ParticipantId,
+  Proposal,
+  SessionId,
+  StoreId,
+} from './contracts.js';
 import { fechar } from './fechamento.js';
 import type { LlmCallRecord } from './llm.js';
 import type { CatalogPort, LlmPort, SessionRecord, SessionStore } from './ports.js';
@@ -102,6 +111,12 @@ export interface Organizador {
   displayName: string;
 }
 
+/** Nomes do catálogo da proposta atual, para a interface desenhar lojas e itens. */
+export interface NomesCatalogo {
+  lojas: Record<StoreId, string>;
+  itens: Record<MenuItemId, string>;
+}
+
 export interface Agente {
   /** Alguém mencionou o bot: abre a sessão do chat (ou devolve a que já está ativa). */
   iniciar(sessionId: SessionId, organizador: Organizador): Promise<Resposta>;
@@ -134,6 +149,8 @@ export interface Agente {
   cancelar(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
   /** Estado atual da sessão, se houver. */
   obter(sessionId: SessionId): Promise<CoreSession | undefined>;
+  /** Nomes das lojas e dos itens do catálogo da proposta atual (ou do pedido fechado), se houver. */
+  nomes(sessionId: SessionId): Promise<NomesCatalogo | undefined>;
 }
 
 const FINAIS = new Set(['closed', 'cancelled']);
@@ -519,7 +536,9 @@ export function criarAgente(deps: AgenteDeps): Agente {
 
           const momento = now();
           const endereco = enderecoConfirmado(session);
-          if (session.status !== 'closed' && !endereco) return enderecoExigido(session, actorId);
+          // Recusas não deixam a sessão em awaiting_confirmation: ela continua em reviewing
+          // (record.session), para dar para ajustar, voltar para a coleta ou montar de novo.
+          if (session.status !== 'closed' && !endereco) return enderecoExigido(record.session, actorId);
           const catalogo =
             session.status === 'closed' || !endereco
               ? record.catalog
@@ -529,11 +548,10 @@ export function criarAgente(deps: AgenteDeps): Agente {
             // Quem passou do orçamento precisa ter respondido: o grupo vê quem falta.
             const pendentes = pendenciasOrcamento(session);
             if (pendentes.length > 0) {
-              await salvar(record, session);
               const nomes = pendentes.map((id) => session.participants.find((p) => p.id === id)?.displayName ?? id);
               return {
                 outcome: 'budget_pending',
-                session,
+                session: record.session,
                 proposal,
                 pendingBudget: pendentes,
                 problems: [{ code: 'budget_pending', participantIds: pendentes }],
@@ -569,9 +587,8 @@ export function criarAgente(deps: AgenteDeps): Agente {
           });
 
           if (!result.ok) {
-            // A sessão fica aguardando confirmação: dá para ajustar e tentar fechar de novo.
-            await salvar(record, session);
-            return { outcome: 'close_rejected', session, proposal, problems: result.problems, actions: [] };
+            // A sessão continua em reviewing: dá para ajustar, voltar para a coleta ou montar de novo.
+            return { outcome: 'close_rejected', session: record.session, proposal, problems: result.problems, actions: [] };
           }
           await salvar(record, result.session);
           return {
@@ -595,5 +612,14 @@ export function criarAgente(deps: AgenteDeps): Agente {
       ),
 
     obter: async (sessionId) => (await sessions.get(sessionId))?.session,
+
+    nomes: async (sessionId) => {
+      const catalogo = (await sessions.get(sessionId))?.catalog;
+      if (!catalogo) return undefined;
+      return {
+        lojas: Object.fromEntries(catalogo.stores.map((s) => [s.id, s.name])),
+        itens: Object.fromEntries(catalogo.menuItems.map((i) => [i.id, i.name])),
+      };
+    },
   };
 }

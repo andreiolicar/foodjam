@@ -21,9 +21,10 @@ Agente **Íris** e regras de negócio do FoodJam: sessões, coleta de preferênc
 ## Fluxo
 
 ```text
-coleta ──/propor──▶ proposta (reviewing) ──pedirConfirmacao──▶ confirmação ──fechar──▶ fechada
+coleta ──propor──▶ proposta (reviewing) ──pedirConfirmacao──▶ confirmação ──fechar──▶ fechada
    ▲                  │  ▲ ajustes                    │                         (AuthorizedOrder)
-   └──voltarParaColeta┘  └───────── ajuste ───────────┘
+   └──voltarParaColeta┘  └──── recusa no fechamento ──┘
+                             (valor pendente, taxa ou catálogo mudou: volta para reviewing)
 qualquer fase não final ──cancelar──▶ cancelada
 ```
 
@@ -33,7 +34,7 @@ qualquer fase não final ──cancelar──▶ cancelada
 | Proposta | `proposta.ts` | `capable` (classificação) + `fast` (justificativa) | Busca lojas em código (`catalogo.ts`) e filtra itens elegíveis por pessoa (`regras/elegibilidade.ts`). O modelo só classifica, por desejo de cada pessoa, os itens em "atende", "substituto" ou "não serve". O código (`regras/combinacoes.ts`) enumera todas as combinações de 1 e 2 lojas, escolhe o melhor item por desejo, confere pedido mínimo e escolhe: mais atendidos > menos desejos sem item > menos substitutos > menos lojas > mesma categoria do desejo > total com entrega dentro do orçamento > menor total. Depois cota a taxa de serviço da escolhida e da alternativa (`taxas.ts`, porta `quoteOrder`). O modelo só escreve uma frase objetiva por opção (com os motivos dos substitutos, calculados em código). Devolve também a segunda melhor combinação (`alternative`, botão "Outra opção"). |
 | Ajuste | `ajuste.ts` | `fast` | `interpretarAjuste` converte texto em troca estruturada; `ajustar` troca o item da pessoa e recalcula. A pessoa só troca o próprio item. |
 | Orçamento | `orcamento.ts` | nenhum | O orçamento cobre itens + parte da entrega + parte da taxa de serviço. Quem passa é perguntado no privado ([Aceito] [Quero outro]); em "Quero outro", o código sugere o item mais próximo que caiba ([Aceito a sugestão] [Fico sem]). Só a própria pessoa responde; quem passar a estourar depois de uma mudança também é perguntado. |
-| Fechamento | `fechamento.ts` | nenhum | Exige organizador, endereço confirmado, nenhuma pergunta de orçamento pendente e catálogo consultado há no máximo 60 s; a fachada cota a taxa de serviço de novo (se mudou, recusa e atualiza a proposta); revalida tudo e devolve `AuthorizedOrder`. |
+| Fechamento | `fechamento.ts` | nenhum | Exige organizador, endereço confirmado, nenhuma pergunta de orçamento pendente e catálogo consultado há no máximo 60 s; a fachada cota a taxa de serviço de novo (se mudou, recusa e atualiza a proposta); revalida tudo e devolve `AuthorizedOrder`. Em qualquer recusa a sessão continua em `reviewing` (dá para ajustar, voltar para a coleta ou montar de novo). |
 
 ## Guardrails do modelo
 
@@ -109,7 +110,8 @@ O core está congelado: daqui em diante, só correções de bug e o que a integr
 
 ## Pendências e melhorias futuras
 
-- Integração com o Telegram e com a `CatalogPort` real em `src/index.ts` (a fachada já está pronta; falta a ligação).
+- `CatalogPort` real (MCP do iFood) em `src/index.ts`; o Telegram já está ligado e hoje usa o `CatalogoFake`.
+- Executor do `AuthorizedOrder` (compra no iFood): o bot já entrega o pedido por `criarBot(token, iris, { aoAutorizar })`; falta quem execute.
 - `getStore(storeId)` na `CatalogPort`: proposta em `docs/proposta-catalog-getstore.md`, a combinar com o módulo iFood.
 - Sessões só em memória: reiniciar o processo perde os pedidos em andamento.
 - Regras de restrição são palavras-chave conservadoras, casadas como palavras inteiras (`mel` não casa "caramelo"; radicais explícitos como `bovin*`); itens sem descrição saem como `uncertain` para confirmar.

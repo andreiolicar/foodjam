@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
-    "bot:dev": "tsx watch src/telegram-ts/bot.ts",
+    "bot:dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "lint": "eslint . --max-warnings=0",
@@ -24,7 +24,6 @@
     "@modelcontextprotocol/sdk": "1.32.1",
     "dotenv": "^18.0.8",
     "grammy": "1.46.0",
-    "telegraf": "^4.16.3",
     "zod": "4.6.7"
   },
   "devDependencies": {

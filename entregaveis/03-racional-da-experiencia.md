@@ -48,13 +48,14 @@ A Íris foi concebida sob a ótica de **Human-Agent Interaction (HAI)** para atu
   1. O orçamento coletado em texto é **estritamente confidencial**: ele é mascarado antes de qualquer prompt e nunca é impresso no chat público.
   2. Se a proposta da loja fizer o total da pessoa ultrapassar seu limite, a Íris **chama o participante em mensagem privada (DM)**:
      ```text
-     [Íris no Privado]: 
-     "Oi Bia! A opção escolhida pelo grupo ficou em R$ 38,50 com frete e taxa 
-     (acima do seu limite de R$ 30,00). O que prefere fazer?"
-     [Aceitar valor de R$ 38,50]   [Quero outro item mais em conta]
+     [Íris no Privado]:
+     "Seu pedido fica em R$ 31,40 com entrega e taxa de serviço,
+     acima do seu orçamento. Pode ser?"
+     [Aceito]   [Quero outro]
      ```
-  3. No grupo público, a Íris apenas sinaliza de forma neutra e respeitosa:
-     *"Aguardando confirmação de valores de: @Bia"*.
+     Em `[Quero outro]`, a Íris sugere o item mais parecido que caiba no limite: `[Aceito a sugestão]` ou `[Fico sem]`.
+  3. No grupo público, a Íris apenas sinaliza de forma neutra e respeitosa, no card da proposta:
+     *"⏳ Aguardando confirmação de valor no privado: Bia"*.
 * **Impacto em UX:** Segurança psicológica total. Ninguém precisa se justificar perante os colegas.
 
 ---
@@ -64,7 +65,7 @@ A Íris foi concebida sob a ótica de **Human-Agent Interaction (HAI)** para atu
 * **A dor:** É comum em aplicativos de delivery o usuário escolher um prato de R$ 30,00 e, no momento do checkout, ser surpreendido com R$ 12,00 de entrega e R$ 3,00 de taxa de serviço, gerando atrito e cancelamentos.
 * **A decisão:** O conceito de orçamento na Íris é **All-In**:
   $$\text{Custo Individual} = \text{Itens} + \left(\frac{\text{Taxa de Entrega}}{\text{Pessoas na Loja}}\right) + \left(\frac{\text{Taxa de Serviço iFood}}{\text{Pessoas na Loja}}\right)$$
-  A Íris aciona o endpoint oficial `quoteOrder` do MCP antes de apresentar a proposta. Quando o participante visualiza seu total, ele tem a certeza absoluta de que aquele é o valor líquido que sairá do seu bolso.
+  A entrega vem do catálogo da loja e a taxa de serviço é cotada no iFood (`CatalogPort.quoteOrder`) antes de apresentar a proposta, e de novo no fechamento. Quando o participante visualiza seu total, ele vê o que sai do seu bolso: itens, parte da entrega e parte da taxa.
 * **Impacto em UX:** Transparência radical e confiança imediata na autorização.
 
 ---
@@ -74,7 +75,7 @@ A Íris foi concebida sob a ótica de **Human-Agent Interaction (HAI)** para atu
 * **A dor:** Se 6 pessoas pedirem em 5 restaurantes distintos, haverá 5 fretes separados, motoboys chegando em horários descompassados e comida esfriando. Por outro lado, forçar 1 única loja pode impedir que vegetarianos e carnívoros comam juntos.
 * **A decisão:**
   - O algoritmo combinatório otimiza para **1 loja ideal** ou, no máximo, **2 lojas complementares** (ex.: uma hamburgueria artesanal e uma confeitaria/padaria).
-  - Em vez de forçar o grupo a debater dezenas de alternativas, a Íris já calcula nos bastidores a 1ª colocada (`proposal`) e a 2ª colocada (`alternative`), disponibilizando um botão instantâneo de **`[Outra Opção]`**.
+  - Em vez de forçar o grupo a debater dezenas de alternativas, a Íris já calcula nos bastidores a 1ª colocada (`proposal`) e a 2ª colocada (`alternative`), disponibilizando um botão instantâneo de **`[🔄 Outra opção]`** (sem nova chamada ao modelo).
 * **Impacto em UX:** Se a maioria não gostar da primeira opção, basta um clique para alternar para o plano B sem ter que recomeçar a coleta.
 
 ---
@@ -84,9 +85,9 @@ A Íris foi concebida sob a ótica de **Human-Agent Interaction (HAI)** para atu
 * **A dor:** Usuários têm receio legítimo de agentes autônomos que manipulam dinheiro ou finalizam pedidos sem consentimento explícito.
 * **A decisão:**
   - A Íris **nunca** executa a transação bancária ou finalização de pedido de forma autônoma.
-  - A etapa de fechamento exige o clique explícito do organizador no botão `[Autorizar e Fechar Pedido]`.
+  - A etapa de fechamento exige o clique explícito do organizador no botão `[✅ Confirmar pedido]`; ninguém mais consegue fechar.
   - A operação é **idempotente**: múltiplos cliques por instabilidade de rede ou ansiedade não geram pedidos duplicados.
-  - Revalidação relâmpago: se nos últimos 60 segundos algum item esgotou no iFood ou o preço sofreu alteração, a compra é pausada e o organizador é informado imediatamente.
+  - Revalidação no clique: a Íris reconsulta no iFood as lojas da proposta e a taxa de serviço. Se algum item esgotou, um preço mudou ou a taxa subiu, o fechamento é pausado e o grupo é informado na hora, sem travar a proposta.
 * **Impacto em UX:** Sensação de controle, segurança jurídica e alinhamento com as melhores práticas de governança de IA.
 
 ---
@@ -99,5 +100,5 @@ A Íris foi concebida sob a ótica de **Human-Agent Interaction (HAI)** para atu
 | **Tratamento de Alergias** | Leitura manual de cardápio com risco de falha humana. | Filtro determinístico no catálogo com descarte imediato. |
 | **Limite de Dinheiro** | Constrangimento público de quem tem orçamento restrito. | Resolução 100% privada e respeitosa via DM. |
 | **Cálculo do Rateio** | Planilha no Excel, discussão de frete e centavos sobrando. | Divisão matemática perfeita ao centavo exibida no card do chat. |
-| **Cobrança dos Amigos** | Organizador precisando lembrar quem deve o quê. | Cada membro recebe seu extrato transparente pronto para Pix. |
+| **Cobrança dos Amigos** | Organizador precisando lembrar quem deve o quê. | O resumo do pedido mostra, ao centavo, quanto cada um paga (itens + entrega + taxa). Cobrança por Pix fica como próximo passo. |
 

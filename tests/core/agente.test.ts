@@ -207,7 +207,8 @@ describe('agente: proposta e fechamento', () => {
     const r = await iris.fechar(CHAT, 'ana');
     expect(r.outcome).toBe('close_rejected');
     expect(r.problems?.some((p) => p.code === 'item_rejected')).toBe(true);
-    expect((await iris.obter(CHAT))?.status).toBe('awaiting_confirmation');
+    // Recusado, continua em revisão: dá para ajustar, voltar para a coleta ou montar de novo.
+    expect((await iris.obter(CHAT))?.status).toBe('reviewing');
   });
 
   it('erro inesperado (rede do catálogo) vira outcome "error" e é reportado', async () => {
@@ -563,5 +564,69 @@ describe('agente: orçamento com entrega e taxa de serviço', () => {
     const fechar = await iris.fechar(CHAT, 'ana');
     expect(fechar.outcome).toBe('close_rejected');
     expect(fechar.problems).toEqual([{ code: 'service_fee_unavailable', storeId: r.proposal?.orders[0]?.storeId }]);
+  });
+});
+
+describe('agente: nomes do catálogo para a interface', () => {
+  it('sem proposta não há catálogo; com proposta, toda loja e item dela têm nome', async () => {
+    const { iris } = agente();
+    await abrir(iris);
+    expect(await iris.nomes(CHAT)).toBeUndefined();
+
+    await iris.mensagem(msg('ana', 'quero um lanche'));
+    const r = await iris.propor(CHAT, 'ana');
+    const nomes = await iris.nomes(CHAT);
+
+    for (const order of r.proposal?.orders ?? []) {
+      expect(nomes?.lojas[order.storeId]).toEqual(expect.any(String));
+      for (const item of order.items) expect(nomes?.itens[item.menuItemId]).toEqual(expect.any(String));
+    }
+  });
+
+  it('continua disponível depois de fechar (para o resumo do pedido)', async () => {
+    const { iris } = await comProposta();
+    const fechado = await iris.fechar(CHAT, 'ana');
+    const nomes = await iris.nomes(CHAT);
+    expect(nomes?.lojas[fechado.order?.orders[0]?.storeId ?? '']).toEqual(expect.any(String));
+  });
+});
+
+describe('agente: fechamento recusado não trava a sessão', () => {
+  /** Ana quer lanche; Bia passa do orçamento: fechar devolve budget_pending. */
+  async function recusado() {
+    const ctx = agente();
+    await abrir(ctx.iris);
+    await ctx.iris.mensagem(msg('ana', 'quero um lanche'));
+    await ctx.iris.mensagem(msg('bia', 'bolo de cenoura, até 10 reais'), 'Bia');
+    await ctx.iris.propor(CHAT, 'ana');
+    const fechar = await ctx.iris.fechar(CHAT, 'ana');
+    expect(fechar.outcome).toBe('budget_pending');
+    expect(fechar.session?.status).toBe('reviewing');
+    return ctx;
+  }
+
+  it('depois de budget_pending, "Voltar para a coleta" funciona', async () => {
+    const { iris } = await recusado();
+    expect((await iris.reabrirColeta(CHAT, 'ana')).outcome).toBe('collecting');
+  });
+
+  it('depois de budget_pending, montar de novo funciona', async () => {
+    const { iris } = await recusado();
+    expect((await iris.propor(CHAT, 'ana')).outcome).toBe('proposed');
+  });
+
+  it('depois de budget_pending, trocar o endereço descarta a proposta e volta para a coleta', async () => {
+    const { iris } = await recusado();
+    await iris.pedirOutroEndereco(CHAT, 'ana');
+    await iris.mensagem(msg('ana', 'Rua Nova, 45 - Centro, São Paulo - SP'));
+    const r = await iris.confirmarEndereco(CHAT, 'ana');
+    expect(r.outcome).toBe('address_confirmed');
+    expect(r.session?.status).toBe('collecting');
+  });
+
+  it('depois de a pessoa aceitar, o mesmo pedido fecha', async () => {
+    const { iris } = await recusado();
+    await iris.responderOrcamento(CHAT, 'bia', 'aceito');
+    expect((await iris.fechar(CHAT, 'ana')).outcome).toBe('closed');
   });
 });
