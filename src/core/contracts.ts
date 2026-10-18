@@ -85,6 +85,11 @@ export interface MenuItem {
   description?: string;
   priceCents: MoneyCents;
   available: boolean;
+  /**
+   * Comida ou bebida, se o catálogo souber (ex.: pela seção do cardápio).
+   * Ausente: o core infere pelo nome e pela descrição.
+   */
+  category?: 'food' | 'drink';
 }
 
 /** Item escolhido para uma pessoa. O preço é copiado do catálogo pelo código, nunca pelo modelo. */

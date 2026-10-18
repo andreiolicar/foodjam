@@ -33,6 +33,7 @@ export const MenuItemSchema = z.object({
   description: z.string().exactOptional(),
   priceCents: MoneyCentsSchema,
   available: z.boolean(),
+  category: z.enum(['food', 'drink']).exactOptional(),
 });
 
 export const ProposedItemSchema = z.object({

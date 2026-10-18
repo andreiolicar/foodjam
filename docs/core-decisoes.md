@@ -25,6 +25,7 @@ Registro do que foi decidido no core, por quê, e o que foi medido. Base para o 
 - **Orçamento é privado:** nunca entra em prompt nem em mensagem de erro. Preços e pedido mínimo das lojas são públicos e podem ir ao modelo.
 - O modelo só escolhe entre ids **elegíveis daquela pessoa** (restrições, rejeições, loja aberta, disponível, preço unitário dentro do orçamento); qualquer outro id é descartado com motivo.
 - Restrições são palavras-chave conservadoras casadas como **palavras inteiras** ("mel" não casa "caramelo"); item sem descrição para quem tem restrição sai como "a confirmar".
+- **Bebida nunca substitui comida:** o código remove bebidas das opções de qualquer desejo de comida, independentemente do modelo. A categoria vem do catálogo (`MenuItem.category`) ou é inferida de forma conservadora pelo nome; no desempate, substituto da mesma categoria do desejo vence.
 - Não existe ferramenta de pedido para o modelo. O core não executa a compra: entrega o `AuthorizedOrder` depois da confirmação do organizador.
 
 ## Provedor de IA
@@ -78,10 +79,14 @@ As 10 interpretações saíram certas, incluindo pessoa com dois itens, orçamen
 | Modelo escolhe itens e lojas | Evitou lojas com pedido mínimo e deu substitutos a quem não precisava | ~4.100 | 5,3–5,6 s |
 | **Modelo classifica, código combina** | Bia com lanche e bolo na padaria, Caio no Bowl de Quinoa, Ana com o melhor substituto (hambúrguer exigiria 3ª loja); 10 combinações avaliadas | **3.238** | **3,7 s** |
 
+## Estado
+
+Congelamento de funcionalidades: só correções de bug e o que a integração com o bot e com o MCP exigir.
+
 ## Pendências
 
 - ~~`ajustar` com vários itens~~: resolvido; troca só o item citado e pergunta quando não dá para saber qual.
-- Confirmar 19/19 na coleta com o critério novo (uma rodada, ~19 chamadas).
+- ~~Confirmar 19/19 na coleta com o critério novo~~: confirmado (qwen, 19/19).
 - Testar `reasoning_effort=low` na proposta, comparando qualidade e tokens.
 - `CatalogPort.getStore(storeId)`: ver [`proposta-catalog-getstore.md`](proposta-catalog-getstore.md).
 - Sessões só em memória: reiniciar o processo perde pedidos em andamento.

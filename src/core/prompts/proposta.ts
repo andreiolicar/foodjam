@@ -20,6 +20,7 @@ Para cada pessoa (todas, com o participantId exato) e cada desejo dela, NA MESMA
 - substitutos: ids de "itensPermitidos" dessa pessoa que não atendem exatamente, mas são uma alternativa razoável, do melhor para o pior.
 - Itens que não servem ficam de fora. Nunca use id fora de "itensPermitidos" da pessoa.
 - Desejo de comida (ex.: "algo leve", "lanche") só é atendido por comida; bebida sozinha não atende, a menos que a pessoa peça bebida.
+- Bebida NUNCA é substituto de desejo de comida: para desejo de comida, "substitutos" só tem comida.
 - Considere as preferências ("gosta") da pessoa para ordenar.
 Você não escolhe lojas nem calcula nada: o sistema monta as combinações, preços e rateio.`;
 

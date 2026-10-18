@@ -305,3 +305,38 @@ describe('propor: justificativa objetiva e alternativa', () => {
     ).toBe('Todos foram atendidos com o que pediram, em 1 loja.');
   });
 });
+
+describe('propor: bebida não substitui comida', () => {
+  it('caso do Caio: café como substituto de "algo leve" é barrado; vence Padaria + Verde com o Bowl', async () => {
+    const classes: Classes = {
+      ...classesDoGrupo,
+      // O modelo erra e oferece café como substituto para "algo leve".
+      caio: [{ atende: ['verde-bowl'], substitutos: ['pad-cafe'] }],
+    };
+    const result = await proporOk(grupo(), llmCom(classes));
+
+    expect(result.discarded).toContainEqual({ participantId: 'caio', menuItemId: 'pad-cafe', reason: 'drink_for_food' });
+    expect(itensDe(result)).toContainEqual(['caio', 'verde-bowl', false]);
+    expect(itensDe(result).some(([, id]) => id === 'pad-cafe')).toBe(false);
+    // Nem na alternativa o Caio recebe só bebida.
+    const alternativa = result.alternative?.orders.flatMap((o) => o.items) ?? [];
+    expect(alternativa.some((i) => i.participantId === 'caio' && i.menuItemId === 'pad-cafe')).toBe(false);
+  });
+
+  it('bebida também não "atende" desejo de comida, mesmo se o modelo disser que sim', async () => {
+    // "lanche" no gosto faz a padaria entrar na busca de lojas candidatas.
+    const session = sessao(pessoa('caio', { wishes: ['algo leve'], foodPreferences: ['lanche'] }));
+    const result = await proporOk(session, llmCom({ caio: [{ atende: ['pad-cafe', 'pad-misto'] }] }));
+    expect(itensDe(result)).toEqual([['caio', 'pad-misto', false]]);
+  });
+
+  it('quem pede bebida pode receber bebida', async () => {
+    const session = sessao(pessoa('ana', { wishes: ['café'] }));
+    const result = await proporOk(session, llmCom({ ana: [{ atende: ['pad-cafe'] }] }));
+    expect(itensDe(result)).toEqual([['ana', 'pad-cafe', false]]);
+  });
+
+  it('o prompt da classificação proíbe bebida como substituto de comida', () => {
+    expect(SISTEMA_CLASSIFICACAO).toMatch(/Bebida NUNCA é substituto de desejo de comida/);
+  });
+});

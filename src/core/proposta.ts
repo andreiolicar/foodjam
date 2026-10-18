@@ -14,6 +14,7 @@ import {
 } from './prompts/proposta.js';
 import type { DesejoClassificado, Escolha, Metricas, PessoaClassificada } from './regras/combinacoes.js';
 import { compararMetricas, enumerarCombinacoes, escolherNaCombinacao, medir } from './regras/combinacoes.js';
+import { categoriaDoDesejo, categoriaDoItem } from './regras/categoria.js';
 import { itemIncerto, itensElegiveis } from './regras/elegibilidade.js';
 import { montarPedidos } from './regras/montar-pedidos.js';
 import { calcularRateio } from './regras/rateio.js';
@@ -38,7 +39,7 @@ export interface PropostaDeps {
   timeoutMs?: number;
 }
 
-export type DescarteReason = PickRejectionReason | 'not_eligible' | 'duplicate_pick' | 'over_budget';
+export type DescarteReason = PickRejectionReason | 'not_eligible' | 'duplicate_pick' | 'over_budget' | 'drink_for_food';
 
 /** Item que o modelo citou ou o código escolheu e foi descartado, com o motivo. */
 export interface Descarte {
@@ -136,18 +137,43 @@ export async function propor(session: CoreSession, deps: PropostaDeps): Promise<
     return { ok: false, reason: 'model_failed', catalog };
   }
 
-  // Guardrail: só ids elegíveis da própria pessoa; o resto é descartado.
+
   const discarded: Descarte[] = [];
+  // Guardrails em código, independentes do modelo:
+  // - só ids elegíveis da própria pessoa;
+  // - desejo de comida nunca recebe bebida (nem como "atende", nem como substituto).
+  const itemDoCatalogo = new Map(catalog.menuItems.map((i) => [i.id, i]));
   const classificadas: PessoaClassificada[] = classificacao.pessoas.map((p) => {
-    const permitidos = new Set(pessoas.find((x) => x.participant.id === p.participantId)?.itensPermitidos.map((i) => i.id));
-    const filtrar = (ids: readonly string[]) =>
+    const pessoa = pessoas.find((x) => x.participant.id === p.participantId);
+    const permitidos = new Set(pessoa?.itensPermitidos.map((i) => i.id));
+    const filtrar = (ids: readonly string[], desejo: string) =>
       [...new Set(ids)].filter((id) => {
-        if (permitidos.has(id)) return true;
-        discarded.push({ participantId: p.participantId, menuItemId: id, reason: 'not_eligible' });
-        return false;
+        if (!permitidos.has(id)) {
+          discarded.push({ participantId: p.participantId, menuItemId: id, reason: 'not_eligible' });
+          return false;
+        }
+        const item = itemDoCatalogo.get(id);
+        if (item && categoriaDoDesejo(desejo) === 'food' && categoriaDoItem(item) === 'drink') {
+          discarded.push({ participantId: p.participantId, menuItemId: id, reason: 'drink_for_food' });
+          return false;
+        }
+        return true;
       });
-    return { participantId: p.participantId, desejos: p.desejos.map((d) => ({ atende: filtrar(d.atende), substitutos: filtrar(d.substitutos) })) };
+    return {
+      participantId: p.participantId,
+      desejos: p.desejos.map((d, i) => {
+        const desejo = pessoa?.desejos[i] ?? '';
+        return { atende: filtrar(d.atende, desejo), substitutos: filtrar(d.substitutos, desejo) };
+      }),
+    };
   });
+
+  /** Substituto da mesma categoria do desejo (para o desempate). */
+  const mesmaCategoria = (e: Escolha): boolean => {
+    const desejo = pessoas.find((x) => x.participant.id === e.participantId)?.desejos[e.desejo] ?? '';
+    const item = itemDoCatalogo.get(e.menuItemId);
+    return !item || categoriaDoItem(item) === categoriaDoDesejo(desejo);
+  };
 
   const itemPorId = new Map(catalog.menuItems.map((i) => [i.id, i]));
   const lojaDoItem = new Map(catalog.menuItems.map((i) => [i.id, i.storeId]));
@@ -157,7 +183,7 @@ export async function propor(session: CoreSession, deps: PropostaDeps): Promise<
   const problemas: ProblemaProposta[] = [];
   for (const combinacao of combinacoes) {
     const escolhas = escolherNaCombinacao(combinacao, classificadas, lojaDoItem);
-    const avaliada = avaliarCombinacao(escolhas, session, catalog, classificadas, itemPorId, deps.proposalId);
+    const avaliada = avaliarCombinacao(escolhas, session, catalog, classificadas, itemPorId, deps.proposalId, mesmaCategoria);
     if (avaliada.opcao) validas.push(avaliada.opcao);
     else problemas.push(...avaliada.problems);
   }
@@ -257,6 +283,7 @@ function avaliarCombinacao(
   classificadas: readonly PessoaClassificada[],
   itemPorId: ReadonlyMap<MenuItemId, MenuItem>,
   proposalId: string,
+  mesmaCategoria: (escolha: Escolha) => boolean,
 ): { opcao?: OpcaoValida; problems: ProblemaProposta[] } {
   let escolhas = [...escolhasIniciais];
   const descartes: Descarte[] = [];
@@ -284,7 +311,7 @@ function avaliarCombinacao(
     const problems = verificarProposta(proposal, session, catalog);
     if (problems.length === 0) {
       return {
-        opcao: { proposal, metricas: medir(escolhas, classificadas, orders.length, proposal.split.totalCents), escolhas, descartes },
+        opcao: { proposal, metricas: medir(escolhas, classificadas, orders.length, proposal.split.totalCents, mesmaCategoria), escolhas, descartes },
         problems,
       };
     }

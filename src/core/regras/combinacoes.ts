@@ -67,6 +67,8 @@ export interface Metricas {
   faltando: number;
   substitutos: number;
   lojas: number;
+  /** Substitutos de categoria diferente do desejo (ex.: comida no lugar de bebida). */
+  substitutosForaDaCategoria: number;
   totalCents: MoneyCents;
 }
 
@@ -75,17 +77,27 @@ export function medir(
   pessoas: readonly PessoaClassificada[],
   lojas: number,
   totalCents: MoneyCents,
+  mesmaCategoria: (escolha: Escolha) => boolean = () => true,
 ): Metricas {
   const atendidos = pessoas.filter((p) =>
     p.desejos.every((_, i) => escolhas.some((e) => e.participantId === p.participantId && e.desejo === i && !e.isSubstitute)),
   ).length;
   const desejos = pessoas.reduce((t, p) => t + p.desejos.length, 0);
-  return { atendidos, faltando: desejos - escolhas.length, substitutos: escolhas.filter((e) => e.isSubstitute).length, lojas, totalCents };
+  const substitutos = escolhas.filter((e) => e.isSubstitute);
+  return {
+    atendidos,
+    faltando: desejos - escolhas.length,
+    substitutos: substitutos.length,
+    lojas,
+    substitutosForaDaCategoria: substitutos.filter((e) => !mesmaCategoria(e)).length,
+    totalCents,
+  };
 }
 
 /**
  * Ordem de preferência: mais pessoas atendidas com o que pediram > menos
- * desejos sem item > menos substitutos > menos lojas > menor total.
+ * desejos sem item > menos substitutos > menos lojas > substitutos da mesma
+ * categoria do desejo > menor total.
  * ("menos desejos sem item" impede que deixar alguém sem nada vença um substituto.)
  */
 export function compararMetricas(a: Metricas, b: Metricas): number {
@@ -94,6 +106,7 @@ export function compararMetricas(a: Metricas, b: Metricas): number {
     a.faltando - b.faltando ||
     a.substitutos - b.substitutos ||
     a.lojas - b.lojas ||
+    a.substitutosForaDaCategoria - b.substitutosForaDaCategoria ||
     a.totalCents - b.totalCents
   );
 }

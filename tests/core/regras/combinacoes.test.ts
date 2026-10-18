@@ -56,10 +56,11 @@ describe('medir e compararMetricas', () => {
       1,
       2000,
     );
-    expect(m).toEqual({ atendidos: 1, faltando: 1, substitutos: 1, lojas: 1, totalCents: 2000 });
+    expect(m).toEqual({ atendidos: 1, faltando: 1, substitutos: 1, lojas: 1, substitutosForaDaCategoria: 0, totalCents: 2000 });
   });
 
-  const m = (atendidos: number, faltando: number, substitutos: number, lojas: number, totalCents: number): Metricas => ({
+  const m = (atendidos: number, faltando: number, substitutos: number, lojas: number, totalCents: number, fora = 0): Metricas => ({
+    substitutosForaDaCategoria: fora,
     atendidos,
     faltando,
     substitutos,
@@ -72,9 +73,19 @@ describe('medir e compararMetricas', () => {
     ['menos desejos sem item (substituto vence ficar sem nada)', m(1, 0, 1, 2, 9000), m(1, 1, 0, 1, 1000)],
     ['menos substitutos', m(1, 0, 0, 2, 9000), m(1, 0, 1, 1, 1000)],
     ['menos lojas', m(1, 0, 0, 1, 9000), m(1, 0, 0, 2, 1000)],
+    ['substituto da mesma categoria do desejo', m(1, 0, 1, 1, 9000, 0), m(1, 0, 1, 1, 1000, 1)],
     ['menor total', m(1, 0, 0, 1, 1000), m(1, 0, 0, 1, 1001)],
   ])('%s vence', (_nome, melhor, pior) => {
     expect(compararMetricas(melhor, pior)).toBeLessThan(0);
     expect(compararMetricas(pior, melhor)).toBeGreaterThan(0);
+  });
+});
+
+describe('medir: categoria do substituto', () => {
+  it('conta substitutos fora da categoria pelo predicado', () => {
+    const pessoas: PessoaClassificada[] = [{ participantId: 'p', desejos: [{ atende: [], substitutos: [] }] }];
+    const escolha = { participantId: 'p', menuItemId: 'x', storeId: 'A', isSubstitute: true, desejo: 0 };
+    expect(medir([escolha], pessoas, 1, 100, () => false).substitutosForaDaCategoria).toBe(1);
+    expect(medir([escolha], pessoas, 1, 100).substitutosForaDaCategoria).toBe(0);
   });
 });

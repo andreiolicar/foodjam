@@ -76,7 +76,7 @@ Sem HTTP: o Telegram importa o core e chama a fachada `criarAgente` (`agente.ts`
 - `ParticipantPreferences`: `foodPreferences` (gosto e atributos), `wishes` (itens a receber, um por entrada: "um lanche e um bolo" → 2 itens, até 3), `dietaryRestrictions` (restrição dura, de saúde), `avoids` (rejeição de gosto) e `budgetCents` (privado).
 - `SessionStatus`: `collecting`, `reviewing`, `awaiting_confirmation`, `closed`, `cancelled`.
 - `IncomingMessage`, `CoreAction`.
-- Catálogo e proposta: `Store`, `MenuItem`, `ProposedItem` (com `isSubstitute?`), `StoreOrder`, `ParticipantShare`, `Split`, `Proposal`.
+- Catálogo e proposta: `Store`, `MenuItem` (com `category?`: comida ou bebida), `ProposedItem` (com `isSubstitute?`), `StoreOrder`, `ParticipantShare`, `Split`, `Proposal`.
 - Fechamento: `OrderAuthorization` e **`AuthorizedOrder`** — fronteira com quem executa o pedido.
 
 Alterações aqui são mínimas e combinadas com o time; consuma com `import type`.
@@ -97,10 +97,15 @@ npm run avaliar:coleta -- --intervalo 4000   # ms entre chamadas, para camadas g
 npm run listar:modelos   # GET {AI_BASE_URL}/models: ids exatos para AI_MODEL
 ```
 
-## Pendências
+## Estado: congelamento de funcionalidades
 
-- Medir o modelo real com `npm run avaliar:coleta` (o 100% atual é do fake heurístico).
-- `getStore(storeId)` na `CatalogPort`: proposta em `docs/proposta-catalog-getstore.md`, a combinar com o módulo iFood.
+O core está congelado: daqui em diante, só correções de bug e o que a integração com o bot (Telegram) e com o MCP do iFood exigir.
+
+## Pendências e melhorias futuras
+
 - Integração com o Telegram e com a `CatalogPort` real em `src/index.ts` (a fachada já está pronta; falta a ligação).
+- `getStore(storeId)` na `CatalogPort`: proposta em `docs/proposta-catalog-getstore.md`, a combinar com o módulo iFood.
 - Sessões só em memória: reiniciar o processo perde os pedidos em andamento.
 - Regras de restrição são palavras-chave conservadoras, casadas como palavras inteiras (`mel` não casa "caramelo"; radicais explícitos como `bovin*`); itens sem descrição saem como `uncertain` para confirmar.
+- Categoria comida/bebida: quando o catálogo não informa `category`, o core infere pelo nome e pela descrição (só é bebida quando fica claro). O módulo iFood pode preencher `category` a partir da seção do cardápio para ficar exato.
+- Melhoria futura: atributos como "barato" às vezes viram item em `wishes` ("tô sem grana, algo barato" → `["algo barato"]`). Não quebra a proposta (a classificação procura itens baratos), mas o ideal é deixar atributos só em `foodPreferences`.
