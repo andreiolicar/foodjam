@@ -98,21 +98,30 @@ describe('StoreOrderSchema', () => {
     expect(StoreOrderSchema.safeParse({ ...order(), items: [item('ana', 2500, { storeId: 'outra' })] }).success).toBe(false);
     expect(StoreOrderSchema.safeParse({ ...order(), items: [] }).success).toBe(false);
   });
+
+  it('total inclui a taxa de serviço quando ela existe', () => {
+    expect(StoreOrderSchema.safeParse({ ...order(), serviceFeeCents: 155, totalCents: 3255 }).success).toBe(true);
+    expect(StoreOrderSchema.safeParse({ ...order(), serviceFeeCents: 155 }).success).toBe(false);
+    expect(StoreOrderSchema.safeParse({ ...order(), serviceFeeCents: -1, totalCents: 3099 }).success).toBe(false);
+  });
 });
 
 describe('SplitSchema', () => {
   it('rejeita partes que não somam o total ou participante repetido', () => {
-    const share = { participantId: 'ana', itemsCents: 1000, deliveryCents: 100, totalCents: 1100 };
+    const share = { participantId: 'ana', itemsCents: 1000, deliveryCents: 100, serviceCents: 0, totalCents: 1100 };
     expect(SplitSchema.safeParse({ shares: [share], totalCents: 1100 }).success).toBe(true);
     expect(SplitSchema.safeParse({ shares: [share], totalCents: 1101 }).success).toBe(false);
     expect(SplitSchema.safeParse({ shares: [share, share], totalCents: 2200 }).success).toBe(false);
     expect(SplitSchema.safeParse({ shares: [{ ...share, totalCents: 1000 }], totalCents: 1000 }).success).toBe(false);
   });
 
-  it('parte individual precisa ter total = itens + entrega', () => {
-    const share = { participantId: 'ana', itemsCents: 1000, deliveryCents: 100, totalCents: 1100 };
+  it('parte individual precisa ter total = itens + entrega + serviço', () => {
+    const share = { participantId: 'ana', itemsCents: 1000, deliveryCents: 100, serviceCents: 0, totalCents: 1100 };
     expect(ParticipantShareSchema.safeParse(share).success).toBe(true);
     expect(ParticipantShareSchema.safeParse({ ...share, totalCents: 1099 }).success).toBe(false);
+    expect(ParticipantShareSchema.safeParse({ ...share, serviceCents: 50, totalCents: 1150 }).success).toBe(true);
+    expect(ParticipantShareSchema.safeParse({ ...share, serviceCents: 50 }).success).toBe(false);
+    expect(ParticipantShareSchema.safeParse({ itemsCents: 1000, deliveryCents: 100, totalCents: 1100, participantId: 'ana' }).success).toBe(false);
   });
 });
 

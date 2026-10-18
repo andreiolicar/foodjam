@@ -166,16 +166,19 @@ describe('propor: guardrails', () => {
     expect(llm.requests[0]?.prompt).not.toMatch(/"burger-/);
   });
 
-  it('orçamento: quem passa do limite perde primeiro o substituto e o rateio é refeito', async () => {
-    // Bia: bolo (R$ 8,90) + substituto Misto (R$ 11,90) + entrega R$ 4,90 > R$ 20.
+  it('orçamento: quem passa do limite mantém os itens; o valor vira pergunta para a pessoa', async () => {
+    // Bia: bolo (R$ 8,90) + substituto Misto (R$ 11,90) + entrega R$ 4,90 + taxa R$ 1,04 > R$ 20.
     const session = sessao(pessoa('bia', { wishes: ['bolo de cenoura', 'lanche natural'], budgetCents: 2000 }));
     const result = await proporOk(
       session,
       llmCom({ bia: [{ atende: ['pad-bolo-cenoura'] }, { atende: [], substitutos: ['pad-misto'] }] }),
     );
-    expect(itensDe(result)).toEqual([['bia', 'pad-bolo-cenoura', false]]);
-    expect(result.discarded).toContainEqual({ participantId: 'bia', menuItemId: 'pad-misto', reason: 'over_budget' });
-    expect(result.proposal.split.shares[0]?.totalCents).toBe(890 + 490);
+    expect(itensDe(result)).toEqual([
+      ['bia', 'pad-bolo-cenoura', false],
+      ['bia', 'pad-misto', true],
+    ]);
+    expect(result.proposal.split.shares[0]).toMatchObject({ itemsCents: 890 + 1190, deliveryCents: 490, serviceCents: 104 });
+    expect(result.proposal.split.shares[0]?.totalCents).toBe(890 + 1190 + 490 + 104);
   });
 
   it('orçamento e preços nunca entram no prompt da classificação', async () => {
@@ -341,13 +344,14 @@ describe('propor: bebida não substitui comida', () => {
   });
 });
 
-describe('propor: orçamento vale para a soma dos itens', () => {
-  it('X-Salada sozinho na hamburgueria com "até 30 reais" fica no pedido (entrega não tira ninguém)', async () => {
+describe('propor: orçamento e taxa de serviço', () => {
+  it('X-Salada sozinho com "até 30 reais" fica no pedido; o total com entrega e taxa passa e vira pergunta', async () => {
     const session = sessao(pessoa('ana', { wishes: ['hambúrguer'], budgetCents: 3000 }));
     const result = await proporOk(session, llmCom({ ana: [{ atende: ['burger-x-salada'] }] }));
     expect(itensDe(result)).toEqual([['ana', 'burger-x-salada', false]]);
-    // R$ 25,90 + entrega inteira R$ 7,99 = R$ 33,89: acima de R$ 30, mas os itens cabem.
-    expect(result.proposal.split.shares[0]).toMatchObject({ itemsCents: 2590, totalCents: 3389 });
+    // R$ 25,90 + entrega R$ 7,99 + taxa de serviço R$ 1,30 (5% no fake) = R$ 35,19.
+    expect(result.proposal.split.shares[0]).toMatchObject({ itemsCents: 2590, deliveryCents: 799, serviceCents: 130, totalCents: 3519 });
+    expect(result.proposal.orders[0]?.serviceFeeCents).toBe(130);
     expect(result.metricas.acimaDoOrcamentoComEntrega).toBe(1);
   });
 
@@ -391,5 +395,37 @@ describe('propor: orçamento vale para a soma dos itens', () => {
     expect(result.proposal.orders.map((o) => o.storeId)).toEqual(['B']);
     expect(result.metricas.acimaDoOrcamentoComEntrega).toBe(0);
     expect(result.alternative?.orders.map((o) => o.storeId)).toEqual(['A']);
+  });
+});
+
+describe('propor: cotação da taxa de serviço', () => {
+  it('cota só a proposta escolhida e a alternativa, uma vez por loja', async () => {
+    const catalog = new CatalogoFake();
+    const result = await propor(grupo(), deps(llmCom(classesDoGrupo), { catalog }));
+    if (!result.ok) throw new Error(result.reason);
+    const cotadas = catalog.calls.filter((c) => c.operation === 'quoteOrder');
+    const lojas = [...result.proposal.orders, ...(result.alternative?.orders ?? [])].map((o) => o.storeId);
+    expect(cotadas.map((c) => c.input)).toEqual(lojas);
+    expect(cotadas.every((c) => c.address === ENDERECO.formatted)).toBe(true);
+    for (const order of [...result.proposal.orders, ...(result.alternative?.orders ?? [])]) {
+      expect(order.serviceFeeCents).toBeDefined();
+      expect(order.totalCents).toBe(order.subtotalCents + order.deliveryFeeCents + (order.serviceFeeCents ?? 0));
+    }
+    expect(result.proposal.split.totalCents).toBe(result.proposal.orders.reduce((s, o) => s + o.totalCents, 0));
+    expect(result.taxaServicoIndisponivel).toBeUndefined();
+  });
+
+  it('se a cotação falhar, a proposta sai sem a taxa e informa as lojas', async () => {
+    const fake = new CatalogoFake();
+    const catalog = Object.assign(Object.create(fake) as CatalogoFake, {
+      quoteOrder: async () => {
+        throw new Error('ECONNRESET');
+      },
+    });
+    const result = await propor(sessao(pessoa('ana', { wishes: ['lanche'] })), deps(llmCom({ ana: [{ atende: ['pad-misto'] }] }), { catalog }));
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.proposal.orders[0]?.serviceFeeCents).toBeUndefined();
+    expect(result.proposal.split.shares[0]?.serviceCents).toBe(0);
+    expect(result.taxaServicoIndisponivel).toEqual([result.proposal.orders[0]?.storeId]);
   });
 });

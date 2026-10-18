@@ -51,7 +51,7 @@ describe('ajustar', () => {
 
     expect(result.proposal.orders.map((o) => o.storeId)).toEqual([LOJAS.padaria, LOJAS.hamburgueria]);
     const caio = result.proposal.split.shares.find((s) => s.participantId === 'caio');
-    expect(caio).toEqual({ participantId: 'caio', itemsCents: 2590, deliveryCents: 799, totalCents: 3389 });
+    expect(caio).toEqual({ participantId: 'caio', itemsCents: 2590, deliveryCents: 799, serviceCents: 0, totalCents: 3389 });
     expect(result.proposal.split.totalCents).toBe(soma(result.proposal.orders.map((o) => o.totalCents)));
   });
 
@@ -70,12 +70,11 @@ describe('ajustar', () => {
     expect(!tres.ok && tres.problems[0]?.code).toBe('invalid_proposal');
   });
 
-  it('soma dos itens acima do orçamento é recusada, sem expor o valor', async () => {
-    // Lanche Natural (R$ 13,90) passa de R$ 10.
+  it('ajuste acima do orçamento passa: o orçamento vira pergunta para a pessoa depois', async () => {
+    // Lanche Natural (R$ 13,90) passa de R$ 10; quem decide é a própria pessoa.
     const { catalog, revisao } = await cenarioPadaria(1000);
     const result = ajustar(revisao, { participantId: 'caio', storeId: LOJAS.padaria, menuItemId: 'pad-lanche-natural' }, catalog);
-    expect(result).toEqual({ ok: false, problems: [{ code: 'over_budget', participantId: 'caio' }] });
-    expect(JSON.stringify(result)).not.toContain('1000');
+    expect(result.ok).toBe(true);
   });
 
   it('a parte da entrega não tira ninguém: itens dentro do orçamento passam mesmo com o total acima', async () => {

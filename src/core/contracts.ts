@@ -82,6 +82,32 @@ export type CoreAction =
       address: DeliveryAddress;
       kind: 'default' | 'typed';
       text: string;
+    }
+  | {
+      /**
+       * Perguntar à pessoa, no privado, se aceita passar do orçamento, com
+       * botões [Aceito] [Quero outro]. totalCents inclui itens, entrega e taxa de serviço.
+       */
+      type: 'budget_question';
+      sessionId: SessionId;
+      participantId: ParticipantId;
+      proposalId: string;
+      totalCents: MoneyCents;
+      text: string;
+    }
+  | {
+      /**
+       * Sugerir, no privado, outro item que caiba no orçamento: botões
+       * [Aceito a sugestão] [Fico sem]. Sem menuItemId, não há item que caiba:
+       * só o botão [Fico sem].
+       */
+      type: 'item_suggestion';
+      sessionId: SessionId;
+      participantId: ParticipantId;
+      proposalId: string;
+      menuItemId?: MenuItemId;
+      totalCents?: MoneyCents;
+      text: string;
     };
 
 /** Endereço de entrega já validado e normalizado pelo iFood. */
@@ -137,6 +163,9 @@ export interface StoreOrder {
   items: ProposedItem[];
   subtotalCents: MoneyCents;
   deliveryFeeCents: MoneyCents;
+  /** Taxa de serviço cotada no iFood para este pedido. Ausente: não foi possível cotar. */
+  serviceFeeCents?: MoneyCents;
+  /** subtotalCents + deliveryFeeCents + serviceFeeCents (0 se ausente). */
   totalCents: MoneyCents;
 }
 
@@ -144,6 +173,9 @@ export interface ParticipantShare {
   participantId: ParticipantId;
   itemsCents: MoneyCents;
   deliveryCents: MoneyCents;
+  /** Parte da taxa de serviço das lojas em que a pessoa pediu (dividida como a entrega). */
+  serviceCents: MoneyCents;
+  /** itemsCents + deliveryCents + serviceCents: é o que vale para o orçamento. */
   totalCents: MoneyCents;
 }
 

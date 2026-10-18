@@ -51,6 +51,7 @@ export const StoreOrderSchema = z
     items: z.array(ProposedItemSchema).min(1),
     subtotalCents: MoneyCentsSchema,
     deliveryFeeCents: MoneyCentsSchema,
+    serviceFeeCents: MoneyCentsSchema.exactOptional(),
     totalCents: MoneyCentsSchema,
   })
   .superRefine((order, ctx) => {
@@ -60,8 +61,8 @@ export const StoreOrderSchema = z
     if (order.subtotalCents !== sum(order.items.map((i) => i.unitPriceCents * i.quantity))) {
       ctx.addIssue({ code: 'custom', message: 'subtotalCents não bate com os itens', path: ['subtotalCents'] });
     }
-    if (order.totalCents !== order.subtotalCents + order.deliveryFeeCents) {
-      ctx.addIssue({ code: 'custom', message: 'totalCents ≠ subtotalCents + deliveryFeeCents', path: ['totalCents'] });
+    if (order.totalCents !== order.subtotalCents + order.deliveryFeeCents + (order.serviceFeeCents ?? 0)) {
+      ctx.addIssue({ code: 'custom', message: 'totalCents ≠ subtotal + entrega + serviço', path: ['totalCents'] });
     }
   });
 
@@ -70,10 +71,11 @@ export const ParticipantShareSchema = z
     participantId: IdSchema,
     itemsCents: MoneyCentsSchema,
     deliveryCents: MoneyCentsSchema,
+    serviceCents: MoneyCentsSchema,
     totalCents: MoneyCentsSchema,
   })
-  .refine((share) => share.totalCents === share.itemsCents + share.deliveryCents, {
-    message: 'totalCents ≠ itemsCents + deliveryCents',
+  .refine((share) => share.totalCents === share.itemsCents + share.deliveryCents + share.serviceCents, {
+    message: 'totalCents ≠ itens + entrega + serviço',
     path: ['totalCents'],
   });
 

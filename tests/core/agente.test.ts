@@ -199,6 +199,7 @@ describe('agente: proposta e fechamento', () => {
       validateAddress: (t) => port.validateAddress(t),
       searchStores: async (q) => (await port.searchStores(q)).map((s) => ({ ...s, isOpen: false })),
       getMenu: (id) => port.getMenu(id),
+      quoteOrder: (id, itens, end) => port.quoteOrder(id, itens, end),
     };
     const { iris, sessions } = agente({ catalog: lojasFechadas });
     await sessions.set(record);
@@ -217,6 +218,7 @@ describe('agente: proposta e fechamento', () => {
         throw new Error('ECONNRESET');
       },
       getMenu: async () => [],
+      quoteOrder: async () => ({ serviceFeeCents: 0 }),
     };
     const { iris } = agente({ catalog: quebrado, onError: (e) => erros.push(e) });
     await abrir(iris);
@@ -437,5 +439,129 @@ describe('agente: endereço de entrega', () => {
     const r = await iris.confirmarEndereco(CHAT, 'ana');
     expect(r.session?.proposal).toBeDefined();
     expect(r.session?.status).toBe('reviewing');
+  });
+});
+
+describe('agente: orçamento com entrega e taxa de serviço', () => {
+  /** Ana quer lanche; Bia quer bolo "até 10 reais": o bolo cabe, mas com entrega e taxa passa. */
+  async function biaAcima(extra: Partial<AgenteDeps> = {}) {
+    const ctx = agente(extra);
+    await abrir(ctx.iris);
+    await ctx.iris.mensagem(msg('ana', 'quero um lanche'));
+    await ctx.iris.mensagem(msg('bia', 'bolo de cenoura, até 10 reais'), 'Bia');
+    const proposta = await ctx.iris.propor(CHAT, 'ana');
+    expect(proposta.outcome).toBe('proposed');
+    return { ...ctx, proposta };
+  }
+  const shareDe = (r: { proposal?: { split: { shares: { participantId: string; totalCents: number }[] } } }, id: string) =>
+    r.proposal?.split.shares.find((s) => s.participantId === id);
+
+  it('propor cota a taxa de serviço e pergunta no privado a quem passou', async () => {
+    const { proposta } = await biaAcima();
+    expect(proposta.proposal?.orders.every((o) => o.serviceFeeCents !== undefined)).toBe(true);
+    expect(proposta.pendingBudget).toEqual(['bia']);
+    const pergunta = proposta.actions.find((a) => a.type === 'budget_question');
+    expect(pergunta).toMatchObject({ participantId: 'bia', totalCents: shareDe(proposta, 'bia')?.totalCents });
+    // O valor da Bia só aparece em ação privada.
+    const total = String(shareDe(proposta, 'bia')?.totalCents);
+    const grupo = proposta.actions.filter((a) => a.type === 'send_message' && a.participantId === undefined);
+    expect(JSON.stringify(grupo)).not.toContain(total);
+  });
+
+  it('fechar fica bloqueado até a pessoa responder; depois de aceitar, fecha com a taxa', async () => {
+    const { iris } = await biaAcima();
+
+    const bloqueado = await iris.fechar(CHAT, 'ana');
+    expect(bloqueado.outcome).toBe('budget_pending');
+    expect(bloqueado.problems).toEqual([{ code: 'budget_pending', participantIds: ['bia'] }]);
+    expect(bloqueado.actions).toEqual([{ type: 'send_message', sessionId: CHAT, text: publico.TEXTOS_ORCAMENTO.aguardando(['Bia']) }]);
+
+    const aceite = await iris.responderOrcamento(CHAT, 'bia', 'aceito');
+    expect(aceite.outcome).toBe('budget_accepted');
+    expect(aceite.pendingBudget).toEqual([]);
+
+    const fechado = await iris.fechar(CHAT, 'ana');
+    expect(fechado.outcome).toBe('closed');
+    expect(fechado.order?.orders.every((o) => o.serviceFeeCents !== undefined)).toBe(true);
+    expect(fechado.order?.split.shares.reduce((s, p) => s + p.totalCents, 0)).toBe(fechado.order?.split.totalCents);
+  });
+
+  it('só a própria pessoa responde a pergunta dela', async () => {
+    const { iris } = await biaAcima();
+    expect((await iris.responderOrcamento(CHAT, 'ana', 'aceito')).outcome).toBe('budget_nothing_pending');
+    expect((await iris.fechar(CHAT, 'ana')).outcome).toBe('budget_pending');
+  });
+
+  it('"fico sem" tira a pessoa, recota a taxa e libera o fechamento', async () => {
+    const catalog = new CatalogoFake();
+    const { iris } = await biaAcima({ catalog });
+    const antes = catalog.calls.filter((c) => c.operation === 'quoteOrder').length;
+
+    const r = await iris.responderOrcamento(CHAT, 'bia', 'fico_sem');
+    expect(r.outcome).toBe('budget_left_out');
+    expect(r.proposal?.orders.flatMap((o) => o.items).some((i) => i.participantId === 'bia')).toBe(false);
+    expect(catalog.calls.filter((c) => c.operation === 'quoteOrder').length).toBeGreaterThan(antes);
+    expect(r.actions.some((a) => a.type === 'session_updated')).toBe(true);
+    expect((await iris.fechar(CHAT, 'ana')).outcome).toBe('closed');
+  });
+
+  it('ajuste do grupo zera as respostas: quem aceitou e continua acima é perguntado de novo', async () => {
+    const { iris } = await biaAcima();
+    await iris.responderOrcamento(CHAT, 'bia', 'aceito');
+    const ajuste = await iris.mensagem(msg('ana', 'troca o meu por um café'));
+    expect(ajuste.outcome).toBe('adjusted');
+    expect(ajuste.actions.some((a) => a.type === 'budget_question' && a.participantId === 'bia')).toBe(true);
+    expect((await iris.fechar(CHAT, 'ana')).outcome).toBe('budget_pending');
+  });
+
+  it('taxa de serviço mudou no fechamento: recusa, atualiza a proposta e fecha na segunda vez', async () => {
+    const fake = new CatalogoFake();
+    let acrescimo = 0;
+    const catalog: CatalogPort = {
+      validateAddress: (t) => fake.validateAddress(t),
+      searchStores: (q, a) => fake.searchStores(q, a),
+      getMenu: (id, a) => fake.getMenu(id, a),
+      quoteOrder: async (id, itens, a) => {
+        const { serviceFeeCents } = await fake.quoteOrder(id, itens, a);
+        return { serviceFeeCents: serviceFeeCents + acrescimo };
+      },
+    };
+    const { iris, proposta } = await biaAcima({ catalog });
+    await iris.responderOrcamento(CHAT, 'bia', 'aceito');
+
+    acrescimo = 50;
+    const recusado = await iris.fechar(CHAT, 'ana');
+    expect(recusado.outcome).toBe('close_rejected');
+    expect(recusado.problems?.[0]).toMatchObject({ code: 'service_fee_changed' });
+    expect(recusado.proposal?.id).toBe(`${proposta.proposal?.id}-r1`);
+    expect(recusado.actions[0]).toEqual({ type: 'send_message', sessionId: CHAT, text: TEXTOS.taxaMudou });
+    // A Bia aceitou um valor menor: é perguntada de novo pelo valor novo.
+    expect(recusado.pendingBudget).toEqual(['bia']);
+
+    await iris.responderOrcamento(CHAT, 'bia', 'aceito');
+    expect((await iris.fechar(CHAT, 'ana')).outcome).toBe('closed');
+  });
+
+  it('cotação indisponível no propor: a proposta sai sem a taxa e o grupo é avisado', async () => {
+    const fake = new CatalogoFake();
+    const catalog: CatalogPort = {
+      validateAddress: (t) => fake.validateAddress(t),
+      searchStores: (q, a) => fake.searchStores(q, a),
+      getMenu: (id, a) => fake.getMenu(id, a),
+      quoteOrder: async () => {
+        throw new Error('timeout');
+      },
+    };
+    const { iris } = agente({ catalog });
+    await abrir(iris);
+    await iris.mensagem(msg('ana', 'quero um lanche'));
+    const r = await iris.propor(CHAT, 'ana');
+    expect(r.outcome).toBe('proposed');
+    expect(r.proposal?.orders[0]?.serviceFeeCents).toBeUndefined();
+    expect(r.actions).toContainEqual({ type: 'send_message', sessionId: CHAT, text: publico.TEXTOS_ORCAMENTO.taxaIndisponivel });
+    // No fechamento, sem conseguir cotar, não fecha.
+    const fechar = await iris.fechar(CHAT, 'ana');
+    expect(fechar.outcome).toBe('close_rejected');
+    expect(fechar.problems).toEqual([{ code: 'service_fee_unavailable', storeId: r.proposal?.orders[0]?.storeId }]);
   });
 });
