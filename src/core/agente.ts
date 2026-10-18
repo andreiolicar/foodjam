@@ -10,7 +10,15 @@ import type { Descarte, ItemIncerto } from './proposta.js';
 import { propor } from './proposta.js';
 import type { ProblemaProposta } from './regras/verificar-proposta.js';
 import type { CoreSession } from './sessao.js';
-import { NaoAutorizadoError, TransicaoInvalidaError, cancelar, criarSessao, pedirConfirmacao, voltarParaColeta } from './sessao.js';
+import {
+  NaoAutorizadoError,
+  TransicaoInvalidaError,
+  cancelar,
+  criarSessao,
+  pedirConfirmacao,
+  trocarPorAlternativa,
+  voltarParaColeta,
+} from './sessao.js';
 import { SessoesEmMemoria } from './sessoes.js';
 
 export const TEXTOS = {
@@ -19,6 +27,7 @@ export const TEXTOS = {
   sessaoEncerrada: 'Esse pedido já foi encerrado. Me mencione para começar outro.',
   faseInvalida: 'Isso não dá para fazer agora, nesta etapa do pedido.',
   semProposta: 'Não consegui montar uma proposta agora. Tente de novo em instantes.',
+  semAlternativa: 'Não há outra opção diferente para este pedido.',
   erroInterno: 'Tive um problema aqui. Pode tentar de novo?',
 } as const;
 
@@ -31,6 +40,8 @@ export interface Resposta {
   actions: CoreAction[];
   session?: CoreSession;
   proposal?: Proposal;
+  /** Segunda melhor combinação (itens diferentes), para o botão "Outra opção". */
+  alternative?: Proposal;
   order?: AuthorizedOrder;
   problems?: ProblemaProposta[];
   /** Na proposta: escolhas do modelo descartadas pelo código. */
@@ -73,6 +84,8 @@ export interface Agente {
   mensagens(sessionId: SessionId, itens: readonly ItemLote[]): Promise<Resposta>;
   /** Monta (ou refaz) a proposta. Só o organizador. */
   propor(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
+  /** Botão "Outra opção": troca a proposta pela alternativa (e de volta). Só o organizador. */
+  outraOpcao(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
   /** Volta da proposta para a coleta (ex.: entrou gente nova). Só o organizador. */
   reabrirColeta(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
   /** Autoriza e fecha. Só o organizador; idempotente. Devolve o AuthorizedOrder. */
@@ -253,9 +266,35 @@ export function criarAgente(deps: AgenteDeps): Agente {
             outcome: 'proposed',
             session: result.session,
             proposal: result.proposal,
+            ...(result.alternative && { alternative: result.alternative }),
             actions: result.actions,
             discarded: result.discarded,
             uncertain: result.uncertain,
+          };
+        }),
+      ),
+
+    outraOpcao: (sessionId, actorId) =>
+      enfileirar(sessionId, () =>
+        protegido(actorId, sessionId, async () => {
+          const record = await ativa(sessionId, actorId);
+          if (ehResposta(record)) return record;
+          exigirOrganizador(record.session, actorId, 'trocar de opção');
+          if (!record.session.alternative) {
+            return {
+              outcome: 'no_alternative',
+              session: record.session,
+              actions: [{ type: 'send_message', sessionId, participantId: actorId, text: TEXTOS.semAlternativa }],
+            };
+          }
+          const session = trocarPorAlternativa(record.session);
+          await salvar(record, session);
+          return {
+            outcome: 'switched',
+            session,
+            actions: [{ type: 'session_updated', session }],
+            ...(session.proposal && { proposal: session.proposal }),
+            ...(session.alternative && { alternative: session.alternative }),
           };
         }),
       ),

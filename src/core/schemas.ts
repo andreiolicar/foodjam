@@ -240,4 +240,8 @@ export function criarClassificacaoSchema(desejosPorPessoa: ReadonlyMap<string, n
 
 export type ClassificacaoOutput = z.infer<ReturnType<typeof criarClassificacaoSchema>>;
 
-export const JustificativaSchema = z.strictObject({ justification: JustificationSchema });
+/** Justificativa da proposta e, se houver, da alternativa, numa chamada só. */
+export const JustificativaSchema = z.strictObject({
+  justification: JustificationSchema,
+  alternativeJustification: JustificationSchema.nullable(),
+});

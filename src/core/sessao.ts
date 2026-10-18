@@ -12,6 +12,8 @@ export interface PendingQuestion {
 /** Estado interno do core; compatível com SessionState para a interface. */
 export interface CoreSession extends SessionState {
   proposal?: Proposal;
+  /** Segunda melhor combinação, para o botão "Outra opção". Some quando a proposta muda. */
+  alternative?: Proposal;
   closure?: Closure;
   pendingQuestions?: PendingQuestion[];
 }
@@ -70,19 +72,35 @@ export function criarSessao(input: Pick<SessionState, 'id' | 'organizerId' | 'pa
 }
 
 /** Coleta → proposta, ou troca a proposta atual durante a revisão. */
-export function apresentarProposta(session: CoreSession, proposal: Proposal): CoreSession {
+export function apresentarProposta(session: CoreSession, proposal: Proposal, alternative?: Proposal): CoreSession {
   transitar(session, 'reviewing');
-  if (proposal.sessionId !== session.id) {
-    throw new Error(`proposta ${proposal.id} é de outra sessão (${proposal.sessionId})`);
+  for (const p of [proposal, alternative]) {
+    if (p && p.sessionId !== session.id) throw new Error(`proposta ${p.id} é de outra sessão (${p.sessionId})`);
   }
-  return { ...session, status: 'reviewing', proposal };
+  // Proposta nova (ou ajustada) invalida a alternativa anterior.
+  const next: CoreSession = { ...session, status: 'reviewing', proposal };
+  if (alternative) next.alternative = alternative;
+  else delete next.alternative;
+  return next;
 }
 
-/** Proposta → coleta, descartando a proposta atual. */
+/**
+ * "Outra opção": a alternativa vira a proposta atual e a atual vira a
+ * alternativa (apertar de novo volta). Da confirmação, volta para revisão.
+ */
+export function trocarPorAlternativa(session: CoreSession): CoreSession {
+  transitar(session, 'reviewing');
+  const { proposal, alternative } = session;
+  if (!proposal || !alternative) throw new Error('não há alternativa para esta proposta');
+  return { ...session, status: 'reviewing', proposal: alternative, alternative: proposal };
+}
+
+/** Proposta → coleta, descartando a proposta atual e a alternativa. */
 export function voltarParaColeta(session: CoreSession): CoreSession {
   transitar(session, 'collecting');
   const next: CoreSession = { ...session, status: 'collecting' };
   delete next.proposal;
+  delete next.alternative;
   return next;
 }
 

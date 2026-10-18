@@ -2,7 +2,8 @@ import type { LlmPort, LlmRequest } from '../ports.js';
 import { TAG_ITENS_ATUAIS, TAG_OPCOES } from '../prompts/ajuste.js';
 import type { EntradaLote } from '../prompts/coleta.js';
 import { TAG_LOTE, TAG_MENSAGEM, TAG_PREFERENCIAS, desescaparDados, montarPromptColeta } from '../prompts/coleta.js';
-import { TAG_ITENS, TAG_PESSOAS } from '../prompts/proposta.js';
+import type { ResumoEscolha } from '../prompts/proposta.js';
+import { TAG_ALTERNATIVA, TAG_ESCOLHA, TAG_ITENS, TAG_PESSOAS, justificativaPadrao } from '../prompts/proposta.js';
 
 export type Responder = (request: LlmRequest, index: number) => unknown;
 
@@ -91,7 +92,7 @@ export function responderHeuristico(request: LlmRequest): unknown {
     case 'proposta_classificacao':
       return heuristicaClassificacao(request);
     case 'proposta_justificativa':
-      return { justification: 'Escolhi a combinação de lojas que mais atende o pedido de cada um.' };
+      return heuristicaJustificativa(request);
     case 'ajuste':
       return heuristicaAjuste(request);
     default:
@@ -234,4 +235,14 @@ function heuristicaColeta(request: LlmRequest): unknown {
   }
 
   return resultado(found ? 'preference' : 'irrelevant');
+}
+
+/** Justificativa pela mesma regra do fallback do código (sem adjetivos). */
+function heuristicaJustificativa(request: LlmRequest): unknown {
+  const escolha = JSON.parse(tag(request.prompt, TAG_ESCOLHA) || 'null') as ResumoEscolha;
+  const alternativa = JSON.parse(tag(request.prompt, TAG_ALTERNATIVA) || 'null') as ResumoEscolha | null;
+  return {
+    justification: justificativaPadrao(escolha),
+    alternativeJustification: alternativa ? justificativaPadrao(alternativa) : null,
+  };
 }

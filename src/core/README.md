@@ -30,7 +30,7 @@ qualquer fase não final ──cancelar──▶ cancelada
 | Fase | Arquivo | Modelo | O que faz |
 |---|---|---|---|
 | Coleta | `coleta.ts` | `fast`, sem ferramentas | Filtro barato (descarta vazias e só emoji), extrai `foodPreferences`, `dietaryRestrictions`, `avoids` e o trecho de orçamento (convertido em código). Perguntas ficam em `pendingQuestions`. `coletarLote` faz o mesmo para até 10 pessoas numa chamada, com schema montado com os ids do lote. |
-| Proposta | `proposta.ts` | `capable` (classificação) + `fast` (justificativa) | Busca lojas em código (`catalogo.ts`) e filtra itens elegíveis por pessoa (`regras/elegibilidade.ts`). O modelo só classifica, por desejo de cada pessoa, os itens em "atende", "substituto" ou "não serve". O código (`regras/combinacoes.ts`) enumera todas as combinações de 1 e 2 lojas, escolhe o melhor item por desejo, confere pedido mínimo e orçamento e escolhe: mais atendidos > menos desejos sem item > menos substitutos > menos lojas > menor total. O modelo só escreve a justificativa da opção escolhida. |
+| Proposta | `proposta.ts` | `capable` (classificação) + `fast` (justificativa) | Busca lojas em código (`catalogo.ts`) e filtra itens elegíveis por pessoa (`regras/elegibilidade.ts`). O modelo só classifica, por desejo de cada pessoa, os itens em "atende", "substituto" ou "não serve". O código (`regras/combinacoes.ts`) enumera todas as combinações de 1 e 2 lojas, escolhe o melhor item por desejo, confere pedido mínimo e orçamento e escolhe: mais atendidos > menos desejos sem item > menos substitutos > menos lojas > menor total. O modelo só escreve uma frase objetiva por opção (com os motivos dos substitutos, calculados em código). Devolve também a segunda melhor combinação (`alternative`, botão "Outra opção"). |
 | Ajuste | `ajuste.ts` | `fast` | `interpretarAjuste` converte texto em troca estruturada; `ajustar` troca o item da pessoa e recalcula. A pessoa só troca o próprio item. |
 | Fechamento | `fechamento.ts` | nenhum | Exige organizador e catálogo consultado há no máximo 60 s; revalida tudo e devolve `AuthorizedOrder`. |
 
@@ -55,7 +55,7 @@ Sem HTTP: o Telegram importa o core e chama a fachada `criarAgente` (`agente.ts`
 | Caminho | Conteúdo |
 |---|---|
 | `index.ts` | API pública: `criarAgente`, `SessoesEmMemoria`, tipos, fakes e `criarLlmDoAmbiente`. |
-| `agente.ts` | Fachada para a interface: iniciar, mensagem, mensagens (lote), propor, reabrirColeta, fechar, cancelar, obter. |
+| `agente.ts` | Fachada para a interface: iniciar, mensagem, mensagens (lote), propor, outraOpcao, reabrirColeta, fechar, cancelar, obter. |
 | `agrupador.ts` | `criarAgrupador`: debounce por chat; mensagens quase simultâneas viram um lote (uma chamada ao modelo para até 10 pessoas). |
 | `sessoes.ts` | `SessoesEmMemoria` (implementação da `SessionStore`). |
 | `contracts.ts` | Tipos compartilhados com o time (ver abaixo). |

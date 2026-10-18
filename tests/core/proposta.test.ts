@@ -3,9 +3,9 @@ import type { Participant, ParticipantPreferences } from '../../src/core/contrac
 import { CatalogoFake, LOJAS } from '../../src/core/fakes/catalogo-fake.js';
 import { FakeLlm, responderHeuristico } from '../../src/core/fakes/llm-fake.js';
 import type { LlmRequest } from '../../src/core/ports.js';
-import { SISTEMA_CLASSIFICACAO, SISTEMA_JUSTIFICATIVA } from '../../src/core/prompts/proposta.js';
+import { SISTEMA_CLASSIFICACAO, SISTEMA_JUSTIFICATIVA, justificativaPadrao } from '../../src/core/prompts/proposta.js';
 import type { PropostaDeps } from '../../src/core/proposta.js';
-import { JUSTIFICATIVA_PADRAO, desejosDe, propor } from '../../src/core/proposta.js';
+import { desejosDe, propor } from '../../src/core/proposta.js';
 import type { CoreSession } from '../../src/core/sessao.js';
 import { TransicaoInvalidaError, cancelar, criarSessao } from '../../src/core/sessao.js';
 import { AGORA } from './fixtures.js';
@@ -24,7 +24,7 @@ function llmCom(classes: Classes | (() => unknown), justificativa: string | Erro
   return new FakeLlm((request: LlmRequest) => {
     if (request.outputName === 'proposta_justificativa') {
       if (justificativa instanceof Error) throw justificativa;
-      return { justification: justificativa };
+      return { justification: justificativa, alternativeJustification: 'Alternativa de teste.' };
     }
     if (typeof classes === 'function') return classes();
     return {
@@ -226,10 +226,6 @@ describe('propor: guardrails', () => {
 });
 
 describe('propor: falhas e estados', () => {
-  it('justificativa falhando usa o texto padrão; a proposta sai mesmo assim', async () => {
-    const result = await proporOk(sessao(pessoa('ana', { wishes: ['lanche'] })), llmCom({ ana: [{ atende: ['pad-misto'] }] }, new Error('503')));
-    expect(result.proposal.justification).toBe(JUSTIFICATIVA_PADRAO);
-  });
 
   it('classificação falhando duas vezes: não propõe', async () => {
     const result = await propor(sessao(pessoa('ana', { wishes: ['lanche'] })), deps(new FakeLlm([{}, { pessoas: [] }])));
@@ -260,5 +256,52 @@ describe('propor: falhas e estados', () => {
     expect(llm.requests.map((r) => r.outputName)).toEqual(['proposta_classificacao', 'proposta_justificativa']);
     expect(result.proposal.orders.length).toBeLessThanOrEqual(2);
     expect(result.proposal.uncoveredParticipantIds).toEqual([]);
+  });
+});
+
+describe('propor: justificativa objetiva e alternativa', () => {
+  it('devolve a segunda melhor combinação, com itens diferentes, como alternativa', async () => {
+    const result = await proporOk(grupo(), llmCom(classesDoGrupo));
+    const assinatura = (p: { orders: { items: { participantId: string; menuItemId: string }[] }[] }) =>
+      p.orders.flatMap((o) => o.items.map((i) => `${i.participantId}:${i.menuItemId}`)).sort().join('|');
+
+    expect(result.alternative).toBeDefined();
+    expect(result.alternative?.id).toBe('p1-b');
+    expect(assinatura(result.alternative!)).not.toBe(assinatura(result.proposal));
+    expect(result.alternative?.justification).toBe('Alternativa de teste.');
+    expect(result.session.alternative).toEqual(result.alternative);
+    // A alternativa é pior ou igual pelo critério.
+    expect(result.metricasAlternativa).toBeDefined();
+  });
+
+  it('com uma única combinação possível, não há alternativa', async () => {
+    const llm = llmCom({ ana: [{ atende: ['pad-misto'] }] });
+    const result = await proporOk(sessao(pessoa('ana', { wishes: ['lanche'] })), llm);
+    expect(result.alternative).toBeUndefined();
+    const prompt = (llm.requests[1]?.prompt ?? '').replaceAll('&quot;', '"');
+    expect(prompt).toContain('<alternativa>null</alternativa>');
+  });
+
+  it('a justificativa recebe o motivo de cada substituto, calculado pelo código', async () => {
+    const llm = llmCom(classesDoGrupo);
+    await proporOk(grupo(), llm);
+    const prompt = llm.requests[1]?.prompt ?? '';
+    expect(prompt).toContain('o item pedido só existe em Hamburgueria do Zé, fora das lojas escolhidas');
+    expect(SISTEMA_JUSTIFICATIVA).toMatch(/UMA frase curta e objetiva/);
+    expect(SISTEMA_JUSTIFICATIVA).toMatch(/Sem adjetivos promocionais/);
+  });
+
+  it('se o modelo falhar, o código escreve a frase com os motivos (sem adjetivos)', async () => {
+    const result = await proporOk(grupo(), llmCom(classesDoGrupo, new Error('503')));
+    expect(result.proposal.justification).toBe(
+      'Em 2 lojas: ana recebe Misto Quente (o item pedido só existe em Hamburgueria do Zé, fora das lojas escolhidas).',
+    );
+    expect(result.alternative?.justification).toMatch(/^Em \d loja/);
+  });
+
+  it('todos atendidos: frase curta dizendo isso', () => {
+    expect(
+      justificativaPadrao({ lojas: ['Padaria'], pessoas: [{ nome: 'Ana', itens: [{ item: 'Misto', loja: 'Padaria', substituto: false }] }], semItem: [] }),
+    ).toBe('Todos foram atendidos com o que pediram, em 1 loja.');
   });
 });

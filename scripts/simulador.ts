@@ -21,7 +21,7 @@ import { OpenAiCompatLlm } from '../src/core/llm-openai.js';
 import { propor } from '../src/core/proposta.js';
 import type { TimedCatalogSnapshot } from '../src/core/regras/validar-escolhas.js';
 import type { CoreSession } from '../src/core/sessao.js';
-import { cancelar, criarSessao, pedirConfirmacao, voltarParaColeta } from '../src/core/sessao.js';
+import { cancelar, criarSessao, pedirConfirmacao, trocarPorAlternativa, voltarParaColeta } from '../src/core/sessao.js';
 
 config({ quiet: true });
 
@@ -30,6 +30,7 @@ const AJUDA = `Comandos:
   /propor             monta a proposta com o catálogo fake
   /ajustar Nome: msg  pede ajuste em texto (ex.: /ajustar Caio: troca o meu por um café)
   /fechar [Nome]      organizador autoriza e fecha (informe outro nome para testar a recusa)
+  /outra              troca pela outra opção (e de volta)
   /voltar             volta da proposta para a coleta
   /sessao             mostra a sessão
   /buscar termo       busca lojas no catálogo fake
@@ -189,6 +190,14 @@ async function executar(linha: string): Promise<boolean> {
       sessao = cancelar(sessao, sessao.organizerId);
       console.log('  sessão cancelada');
       return true;
+    case '/outra':
+      if (!sessao.alternative) {
+        console.log('  não há outra opção');
+        return true;
+      }
+      sessao = trocarPorAlternativa(sessao);
+      if (sessao.proposal) mostrarProposta(sessao.proposal);
+      return true;
     case '/voltar':
       sessao = voltarParaColeta(sessao);
       console.log('  de volta à coleta');
@@ -212,6 +221,10 @@ async function executar(linha: string): Promise<boolean> {
         `  ${result.combinacoesAvaliadas} combinações avaliadas · escolhida: ${m.atendidos} atendido(s) com o que pediram,` +
           ` ${m.faltando} desejo(s) sem item, ${m.substitutos} substituto(s), ${m.lojas} loja(s)`,
       );
+      if (result.alternative) {
+        console.log('  ── Outra opção (/outra) ──');
+        mostrarProposta(result.alternative);
+      }
       for (const d of result.discarded) console.log(`  descartado: ${nomeDe(d.participantId)} → ${d.menuItemId} (${d.reason})`);
       for (const u of result.uncertain) console.log(`  ⚠ confirmar ingredientes: ${nomeDe(u.participantId)} → ${nomeItem(u.menuItemId)}`);
       return true;

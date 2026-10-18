@@ -228,3 +228,30 @@ describe('API pública (src/core/index.ts)', () => {
     expect(typeof publico.criarLlmDoAmbiente).toBe('function');
   });
 });
+
+describe('agente: outra opção', () => {
+  it('propor devolve a alternativa; outraOpcao troca e troca de volta; só o organizador', async () => {
+    const { iris } = agente();
+    await iris.iniciar(CHAT, ORG);
+    await iris.mensagens(CHAT, [
+      { participantId: 'ana', text: 'bora de hambúrguer' },
+      { participantId: 'caio', text: 'algo leve, sou vegetariano' },
+      { participantId: 'bia', text: 'quero um lanche e um bolo de cenoura' },
+    ]);
+    const proposta = await iris.propor(CHAT, 'ana');
+    if (!proposta.alternative) throw new Error('o cenário deveria ter alternativa');
+
+    expect((await iris.outraOpcao(CHAT, 'bia')).outcome).toBe('not_authorized');
+    const trocada = await iris.outraOpcao(CHAT, 'ana');
+    expect(trocada.outcome).toBe('switched');
+    expect(trocada.proposal?.id).toBe(proposta.alternative.id);
+    expect(trocada.alternative?.id).toBe(proposta.proposal?.id);
+    expect((await iris.outraOpcao(CHAT, 'ana')).proposal?.id).toBe(proposta.proposal?.id);
+  });
+
+  it('sem alternativa: no_alternative com aviso privado', async () => {
+    const { iris } = agente();
+    await iris.iniciar(CHAT, ORG);
+    expect((await iris.outraOpcao(CHAT, 'ana')).outcome).toBe('no_alternative');
+  });
+});

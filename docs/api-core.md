@@ -33,6 +33,7 @@ Todas devolvem `Promise<Resposta>` e **não lançam exceção** para casos esper
 | Alguém menciona o bot | `iris.iniciar(chatId, { id, displayName })` — quem mencionou vira organizador |
 | Mensagem no grupo durante o pedido | `agrupador.adicionar(...)` (recomendado, ver "Mensagens em lote") ou `iris.mensagem({ sessionId, participantId, text }, displayName)` |
 | Botão "Montar pedido" | `iris.propor(chatId, quemClicou)` |
+| Botão "Outra opção" | `iris.outraOpcao(chatId, quemClicou)` |
 | Botão "Confirmar pedido" | `iris.fechar(chatId, quemClicou)` |
 | Botão "Voltar para a coleta" | `iris.reabrirColeta(chatId, quemClicou)` |
 | Botão "Cancelar" | `iris.cancelar(chatId, quemClicou)` |
@@ -86,6 +87,7 @@ interface Resposta {
   actions: CoreAction[];      // envie todas, na ordem
   session?: CoreSession;
   proposal?: Proposal;        // desenhar quando vier
+  alternative?: Proposal;     // segunda melhor combinação, para o botão "Outra opção"
   order?: AuthorizedOrder;    // pedido autorizado (fechamento)
   problems?: ProblemaProposta[];
   discarded?: Descarte[];     // diagnóstico; não precisa mostrar
@@ -110,7 +112,9 @@ interface Resposta {
 | `question` | Já há mensagem privada de confirmação nas actions |
 | `clarification` | Já há pergunta privada nas actions |
 | `filtered` / `irrelevant` / `not_adjustment` | Nada |
-| `proposed` / `adjusted` | Desenhar `proposal` com os botões Confirmar / Voltar / Cancelar |
+| `proposed` / `adjusted` | Desenhar `proposal` com os botões Confirmar / Voltar / Cancelar (e "Outra opção" se vier `alternative`) |
+| `switched` | "Outra opção" aplicada: desenhar a nova `proposal` |
+| `no_alternative` | Não há outra opção; aviso privado já nas actions |
 | `rejected` | Troca recusada; a explicação está nas actions |
 | `closed` | Mostrar o resumo de `order` e entregar ao executor do pedido |
 | `already_closed` | Mostrar o mesmo resumo; **não** executar de novo |
@@ -129,6 +133,20 @@ interface Resposta {
 - `proposal.uncoveredParticipantIds`: quem ficou sem item.
 - `proposal.justification`: texto curto da Íris, pode ir no topo.
 - **Nunca mostre `preferences.budgetCents` no grupo**: o orçamento é privado.
+
+## Outra opção
+
+Além da proposta escolhida, `propor` devolve em `resposta.alternative` a **segunda melhor combinação** (com itens diferentes), quando existir. Para o botão "Outra opção":
+
+```ts
+const r = await iris.outraOpcao(chatId, quemClicou); // só o organizador
+// r.outcome === "switched": desenhe r.proposal (a nova atual); r.alternative é a anterior
+```
+
+- Apertar de novo volta para a primeira. Não chama o modelo: as duas justificativas já vieram no `propor`.
+- Mostre o botão só quando `resposta.alternative` existir. Sem alternativa, `outraOpcao` devolve `no_alternative` com aviso privado.
+- Qualquer ajuste (troca de item) gera uma proposta nova e **descarta a alternativa**; reabrir a coleta também.
+- A justificativa é **uma frase objetiva** explicando o trade-off (quem ficou com substituto ou sem item e por quê), sem adjetivos.
 
 ## Fechamento
 

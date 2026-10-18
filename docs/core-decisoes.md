@@ -80,7 +80,7 @@ As 10 interpretações saíram certas, incluindo pessoa com dois itens, orçamen
 
 ## Pendências
 
-- `ajustar` troca todos os itens da pessoa por um só; com vários itens, "troca o meu bolo por um café" deveria trocar só o bolo.
+- ~~`ajustar` com vários itens~~: resolvido; troca só o item citado e pergunta quando não dá para saber qual.
 - Confirmar 19/19 na coleta com o critério novo (uma rodada, ~19 chamadas).
 - Testar `reasoning_effort=low` na proposta, comparando qualidade e tokens.
 - `CatalogPort.getStore(storeId)`: ver [`proposta-catalog-getstore.md`](proposta-catalog-getstore.md).
