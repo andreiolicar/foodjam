@@ -476,7 +476,6 @@ Implementação em `src/telegram/`; a composição (agente + bot) fica em `src/i
 | Grupo | menção ao bot ou `/iniciar` | `iris.iniciar`. Com pedido ativo, a menção vira mensagem da coleta; `/iniciar` avisa que já existe. |
 | Grupo | `/montar` | Esvazia o lote do agrupador e chama `iris.propor`. |
 | Grupo | `/cancelar` | Esvazia o lote e chama `iris.cancelar` (o core recusa quem não organizou). |
-| Privado | `/start` | Entrega as mensagens privadas que falharam porque a pessoa ainda não tinha falado com o bot. |
 
 Toda mensagem de texto (ou legenda) do grupo com pedido ativo vai para o `agrupador`; o core decide pela fase se é preferência ou ajuste. No privado, o bot só aceita o endereço que o core pediu ao organizador.
 
