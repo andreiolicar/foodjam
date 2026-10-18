@@ -1,5 +1,5 @@
 import type { DeliveryAddress, DiscoveryCoverage, DiscoveryCoverageReason, DiscoveryItem, DiscoveryStore, Participant } from './contracts.js';
-import type { DiscoveryCatalogPort } from './ports.js';
+import type { DiscoveryCatalogPort, DiscoverySearchOptions } from './ports.js';
 import { termosDeBusca } from './catalogo.js';
 import { normalizar } from './regras/elegibilidade.js';
 
@@ -28,34 +28,85 @@ export function limitarCandidatos(items: readonly DiscoveryItem[], groups: reado
 /** Recuperação limitada e distribuída entre os desejos; sem valores comerciais. */
 export async function buscarDescoberta(port: DiscoveryCatalogPort, participants: readonly Participant[], address: DeliveryAddress, options?: Partial<DiscoveryLimits>) {
   const limits = discoveryLimits(options); const start = Date.now();
+  const deadline = start + limits.deadlineMs;
+  const operation = new AbortController(); let callMs = limits.deadlineMs;
   const coverage: DiscoveryCoverage = { terms: 0, stores: 0, items: 0, requests: 0, limited: false, reasons: [] };
   function limited(reason: DiscoveryCoverageReason) {
     coverage.limited = true;
     if (!coverage.reasons!.includes(reason)) coverage.reasons!.push(reason);
   }
-  const searchOptions = { onTruncated: () => limited('pagination_truncated') };
-  async function read<T>(operation: () => Promise<T>): Promise<T | undefined> {
+  async function read<T>(request: (context: DiscoverySearchOptions) => Promise<T>, until = deadline, allowance = callMs): Promise<T | undefined> {
     const requestsExhausted = coverage.requests >= limits.maxRequests;
     const timeExhausted = Date.now() - start >= limits.deadlineMs;
     if (requestsExhausted) limited('request_limit');
     if (timeExhausted) limited('time_limit');
-    if (requestsExhausted || timeExhausted) return undefined;
-    coverage.requests++; return operation(); // Erros de interpretação/transporte não viram lista vazia.
+    if (requestsExhausted || timeExhausted || operation.signal.aborted) return undefined;
+    const wait = Math.min(deadline, until, Date.now() + allowance) - Date.now();
+    if (wait <= 0) { limited('time_limit'); return undefined; }
+    coverage.requests++;
+    const controller = new AbortController(); const abort = () => controller.abort();
+    operation.signal.addEventListener('abort', abort, { once: true });
+    let timer: ReturnType<typeof setTimeout> | undefined; let settled = false;
+    const context: DiscoverySearchOptions = { signal: controller.signal, firstPageOnly: true,
+      onTruncated: () => { if (!settled && !controller.signal.aborted) limited('pagination_truncated'); } };
+    try {
+      const timeout = new Promise<undefined>(resolve => { timer = setTimeout(() => { limited('time_limit'); controller.abort(); resolve(undefined); }, wait); });
+      controller.signal.throwIfAborted();
+      return await Promise.race([request(context), timeout]);
+    } catch (error) {
+      // Só nosso prazo/cancelamento vira ausência. Falha real de transporte ou
+      // de interpretação continua interrompendo, sem simular catálogo vazio.
+      if (!controller.signal.aborted) throw error;
+      limited('time_limit'); return undefined;
+    } finally {
+      settled = true;
+      if (timer) clearTimeout(timer);
+      // SDK mantém listener após sucesso: abortá-lo geraria POST de
+      // notifications/cancelled para uma leitura que já terminou.
+      operation.signal.removeEventListener('abort', abort);
+    }
   }
+  async function execute() {
   const perPerson = participants.map(p => termosDeBusca([p]));
   const terms = new Map<string, string>();
   for (let i = 0; i < Math.max(0, ...perPerson.map(t => t.length)); i++) for (const list of perPerson) if (list[i]) terms.set(normalizar(list[i]!), list[i]!);
   if (!terms.size) terms.set('', '');
   const queries = [...terms.values()].slice(0, limits.maxSearchTerms);
   if (terms.size > queries.length) limited('term_limit');
+  if (port.forDiscovery) {
+    const scoped = await read(context => port.forDiscovery!(address, context), deadline, limits.deadlineMs);
+    if (scoped) port = scoped;
+    else return { stores: [], items: [], coverage: { ...coverage, candidateStores: 0, checkedStores: 0, closedStores: 0 }, sawClosed: false, matchesByTerm: new Map<string, string[]>() };
+  }
+  // Metade da janela e das leituras fica disponível para comprovar lojas/menu.
+  // Cada leitura também tem uma fatia, para um desejo lento não bloquear todos.
+  const remainingMs = Math.max(0, deadline - Date.now());
+  const searchDeadline = Date.now() + Math.floor(remainingMs / 2);
+  callMs = Math.max(1, Math.floor(remainingMs / (queries.length + 2)));
+  const searchBudget = Math.max(2, Math.floor(limits.maxRequests / 2));
+  let searchReads = 0;
+  const search = <T>(request: (context: DiscoverySearchOptions) => Promise<T>) => {
+    if (searchReads >= searchBudget) { limited('request_limit'); return Promise.resolve(undefined); }
+    searchReads++; return read(request, searchDeadline);
+  };
   const matchesByTerm = new Map<string, string[]>();
   const groups: string[][] = []; const known = new Map<string, DiscoveryStore>(); const seeds = new Map<string, DiscoveryItem[]>();
-  for (const query of queries) {
-    const found = await read(() => port.searchStores(query, address, searchOptions));
-    if (found === undefined) break;
-    coverage.terms++;
+  const results: { found: DiscoveryStore[]; matches: DiscoveryItem[] }[] = [];
+  let next = 0;
+  async function worker() {
+    for (let index = next++; index < queries.length; index = next++) {
+      const query = queries[index]!;
+      const found = await search(context => port.searchStores(query, address, context));
+      const matches = query && port.searchItems ? await search(context => port.searchItems!(query, address, context)) : [];
+      if (found !== undefined || matches !== undefined && query && port.searchItems) coverage.terms++;
+      results[index] = { found: found ?? [], matches: matches ?? [] };
+    }
+  }
+  // O adaptador/MCP nunca recebe rajada ilimitada: duas leituras no máximo.
+  await Promise.all(Array.from({ length: Math.min(2, queries.length) }, () => worker()));
+  for (const [index, query] of queries.entries()) {
+    const { found, matches } = results[index]!;
     for (const store of found) known.set(store.id, store);
-    const matches = query && port.searchItems ? await read(() => port.searchItems!(query, address, searchOptions)) : [];
     matchesByTerm.set(normalizar(query), (matches ?? []).map(i => i.id));
     for (const item of matches ?? []) { const list = seeds.get(item.storeId) ?? []; list.push(item); seeds.set(item.storeId, list); }
     groups.push([...new Set([...(matches ?? []).map(i => i.storeId), ...found.filter(s => s.isOpen).map(s => s.id)])]);
@@ -89,13 +140,13 @@ export async function buscarDescoberta(port: DiscoveryCatalogPort, participants:
     // Uma loja rejeitada não consome a vaga de uma loja aberta posterior.
     // As releituras continuam submetidas aos mesmos limites de chamadas/tempo.
     if (stores.length >= limits.maxStores) { limited('store_limit'); break; }
-    const current = await read(() => port.getStore(id, address));
-    if (current === undefined) break;
+    const current = await read(context => port.getStore(id, address, context));
+    if (current === undefined) { if (Date.now() >= deadline || coverage.requests >= limits.maxRequests) break; continue; }
     coverage.checkedStores++;
     if (current.id !== id) throw new Error('Estabelecimento divergente.');
     if (current.isOpen !== true) { if (current.isOpen === false) closed.add(id); continue; }
-    const menu = await read(() => port.getMenu(id, address));
-    if (menu === undefined) break;
+    const menu = await read(context => port.getMenu(id, address, context), deadline, callMs * 2);
+    if (menu === undefined) { if (Date.now() >= deadline || coverage.requests >= limits.maxRequests) break; continue; }
     if (menu.storeOpen === false) { closed.add(id); continue; }
     const listed = known.get(id);
     // Avaliação é só apresentação. A releitura prevalece como par nota/contagem;
@@ -127,4 +178,7 @@ export async function buscarDescoberta(port: DiscoveryCatalogPort, participants:
   coverage.stores = stores.length; coverage.items = chosen.length;
   coverage.closedStores = closed.size;
   return { stores, items: chosen, coverage, sawClosed: closed.size > 0, matchesByTerm };
+  }
+  try { return await execute(); }
+  finally { operation.abort(); }
 }

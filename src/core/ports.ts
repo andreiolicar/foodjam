@@ -107,16 +107,24 @@ export class StoreNotFoundError extends Error {
 }
 
 /** Sinaliza quando a busca entrega uma amostra por limite de paginação. */
-export interface DiscoverySearchOptions { onTruncated?: () => void }
+export interface DiscoverySearchOptions {
+  onTruncated?: () => void;
+  /** Cancelamento da leitura atual; não é autorização nem argumento MCP. */
+  signal?: AbortSignal;
+  /** Recuperação inicial: amostra de uma página, sempre sinalizando truncamento. */
+  firstPageOnly?: boolean;
+}
 
 /** Fase de exploração: não promete preço, estoque ou frete final. */
 export interface DiscoveryCatalogPort {
+  /** Localização validada uma vez, restrita à operação/endereço; sem cache de lojas/preços. */
+  forDiscovery?(address: DeliveryAddress, options?: DiscoverySearchOptions): Promise<DiscoveryCatalogPort>;
   /** Ofertas encontradas por desejo, sempre com associação explícita à loja. */
   searchItems?(query: string, address: DeliveryAddress, options?: DiscoverySearchOptions): Promise<DiscoveryItem[]>;
   listSavedAddresses(): Promise<DeliveryAddress[]>;
   searchStores(query: string, address: DeliveryAddress, options?: DiscoverySearchOptions): Promise<DiscoveryStore[]>;
-  getMenu(storeId: StoreId, address: DeliveryAddress): Promise<DiscoveryMenu>;
-  getStore(storeId: StoreId, address: DeliveryAddress): Promise<DiscoveryStore>;
+  getMenu(storeId: StoreId, address: DeliveryAddress, options?: DiscoverySearchOptions): Promise<DiscoveryMenu>;
+  getStore(storeId: StoreId, address: DeliveryAddress, options?: DiscoverySearchOptions): Promise<DiscoveryStore>;
 }
 /** Não existe submissão/compras nesta porta. */
 export interface CommercialPreparationPort {

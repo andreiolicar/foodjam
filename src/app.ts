@@ -35,9 +35,9 @@ export async function criarAplicacaoReal(env: NodeJS.ProcessEnv) {
   const client = createIfoodMcpClient(readIfoodMcpConfig(env), { allowCartMutations: false, allowPaymentConfiguration: false });
   try {
     await client.connect(); await client.listTools();
-    const catalog = createIfoodDiscoveryCatalog({ async callReadTool(name, args) {
+    const catalog = createIfoodDiscoveryCatalog({ async callReadTool(name, args, options) {
       const event = { tool: name, ok: false }; reads.push(event);
-      const result = await client.callReadTool(name, args); event.ok = true; return result;
+      const result = await client.callReadTool(name, args, options); event.ok = true; return result;
     } }, { maxPages, pageSize, allowTruncatedStoreSearch: true, ...(unit ? { moneyUnit: unit } : {}), itemMoneyUnit: itemUnit as 'BRL' | 'cents' | 'unknown' });
     const iris = criarAgenteDescoberta({ catalog, discoveryLimits: limits, llm: observation.llm, registrarDescoberta(event) {
       discovery.push(structuredClone(event)); console.info('FoodJam descoberta:', JSON.stringify(event));

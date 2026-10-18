@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -33,7 +34,7 @@ export interface IfoodMcpServer {
 export interface IfoodMcpClient {
   connect(): Promise<IfoodMcpServer | undefined>;
   listTools(): Promise<IfoodMcpTool[]>;
-  callReadTool(name: string, args: Record<string, unknown>): Promise<IfoodMcpReadResult>;
+  callReadTool(name: string, args: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<IfoodMcpReadResult>;
   callCartTool(name: string, args: Record<string, unknown>): Promise<IfoodMcpCartResult>;
   callPaymentOrderTool(name: string, args: Record<string, unknown>): Promise<IfoodMcpPaymentOrderResult>;
   /** Terminal e idempotente. Cancele e crie outro cliente para autenticar novamente. */
@@ -71,6 +72,7 @@ export function createIfoodMcpClient(
   let closing: Promise<void> | undefined;
   let catalog: IfoodMcpTool[] | undefined;
   const abort = new AbortController();
+  const readSignal = new AsyncLocalStorage<AbortSignal>();
   let stage: IfoodMcpStage = 'mcp_initial_connect';
   const httpContext = new Map<IfoodMcpStage, Pick<IfoodMcpDiagnostic, 'httpStatus' | 'requestKind' | 'method' | 'contentType' | 'clientAuthMethod'>>();
   const startStage = (next: IfoodMcpStage) => {
@@ -79,6 +81,19 @@ export function createIfoodMcpClient(
     reportDiagnostic(options.onDiagnostic, { stage: next, event: 'started' });
   };
   const succeed = () => reportDiagnostic(options.onDiagnostic, { stage, event: 'succeeded' });
+  async function readCall(current: Client, name: string, args: Record<string, unknown>, signal?: AbortSignal) {
+    if (!signal) return current.callTool({ name, arguments: args });
+    signal.throwIfAborted();
+    const requestAbort = new AbortController(); const cancel = () => requestAbort.abort();
+    signal.addEventListener('abort', cancel, { once: true });
+    try {
+      return await readSignal.run(requestAbort.signal, () => current.callTool({ name, arguments: args }, undefined, { signal: requestAbort.signal }));
+    } finally {
+      // Uma fatia de menu abrange várias ferramentas. Ao cancelar a próxima,
+      // não emitir notifications/cancelled para as que já concluíram.
+      signal.removeEventListener('abort', cancel);
+    }
+  }
 
   const createConnection = () => {
     client = new Client({ name: 'FoodJam', version: '0.1.0' }, { capabilities: {} });
@@ -90,6 +105,7 @@ export function createIfoodMcpClient(
       authProvider: provider!,
       // Limita também discovery, troca de código e encerramento, além do timeout MCP.
       fetch: async (url, init) => {
+        const requestSignal = readSignal.getStore();
         const requestStage = stage;
         const requestUrl = new URL(url);
         const endpoint = new URL(validated.endpoint);
@@ -98,7 +114,7 @@ export function createIfoodMcpClient(
           : method === 'POST' ? 'oauth_token' : 'oauth_metadata';
         const response = await fetch(url, {
           ...init,
-          signal: AbortSignal.any([abort.signal, AbortSignal.timeout(15_000), ...(init?.signal ? [init.signal] : [])]),
+          signal: AbortSignal.any([abort.signal, AbortSignal.timeout(15_000), ...(init?.signal ? [init.signal] : []), ...(requestSignal ? [requestSignal] : [])]),
         });
         const mediaType = response.headers.get('content-type')?.split(';')[0]?.trim();
         const contentType = mediaType === 'application/json' || mediaType === 'text/html' || mediaType === 'text/event-stream'
@@ -193,19 +209,21 @@ export function createIfoodMcpClient(
         throw failure;
       }
     },
-    async callReadTool(name, args) {
+    async callReadTool(name, args, readOptions) {
       const current = client;
       try {
         if (!connected || closed || !current) throw diagnosticError('tools_read', undefined, { reason: 'read_client_disconnected' });
         if (!provider?.tokens()?.access_token) throw diagnosticError('tools_read', undefined, { reason: 'read_not_authenticated' });
         assertApprovedReadTool(name);
         const argumentsSnapshot = snapshotReadArguments(args);
+        readOptions?.signal?.throwIfAborted();
         if (!catalog) await api.listTools();
+        readOptions?.signal?.throwIfAborted();
         if (!connected || closed || client !== current) throw diagnosticError('tools_read', undefined, { reason: 'read_client_disconnected' });
         const tool = findReadTool(name, catalog ?? []);
         startStage('tools_read');
         validateReadSchema(tool.inputSchema, argumentsSnapshot, 'input');
-        const result = validateReadResult(tool, await current.callTool({ name, arguments: argumentsSnapshot }));
+        const result = validateReadResult(tool, await readCall(current, name, argumentsSnapshot, readOptions?.signal));
         if (result.isError) reportDiagnostic(options.onDiagnostic, {
           stage: 'tools_read', event: 'failed', reason: 'read_tool_failed',
         });

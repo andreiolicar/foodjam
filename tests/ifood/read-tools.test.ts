@@ -5,7 +5,7 @@ import { createIfoodMcpClient, readIfoodMcpConfig } from '../../src/ifood/index.
 import type { IfoodMcpDiagnostic } from '../../src/ifood/index.js';
 import type * as StreamableHttpSdk from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const sdk = vi.hoisted(() => ({ connect: vi.fn(), listTools: vi.fn(), callTool: vi.fn(), close: vi.fn() }));
+const sdk = vi.hoisted(() => ({ connect: vi.fn(), listTools: vi.fn(), callTool: vi.fn(), close: vi.fn(), transportFetch: undefined as typeof fetch | undefined }));
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: class {
     connect = sdk.connect;
@@ -19,7 +19,7 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', async (importOrigi
   ...await importOriginal<typeof StreamableHttpSdk>(),
   StreamableHTTPClientTransport: class {
     readonly authProvider;
-    constructor(_url: URL, options: { authProvider: { saveTokens(tokens: unknown): void } }) { this.authProvider = options.authProvider; }
+    constructor(_url: URL, options: { authProvider: { saveTokens(tokens: unknown): void }; fetch: typeof fetch }) { this.authProvider = options.authProvider; sdk.transportFetch = options.fetch; }
     close = async () => {};
     terminateSession = async () => {};
   },
@@ -53,9 +53,37 @@ beforeEach(() => {
   sdk.callTool.mockResolvedValue(structuredClone(result));
   sdk.close.mockResolvedValue(undefined);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('execução segura de consultas', () => {
+  it('cancelamento da leitura aborta seu HTTP real sem abortar a leitura concorrente', async () => {
+    const signals = new Map<string, AbortSignal>(); let releaseFast!: () => void; let ready!: () => void;
+    const entered = new Promise<void>(resolve => { ready = resolve; });
+    vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
+      const key = JSON.parse(String(init.body)).key as string;
+      signals.set(key, init.signal!); if (signals.size === 2) ready();
+      return new Promise<Response>((resolve, reject) => {
+        init.signal!.addEventListener('abort', () => reject(new Error('controlled_http_abort')), { once: true });
+        if (key === 'fast') releaseFast = () => resolve(new Response('controlled'));
+      });
+    });
+    sdk.callTool.mockImplementation(async (params: { arguments: { fixtureQuery: string } }) => {
+      await sdk.transportFetch!(config().endpoint, { method: 'POST', body: JSON.stringify({ key: params.arguments.fixtureQuery }) });
+      return structuredClone(result);
+    });
+    const client = createIfoodMcpClient(config()); await client.connect(); await client.listTools();
+    const slowController = new AbortController(); const fastController = new AbortController();
+    const slow = client.callReadTool('searchOffers', { fixtureQuery: 'slow' }, { signal: slowController.signal }).catch(error => error);
+    const fast = client.callReadTool('searchOffers', { fixtureQuery: 'fast' }, { signal: fastController.signal });
+    try {
+      await entered; slowController.abort();
+      expect(signals.get('slow')?.aborted).toBe(true);
+      expect(signals.get('fast')?.aborted).toBe(false);
+      releaseFast(); expect(await fast).toEqual(result); expect(await slow).toBeInstanceOf(Error);
+      fastController.abort();
+      expect(signals.get('fast')?.aborted).toBe(false);
+    } finally { releaseFast(); await client.close(); await Promise.allSettled([slow, fast]); }
+  });
   it('descobre catálogo, encaminha argumentos intactos e preserva conteúdo/estrutura/metadados', async () => {
     const events: IfoodMcpDiagnostic[] = [];
     const client = createIfoodMcpClient(config(), { onDiagnostic: (event) => events.push(event) });
