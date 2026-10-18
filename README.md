@@ -17,7 +17,7 @@ O objetivo do MVP é ajudar um grupo a fazer um pedido em conjunto:
 
 - **Core (Íris):** coleta de preferências em linguagem natural (em lote), endereço de entrega, proposta com 1 ou 2 lojas e alternativa, rateio em centavos com entrega e taxa de serviço, orçamento resolvido no privado, ajustes por texto e fechamento idempotente com `AuthorizedOrder`. Veja [a API do core](docs/api-core.md).
 - **Bot do Telegram (grammY):** início por menção ou `/iniciar`, endereço e valores no privado, card da proposta com botões, `/montar` e `/cancelar`.
-- **Modelo de IA:** qualquer API compatível com OpenAI, configurada no `.env`; sem chave, usa um modelo fake (heurístico, sem rede).
+- **Modelo de IA:** qualquer API compatível com OpenAI, configurada no `.env`, com cascata opcional de até 9 provedores (se um cair, o próximo assume); sem chave, usa um modelo fake (heurístico, sem rede).
 - **Catálogo:** nesta versão o core usa o catálogo fake (`CatalogoFake`, 5 lojas fictícias). O cliente MCP do iFood está em `feat/ifood-mcp`; ligar o catálogo do core a ele é o próximo passo.
 - **Compra:** o core entrega o pedido autorizado e não compra nada; o executor do pedido no iFood ainda não existe.
 
@@ -76,6 +76,7 @@ cp .env.example .env
 | `ENDERECO_PADRAO` | Opcional: endereço oferecido ao organizador no início ([Sim] [Outro endereço]). Sem ele, o bot pede o endereço no privado. |
 | `IFOOD_MCP_ENDPOINT` | Endpoint informado: `https://consumer-mcp.ifood.com.br/marketplace`. |
 | `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` | Modelo de IA (API compatível com OpenAI). Os opcionais por nível e de reserva estão comentados no `.env.example`. |
+| `AI_2_*` a `AI_9_*` | Opcional: cascata de provedores reserva (`AI_2_BASE_URL`, `AI_2_MODEL`, `AI_2_API_KEY`...). Se um provedor falhar, o próximo assume na hora. Sugestão de ordem no `.env.example`. |
 
 A autenticação do iFood ainda precisa ser confirmada. As variáveis de credenciais dessa integração serão definidas depois dessa confirmação.
 

@@ -1,7 +1,7 @@
 import { config } from 'dotenv';
 import { GrammyError } from 'grammy';
 
-import { CatalogoFake, criarAgente, criarLlmDoAmbiente } from './core/index.js';
+import { CatalogoFake, LlmEmCascata, criarAgente, criarLlmDoAmbiente } from './core/index.js';
 import { criarBot } from './telegram/index.js';
 
 config({ quiet: true });
@@ -15,9 +15,18 @@ if (!token) {
 } else {
   const enderecoPadrao = process.env.ENDERECO_PADRAO;
 
+  const llm = criarLlmDoAmbiente(process.env, {
+    aoTrocar: (troca) =>
+      console.warn(
+        `[Íris] IA: ${troca.de} falhou (${troca.motivo}); ` +
+          (troca.para ? `usando ${troca.para}.` : 'nenhum provedor restante.'),
+      ),
+  });
+  if (llm instanceof LlmEmCascata) console.info(`foodjam: IA em cascata: ${llm.nomes.join(' → ')}.`);
+
   const iris = criarAgente({
     catalog: new CatalogoFake(), // trocar pela CatalogPort real do módulo iFood
-    llm: criarLlmDoAmbiente(process.env),
+    llm,
     onError: (error) => console.error('[Íris]', error),
     ...(enderecoPadrao && { enderecoPadrao }),
   });

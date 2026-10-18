@@ -42,4 +42,4 @@ O fechamento exige a autorização explícita do organizador (botão "Confirmar 
 
 O endpoint do MCP é `https://consumer-mcp.ifood.com.br/marketplace`. O cliente MCP (SDK v1, OAuth) está em `feat/ifood-mcp`; as variáveis de autenticação do iFood serão definidas por esse módulo.
 
-O modelo de IA é acessado por um cliente HTTP enxuto (`fetch`), compatível com a API da OpenAI, configurado por `AI_*` no `.env` (com modelos por nível e de reserva). Escolhas e medições em [core-decisoes.md](core-decisoes.md).
+O modelo de IA é acessado por um cliente HTTP enxuto (`fetch`), compatível com a API da OpenAI, configurado por `AI_*` no `.env` (com modelos por nível e de reserva). Com `AI_2_*` em diante, `LlmEmCascata` empilha provedores: se um falhar (429, 5xx, timeout, rede, chave ou cota), o próximo assume na mesma chamada, e o que falhou vai para o fim da fila por um tempo. Escolhas e medições em [core-decisoes.md](core-decisoes.md).

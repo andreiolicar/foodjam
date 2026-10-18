@@ -7,6 +7,7 @@
  *   npm run avaliar:coleta
  *   npm run avaliar:coleta -- --intervalo 4000      # ms entre chamadas (camadas gratuitas)
  *   npm run avaliar:coleta -- --max-chamadas 10     # para ao atingir o limite
+ *   npm run avaliar:coleta -- --provedor 2          # só o provedor 2 da cascata (AI_2_*)
  *
  * Antes de começar, mostra quantas chamadas estão previstas. Para no primeiro
  * erro fatal do provedor (chave, plano ou cota) e mostra a mensagem dele.
@@ -17,7 +18,8 @@ import { config } from 'dotenv';
 import { passaNoFiltro } from '../src/core/coleta.js';
 import { CASOS_COLETA, avaliarCaso, chamadasPrevistas } from '../src/core/fakes/casos-coleta.js';
 import type { LlmCallRecord } from '../src/core/llm.js';
-import { criarLlmDoAmbiente, temProvedorReal } from '../src/core/llm-ambiente.js';
+import { ambienteDoProvedor, criarLlmDoAmbiente, temProvedorReal } from '../src/core/llm-ambiente.js';
+import { LlmEmCascata } from '../src/core/llm-cascata.js';
 import { OpenAiCompatLlm } from '../src/core/llm-openai.js';
 import type { LlmPort } from '../src/core/ports.js';
 
@@ -72,14 +74,16 @@ function limitar(llm: LlmPort, max: number | undefined): LlmPort & { feitas: num
 const argv = process.argv.slice(2);
 const intervaloMs = lerNumero(argv, 'intervalo', 'AVAL_INTERVALO_MS') ?? 0;
 const maxChamadas = lerNumero(argv, 'max-chamadas', 'AVAL_MAX_CHAMADAS');
-const provider = process.env.AI_PROVIDER || 'fake';
-if (provider !== 'fake' && !temProvedorReal(process.env)) {
+const numeroProvedor = lerNumero(argv, 'provedor', 'AVAL_PROVEDOR');
+const env = numeroProvedor === undefined ? process.env : ambienteDoProvedor(process.env, numeroProvedor);
+const provider = env.AI_PROVIDER || 'fake';
+if (provider !== 'fake' && !temProvedorReal(env)) {
   console.warn(`Aviso: AI_PROVIDER=${provider} sem AI_API_KEY; as chamadas devem ser recusadas.\n`);
 }
-const real = criarLlmDoAmbiente(process.env);
+const real = criarLlmDoAmbiente(env);
 const espacado = espacar(real, intervaloMs);
 const llm = limitar(espacado, maxChamadas);
-const modelo = process.env.AI_MODEL_FAST || process.env.AI_MODEL || '—';
+const modelo = env.AI_MODEL_FAST || env.AI_MODEL || '—';
 
 const previstas = chamadasPrevistas(CASOS_COLETA);
 console.log(`Avaliando ${CASOS_COLETA.length} casos de coleta · provedor: ${provider} · modelo fast: ${modelo}`);
@@ -149,16 +153,17 @@ console.log(
 );
 console.log(`Latência por mensagem: média ${Math.round(media)} ms · p95 ${Math.round(p95)} ms (sem o intervalo; inclui novas tentativas)`);
 console.log(`Chamadas ao modelo: ${llm.feitas} de ${previstas} previstas (${falhasModelo.length} tentativas falharam)`);
-if (real instanceof OpenAiCompatLlm && real.usos.length > 0) {
+if ((real instanceof OpenAiCompatLlm || real instanceof LlmEmCascata) && real.usos.length > 0) {
   const usos = real.usos;
   const soma = (f: (u: (typeof usos)[number]) => number) => usos.reduce((t, u) => t + f(u), 0);
   const n = usos.length;
   console.log(
     `Tokens: entrada ${soma((u) => u.promptTokens)} (média ${Math.round(soma((u) => u.promptTokens) / n)}/chamada)` +
       ` · saída ${soma((u) => u.completionTokens)} (raciocínio ${soma((u) => u.reasoningTokens)})` +
-      ` · total ${soma((u) => u.totalTokens)} · modo ${real.mode}`,
+      ` · total ${soma((u) => u.totalTokens)}` +
+      (real instanceof OpenAiCompatLlm ? ` · modo ${real.mode}` : ` · cascata ${real.nomes.join(' → ')}`),
   );
-  for (const t of real.trocas) console.log(`  troca de modelo: ${t.de} → ${t.para} (${t.motivo})`);
+  for (const t of real.trocas) console.log(`  troca: ${t.de} → ${t.para ?? 'nenhum restante'} (${t.motivo})`);
 }
 // Erros iguais aparecem uma vez só.
 const porErro = new Map<string, number>();

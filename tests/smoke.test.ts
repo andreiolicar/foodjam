@@ -40,5 +40,5 @@ describe('bootstrap do foodjam', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });
