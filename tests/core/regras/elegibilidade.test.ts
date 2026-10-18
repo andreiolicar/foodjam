@@ -31,7 +31,7 @@ describe('violaRestricao', () => {
   });
 
   it.each([
-    ['caramelo', item('Pudim', 'calda de caramelo'), false],
+    ['caramelo', item('Picolé de fruta', 'calda de caramelo'), false],
     ['melancia', item('Suco de melancia'), false],
     ['mel', item('Torrada', 'com mel e canela'), true],
     ['MEL com acento e caixa', item('Chá gelado', 'adoçado com MÉL'), true],
@@ -51,6 +51,29 @@ describe('violaRestricao', () => {
   it('expressão de várias palavras casa em sequência', () => {
     expect(violaRestricao(item('Strogonoff de cogumelos', 'com creme de leite'), 'sem lactose')).toBe(true);
     expect(violaRestricao(item('Salada', 'creme de abacate, folhas'), 'sem lactose')).toBe(false);
+  });
+
+  it.each([
+    ['vegetariano', item('X-Burger'), true],
+    ['vegetariano', item('Cheeseburger duplo'), true],
+    ['vegetariano', item('Costela no bafo'), true],
+    ['vegetariano', item('Nuggets (10 un.)'), true],
+    ['vegetariano', item('Burger Veggie'), false],
+    ['vegano', item('X-Salada', 'alface e tomate'), true],
+    ['sem lactose', item('Cheeseburger'), true],
+    ['sem lactose', item('Açaí com leite de coco'), false],
+    ['sem glúten', item('Pão de queijo (6 un.)'), false],
+    ['sem glúten', item('Pão de queijo na chapa', 'com pão francês'), true],
+    ['sem glúten', item('Biscoito de polvilho'), false],
+    ['sem glúten', item('Lasanha à bolonhesa'), true],
+    ['celíaco', item('Coxinha de frango'), true],
+    ['alergia a frutos do mar', item('Risoto de camarão'), true],
+    ['alergia a frutos do mar', item('Risoto de cogumelos'), false],
+    ['alergia a nozes', item('Brownie', 'com castanha de caju'), true],
+    ['alergia a amendoim', item('Pé de moleque'), true],
+    ['sem leite e sem glúten', item('Pão de queijo'), true],
+  ])('listas ampliadas: %s × %j → %s', (restricao, menuItem, esperado) => {
+    expect(violaRestricao(menuItem, restricao)).toBe(esperado);
   });
 
   it('o nome da loja não conta para restrição ("Padaria Pão Quente" não torna o café um item com glúten)', () => {

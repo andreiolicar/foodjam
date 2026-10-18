@@ -31,10 +31,27 @@ export function contemTermo(textoPalavras: readonly string[], termo: string): bo
 }
 
 // Termos (sem acento) que indicam ingrediente proibido em cada restrição. "*" = radical.
-const CARNES = ['carne', 'bovin*', 'frango', 'bacon', 'presunto', 'salmao', 'peixe', 'atum', 'camarao', 'calabresa', 'linguica', 'peru', 'sashimi', 'sushi'];
-const LATICINIOS = ['queijo', 'leite', 'requeijao', 'manteiga', 'creme de leite', 'iogurte', 'mussarela', 'chocolate', 'brigadeiro'];
+const FRUTOS_DO_MAR = ['camarao', 'lagosta', 'lula', 'polvo', 'marisco*', 'mexilh*', 'ostra*', 'siri', 'caranguejo', 'vieira*', 'frutos do mar'];
+const CARNES = [
+  'carne', 'bovin*', 'suin*', 'porco', 'frango', 'galinha', 'bacon', 'presunto', 'salame', 'mortadela', 'pepperoni', 'peru', 'chester',
+  'calabresa', 'linguica', 'salsicha', 'hot dog', 'cachorro quente', 'hamburg*', 'burger*', 'cheeseburger*', 'costela', 'costelinha', 'picanha', 'alcatra',
+  'maminha', 'fraldinha', 'cupim', 'contrafile', 'file', 'pernil', 'lombo', 'cordeiro', 'carneiro', 'nugget*', 'almondega*', 'kafta',
+  'kibe', 'quibe', 'coxinha', 'peixe', 'salmao', 'atum', 'tilapia', 'bacalhau', 'sashimi', 'sushi', ...FRUTOS_DO_MAR,
+];
+// "x" é o "X-" de X-Burger/X-Salada, que leva queijo.
+const LATICINIOS = [
+  'queijo', 'leite', 'requeijao', 'manteiga', 'creme de leite', 'nata', 'chantilly', 'iogurte', 'mussarela', 'mucarela', 'muzzarela',
+  'cheddar', 'catupiry', 'parmesao', 'provolone', 'gorgonzola', 'ricota', 'cream cheese', 'cheese*', 'x', 'chocolate', 'brigadeiro',
+  'sorvete', 'milkshake', 'pudim', 'cappuccino', 'capuccino', 'latte',
+];
 const OVOS_MEL = ['ovo', 'mel', 'maionese'];
-const GLUTEN = ['pao', 'paes', 'trigo', 'massa', 'bolo', 'lanche', 'wrap', 'empanad*', 'torta', 'pizza', 'misto'];
+const GLUTEN = [
+  'pao', 'paes', 'trigo', 'massa', 'macarrao', 'lasanha', 'nhoque', 'ravioli', 'bolo', 'lanche', 'sanduiche', 'hamburg*', 'burger*', 'cheeseburger*',
+  'wrap', 'empanad*', 'empada', 'torta', 'pizza', 'misto', 'pastel', 'coxinha', 'esfiha', 'esfirra', 'kibe', 'quibe', 'croissant',
+  'panqueca', 'crepe', 'waffle', 'torrada', 'biscoito*', 'cookie*', 'brownie', 'donut*', 'churros', 'cerveja',
+];
+const OLEAGINOSAS = ['noz', 'castanha*', 'amendoa*', 'avela*', 'pistache*', 'macadamia*', 'pecan', 'nutella'];
+const AMENDOIM = ['amendoim', 'pacoca', 'pe de moleque'];
 
 interface RegraRestricao {
   /** Termos que identificam a restrição no texto da pessoa. */
@@ -42,14 +59,38 @@ interface RegraRestricao {
   proibidos: string[];
   /** Termos que confirmam o item como seguro mesmo citando algo da lista (ex.: "vegano"). */
   seguros: string[];
+  /** Expressões que citam um termo proibido sem conter o ingrediente (ex.: "pão de queijo" não tem trigo). */
+  excecoes?: string[];
 }
 
 const REGRAS: RegraRestricao[] = [
-  { match: ['vegan*'], proibidos: [...CARNES, ...LATICINIOS, ...OVOS_MEL], seguros: ['vegan*'] },
-  { match: ['vegetarian*'], proibidos: CARNES, seguros: ['vegetarian*', 'vegan*'] },
-  { match: ['lactose', 'laticinio*', 'leite'], proibidos: LATICINIOS, seguros: ['sem lactose', 'vegan*'] },
-  { match: ['gluten', 'celiac*'], proibidos: GLUTEN, seguros: ['sem gluten'] },
+  { match: ['vegan*'], proibidos: [...CARNES, ...LATICINIOS, ...OVOS_MEL], seguros: ['vegan*'], excecoes: ['leite de coco', 'leite vegetal', 'leite de aveia'] },
+  { match: ['vegetarian*'], proibidos: CARNES, seguros: ['vegetarian*', 'vegan*', 'veggie'] },
+  {
+    match: ['lactose', 'laticinio*', 'leite'], proibidos: LATICINIOS, seguros: ['sem lactose', 'zero lactose', 'vegan*'],
+    excecoes: ['leite de coco', 'leite vegetal', 'leite de aveia'],
+  },
+  {
+    match: ['gluten', 'celiac*'], proibidos: GLUTEN, seguros: ['sem gluten'],
+    excecoes: ['pao de queijo', 'paes de queijo', 'biscoito de polvilho', 'biscoitos de polvilho'],
+  },
+  { match: ['frutos do mar', 'marisco*', 'crustace*', 'camarao'], proibidos: FRUTOS_DO_MAR, seguros: [] },
+  { match: ['noz', 'castanha*', 'oleaginos*', 'amendoa*'], proibidos: OLEAGINOSAS, seguros: [] },
+  { match: ['amendoim'], proibidos: AMENDOIM, seguros: [] },
 ];
+
+/** Tira do texto as expressões de exceção, sem juntar as palavras vizinhas. */
+function semExcecoes(texto: readonly string[], excecoes: readonly string[]): string[] {
+  const resto = [...texto];
+  for (const excecao of excecoes) {
+    const partes = excecao.split(' ');
+    for (let i = 0; i + partes.length <= resto.length; ) {
+      if (partes.every((parte, j) => resto[i + j] === parte)) resto.splice(i, partes.length, '|');
+      else i++;
+    }
+  }
+  return resto;
+}
 
 // Sinônimos para rejeições de gosto ("sem japonês" também evita sushi).
 const JAPONES = ['japon*', 'japa', 'sushi', 'sashimi', 'temaki'];
@@ -79,10 +120,14 @@ export function violaRestricao(item: Pick<MenuItem, 'name' | 'description'>, res
   // Só o texto do item: o nome da loja ("Padaria Pão Quente") não diz o que o item contém.
   const texto = palavrasDoItem(item, undefined);
   const r = palavras(restricao);
-  const regra = REGRAS.find((rg) => rg.match.some((m) => contemTermo(r, m)));
-  if (regra) {
-    if (regra.seguros.some((s) => contemTermo(texto, s))) return false;
-    return regra.proibidos.some((p) => contemTermo(texto, p));
+  // Todas as regras que a restrição cita ("sem leite e sem glúten" aplica as duas).
+  const regras = REGRAS.filter((rg) => rg.match.some((m) => contemTermo(r, m)));
+  if (regras.length > 0) {
+    return regras.some((regra) => {
+      if (regra.seguros.some((s) => contemTermo(texto, s))) return false;
+      const resto = semExcecoes(texto, regra.excecoes ?? []);
+      return regra.proibidos.some((p) => contemTermo(resto, p));
+    });
   }
   return palavrasChave(restricao).some((p) => contemTermo(texto, p));
 }
