@@ -6,13 +6,15 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 describe('bootstrap do foodjam', () => {
+  // Importar um módulo transforma todos os arquivos dele; com a suíte inteira em
+  // paralelo isso pode passar dos 5 s padrão do Vitest, então o limite é 15 s.
   it.each([
     ['telegram', () => import('../src/telegram/index.js')],
     ['core', () => import('../src/core/index.js')],
     ['ifood', () => import('../src/ifood/index.js')],
   ] as const)('permite importar o módulo %s', async (_name, importModule) => {
     await expect(importModule()).resolves.toBeTypeOf('object');
-  });
+  }, 15_000);
 
   it('executa o ponto de entrada sem arquivo .env ou credenciais', () => {
     const directory = mkdtempSync(join(tmpdir(), 'foodjam-smoke-'));

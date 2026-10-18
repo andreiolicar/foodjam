@@ -3,10 +3,27 @@ export type * from './contracts.js';
 
 export { criarAgente, TEXTOS } from './agente.js';
 export type { Agente, AgenteDeps, Organizador, Resposta } from './agente.js';
+export { criarAgrupador } from './agrupador.js';
+export type { Agrupador, AgrupadorOptions } from './agrupador.js';
+export type { ItemLote } from './coleta.js';
 export { SessoesEmMemoria } from './sessoes.js';
-export type { CatalogPort, LlmPort, LlmRequest, LlmTier, SessionRecord, SessionStore } from './ports.js';
+export type {
+  AddressError,
+  AddressValidation,
+  CatalogPort,
+  CotacaoPedido,
+  ItemCotacao,
+  LlmPort,
+  LlmRequest,
+  LlmTier,
+  SessionRecord,
+  SessionStore,
+} from './ports.js';
+export { TEXTOS_ORCAMENTO } from './orcamento.js';
+export type { RespostaOrcamento } from './orcamento.js';
 export { StoreNotFoundError } from './ports.js';
-export type { CoreSession, PendingQuestion } from './sessao.js';
+export type { CoreSession, EnderecoSessao, PendingQuestion } from './sessao.js';
+export { TEXTOS_ENDERECO } from './endereco.js';
 export type { ProblemaProposta } from './regras/verificar-proposta.js';
 export type { Descarte, ItemIncerto } from './proposta.js';
 
@@ -16,5 +33,5 @@ export type { LlmEnv } from './llm-ambiente.js';
 export type { LlmCallRecord } from './llm.js';
 
 // Fakes para desenvolver e testar a integração sem iFood nem modelo real.
-export { CatalogoFake, LOJAS } from './fakes/catalogo-fake.js';
+export { CatalogoFake, ENDERECO_FAKE, LOJAS } from './fakes/catalogo-fake.js';
 export { FakeLlm, responderHeuristico } from './fakes/llm-fake.js';

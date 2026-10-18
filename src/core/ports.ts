@@ -1,5 +1,6 @@
-import type { MenuItem, SessionId, Store, StoreId } from './contracts.js';
+import type { DeliveryAddress, MenuItem, MenuItemId, MoneyCents, SessionId, Store, StoreId } from './contracts.js';
 import type { TimedCatalogSnapshot } from './regras/validar-escolhas.js';
+import type { PessoaClassificada } from './regras/combinacoes.js';
 import type { CoreSession } from './sessao.js';
 
 /** Tudo que o agente guarda por sessão (chat). */
@@ -7,6 +8,8 @@ export interface SessionRecord {
   session: CoreSession;
   /** Retrato do catálogo usado na proposta atual (para ajustes e fechamento). */
   catalog?: TimedCatalogSnapshot;
+  /** Classificação do modelo na proposta atual, para sugerir outro item a quem estourar o orçamento. */
+  classificacao?: PessoaClassificada[];
   /** Quantas propostas já foram geradas (para ids previsíveis). */
   proposalCount: number;
 }
@@ -27,14 +30,47 @@ export interface SessionStore {
  */
 export interface CatalogPort {
   /**
-   * Busca lojas por termo livre (nome da loja ou de itens do cardápio).
-   * Pode devolver lojas fechadas; quem filtra é o core. Lista vazia quando nada casa.
+   * Valida um endereço digitado livremente e devolve a versão normalizada pelo
+   * iFood, ou o motivo do erro. Não lança para endereço ruim: só para falha de rede.
    */
-  searchStores(query: string): Promise<Store[]>;
+  validateAddress(text: string): Promise<AddressValidation>;
 
-  /** Cardápio de uma loja, incluindo itens indisponíveis. Rejeita com StoreNotFoundError se a loja não existir. */
-  getMenu(storeId: StoreId): Promise<MenuItem[]>;
+  /**
+   * Busca lojas por termo livre (nome da loja ou de itens do cardápio) que
+   * entregam no endereço. Pode devolver lojas fechadas; quem filtra é o core.
+   * Lista vazia quando nada casa.
+   */
+  searchStores(query: string, address: DeliveryAddress): Promise<Store[]>;
+
+  /**
+   * Cardápio de uma loja para o endereço, incluindo itens indisponíveis.
+   * Rejeita com StoreNotFoundError se a loja não existir.
+   */
+  getMenu(storeId: StoreId, address: DeliveryAddress): Promise<MenuItem[]>;
+
+  /**
+   * Cota um pedido de uma loja (sem comprar) e devolve a taxa de serviço que o
+   * iFood cobraria. O core chama só para a proposta escolhida e a alternativa
+   * (uma vez por loja) e de novo no fechamento.
+   */
+  quoteOrder(storeId: StoreId, items: readonly ItemCotacao[], address: DeliveryAddress): Promise<CotacaoPedido>;
 }
+
+/** Item de um pedido a cotar. */
+export interface ItemCotacao {
+  menuItemId: MenuItemId;
+  quantity: number;
+}
+
+export interface CotacaoPedido {
+  /** Taxa de serviço em centavos inteiros. */
+  serviceFeeCents: MoneyCents;
+}
+
+/** Motivos de endereço recusado pelo iFood. */
+export type AddressError = 'not_found' | 'out_of_area' | 'incomplete';
+
+export type AddressValidation = { ok: true; address: DeliveryAddress } | { ok: false; reason: AddressError };
 
 /** fast: chamadas baratas (coleta). capable: raciocínio maior (proposta). */
 export type LlmTier = 'fast' | 'capable';

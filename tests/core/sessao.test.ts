@@ -10,6 +10,7 @@ import {
   criarSessao,
   pedirConfirmacao,
   podeTransitar,
+  trocarPorAlternativa,
   voltarParaColeta,
 } from '../../src/core/sessao.js';
 
@@ -203,5 +204,35 @@ describe('imutabilidade', () => {
     expect(proposta1.status).toBe('reviewing');
     expect(confirmacao.status).toBe('awaiting_confirmation');
     expect(confirmacao.closure).toBeUndefined();
+  });
+});
+
+describe('alternativa ("Outra opção")', () => {
+  const alternativa = () => proposta('p1-b');
+
+  it('apresentar com alternativa guarda as duas; trocar inverte e trocar de novo volta', () => {
+    const s = apresentarProposta(emColeta(), proposta(), alternativa());
+    expect(s.alternative?.id).toBe('p1-b');
+    const trocada = trocarPorAlternativa(s);
+    expect([trocada.proposal?.id, trocada.alternative?.id]).toEqual(['p1-b', 'p1']);
+    expect(trocarPorAlternativa(trocada).proposal?.id).toBe('p1');
+  });
+
+  it('nova proposta sem alternativa (ex.: ajuste) apaga a alternativa antiga', () => {
+    const s = apresentarProposta(emColeta(), proposta(), alternativa());
+    expect(apresentarProposta(s, proposta('p1-r1'))).not.toHaveProperty('alternative');
+  });
+
+  it('voltar para a coleta apaga proposta e alternativa', () => {
+    const s = voltarParaColeta(apresentarProposta(emColeta(), proposta(), alternativa()));
+    expect(s).not.toHaveProperty('proposal');
+    expect(s).not.toHaveProperty('alternative');
+  });
+
+  it('da confirmação, trocar volta para revisão; sem alternativa, erro', () => {
+    const s = pedirConfirmacao(apresentarProposta(emColeta(), proposta(), alternativa()));
+    expect(trocarPorAlternativa(s).status).toBe('reviewing');
+    expect(() => trocarPorAlternativa(emProposta())).toThrow(/não há alternativa/);
+    expect(() => trocarPorAlternativa(fechada())).toThrow(TransicaoInvalidaError);
   });
 });

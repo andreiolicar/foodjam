@@ -1,7 +1,9 @@
 import type { LlmPort, LlmRequest } from '../ports.js';
-import { TAG_OPCOES } from '../prompts/ajuste.js';
-import { TAG_MENSAGEM, TAG_PREFERENCIAS, desescaparDados } from '../prompts/coleta.js';
-import { TAG_CATALOGO, TAG_PARTICIPANTES } from '../prompts/proposta.js';
+import { TAG_ITENS_ATUAIS, TAG_OPCOES } from '../prompts/ajuste.js';
+import type { EntradaLote } from '../prompts/coleta.js';
+import { TAG_LOTE, TAG_MENSAGEM, TAG_PREFERENCIAS, desescaparDados, montarPromptColeta } from '../prompts/coleta.js';
+import type { ResumoEscolha } from '../prompts/proposta.js';
+import { TAG_ALTERNATIVA, TAG_ESCOLHA, TAG_ITENS, TAG_PESSOAS, justificativaPadrao } from '../prompts/proposta.js';
 
 export type Responder = (request: LlmRequest, index: number) => unknown;
 
@@ -77,8 +79,20 @@ export function responderHeuristico(request: LlmRequest): unknown {
   switch (request.outputName) {
     case 'coleta':
       return heuristicaColeta(request);
-    case 'proposta':
-      return heuristicaProposta(request);
+    case 'coleta_lote': {
+      // Uma "coleta individual" por pessoa do lote, com as mensagens dela juntas.
+      const lote = JSON.parse(tag(request.prompt, TAG_LOTE) || '[]') as EntradaLote[];
+      return {
+        resultados: lote.map((e) => {
+          const prompt = montarPromptColeta(e.mensagens.join('\n'), (e as { preferenciasAtuais?: object }).preferenciasAtuais ?? {});
+          return { participantId: e.participantId, ...(heuristicaColeta({ ...request, outputName: 'coleta', prompt }) as object) };
+        }),
+      };
+    }
+    case 'proposta_classificacao':
+      return heuristicaClassificacao(request);
+    case 'proposta_justificativa':
+      return heuristicaJustificativa(request);
     case 'ajuste':
       return heuristicaAjuste(request);
     default:
@@ -101,62 +115,49 @@ const afinidade = (item: ItemPrompt, texto: string) => {
   return palavrasDe(`${item.nome} ${item.descricao}`).filter((w) => alvo.includes(w)).length;
 };
 
-function heuristicaProposta(request: LlmRequest): unknown {
-  const participantes = JSON.parse(tag(request.prompt, TAG_PARTICIPANTES) || '[]') as {
-    id: string;
-    quer: string[];
+/**
+ * Classificação por palavras-chave: "atende" = itens com palavras do desejo
+ * (ou do gosto, para desejos genéricos), do mais parecido para o menos;
+ * "substitutos" = alguns outros itens permitidos.
+ */
+function heuristicaClassificacao(request: LlmRequest): unknown {
+  const pessoas = JSON.parse(tag(request.prompt, TAG_PESSOAS) || '[]') as {
+    participantId: string;
+    desejos: string[];
+    gosta: string[];
     itensPermitidos: string[];
   }[];
-  const catalogo = JSON.parse(tag(request.prompt, TAG_CATALOGO) || '[]') as {
-    storeId: string;
-    temPedidoMinimo: boolean;
-    itens: ItemPrompt[];
-  }[];
-  const lojaDe = new Map(catalogo.flatMap((loja) => loja.itens.map((i) => [i.id, loja.storeId] as const)));
-  const itemPorId = new Map(catalogo.flatMap((loja) => loja.itens.map((i) => [i.id, i] as const)));
-  const comMinimo = new Set(catalogo.filter((l) => l.temPedidoMinimo).map((l) => l.storeId));
+  const itens = new Map((JSON.parse(tag(request.prompt, TAG_ITENS) || '[]') as ItemPrompt[]).map((i) => [i.id, i]));
 
-  // Guloso: cada pessoa pega o item mais parecido com o que quer, sem passar de 2 lojas.
-  const guloso = (penalizarMinimo: boolean) => {
-    const lojas = new Set<string>();
-    const picks = [];
-    for (const p of participantes) {
-      const desejo = p.quer.join(' ');
-      const candidatos = p.itensPermitidos
-        .map((id) => {
-          const base = afinidade(itemPorId.get(id) ?? { id, nome: '', descricao: '' }, desejo);
-          return { id, base, nota: base - (penalizarMinimo && comMinimo.has(lojaDe.get(id) ?? '') ? 0.5 : 0) };
-        })
-        .sort((a, b) => b.nota - a.nota);
-      const escolhido = candidatos.find((c) => lojas.has(lojaDe.get(c.id) ?? '') || lojas.size < 2);
-      const storeId = escolhido && lojaDe.get(escolhido.id);
-      if (!escolhido || !storeId) continue;
-      lojas.add(storeId);
-      picks.push({
-        participantId: p.id,
-        storeId,
-        menuItemId: escolhido.id,
-        quantity: 1,
-        ...(escolhido.base === 0 && p.quer.length > 0 && { isSubstitute: true }),
-      });
-    }
-    return picks;
-  };
-
-  const justification = 'Escolhi o que mais combina com o pedido de cada um, em poucas lojas.';
   return {
-    options: [guloso(false), guloso(true)].filter((picks) => picks.length > 0).map((picks) => ({ picks, justification })),
+    pessoas: pessoas.map((p) => ({
+      participantId: p.participantId,
+      desejos: p.desejos.map((desejo) => {
+        const notas = p.itensPermitidos
+          .map((id) => ({ id, nota: afinidade(itens.get(id) ?? { id, nome: '', descricao: '' }, `${desejo} ${p.gosta.join(' ')}`) }))
+          .sort((a, b) => b.nota - a.nota);
+        return {
+          atende: notas.filter((n) => n.nota > 0).slice(0, 8).map((n) => n.id),
+          substitutos: notas.filter((n) => n.nota === 0).slice(0, 3).map((n) => n.id),
+        };
+      }),
+    })),
   };
 }
 
 function heuristicaAjuste(request: LlmRequest): unknown {
   const mensagem = tag(request.prompt, TAG_MENSAGEM);
   const opcoes = JSON.parse(tag(request.prompt, TAG_OPCOES) || '[]') as ItemPrompt[];
-  const vazio = { menuItemId: null, quantity: null, clarification: null };
+  const atuais = JSON.parse(tag(request.prompt, TAG_ITENS_ATUAIS) || '[]') as ItemPrompt[];
+  const vazio = { menuItemId: null, replaceMenuItemId: null, quantity: null, clarification: null };
 
   if (!/troc|mud|prefir|quero|em vez|no lugar/.test(normalizar(mensagem))) return { kind: 'not_adjustment', ...vazio };
+
+  // "troca o meu bolo por um café": antes de "por" é o que sai, depois é o que entra.
+  const [antes = '', depois] = mensagem.split(/\b(?:por|pelo|pela)\b/i);
+  const novoTexto = depois ?? mensagem;
   const [melhor, segundo] = opcoes
-    .map((item) => ({ item, afinidade: afinidade(item, mensagem) }))
+    .map((item) => ({ item, afinidade: afinidade(item, novoTexto) }))
     .filter((o) => o.afinidade > 0)
     .sort((a, b) => b.afinidade - a.afinidade);
   if (!melhor) {
@@ -166,8 +167,17 @@ function heuristicaAjuste(request: LlmRequest): unknown {
   if (segundo && segundo.afinidade === melhor.afinidade) {
     return { kind: 'ambiguous', ...vazio, clarification: `Você quer ${melhor.item.nome} ou ${segundo.item.nome}?` };
   }
+
+  const citados = atuais.filter((i) => afinidade(i, antes) > 0);
+  const sai = citados.length === 1 ? citados[0]?.id : atuais.length === 1 ? atuais[0]?.id : null;
   const quantidade = /\b([2-9]|10)\b/.exec(mensagem)?.[1];
-  return { kind: 'swap', menuItemId: melhor.item.id, quantity: quantidade ? Number(quantidade) : null, clarification: null };
+  return {
+    kind: 'swap',
+    menuItemId: melhor.item.id,
+    replaceMenuItemId: sai ?? null,
+    quantity: quantidade ? Number(quantidade) : null,
+    clarification: null,
+  };
 }
 
 function heuristicaColeta(request: LlmRequest): unknown {
@@ -182,6 +192,8 @@ function heuristicaColeta(request: LlmRequest): unknown {
     foodPreferences: [...food],
     dietaryRestrictions: [...restrictions],
     avoids: [...avoids],
+    // Itens a receber: o que a pessoa quer comer, sem atributos como "barato".
+    wishes: [...food].filter((f) => f !== 'barato' && f !== 'qualquer coisa'),
     budgetText,
     clarification: null,
   });
@@ -223,4 +235,14 @@ function heuristicaColeta(request: LlmRequest): unknown {
   }
 
   return resultado(found ? 'preference' : 'irrelevant');
+}
+
+/** Justificativa pela mesma regra do fallback do código (sem adjetivos). */
+function heuristicaJustificativa(request: LlmRequest): unknown {
+  const escolha = JSON.parse(tag(request.prompt, TAG_ESCOLHA) || 'null') as ResumoEscolha;
+  const alternativa = JSON.parse(tag(request.prompt, TAG_ALTERNATIVA) || 'null') as ResumoEscolha | null;
+  return {
+    justification: justificativaPadrao(escolha),
+    alternativeJustification: alternativa ? justificativaPadrao(alternativa) : null,
+  };
 }

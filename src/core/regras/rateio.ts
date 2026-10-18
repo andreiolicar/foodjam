@@ -34,22 +34,25 @@ export function dividirIgual(totalCents: MoneyCents, participants: readonly Part
 export interface SplitInput {
   storeId: StoreOrder['storeId'];
   deliveryFeeCents: MoneyCents;
+  /** Taxa de serviço da loja; ausente conta como 0. */
+  serviceFeeCents?: MoneyCents | undefined;
   items: readonly Pick<ProposedItem, 'participantId' | 'unitPriceCents' | 'quantity'>[];
 }
 
 /**
- * Cada pessoa paga seus itens mais sua parte da entrega de cada loja de que
- * pediu. A entrega é dividida só entre quem pediu naquela loja, na ordem em
- * que aparecem nos itens. As partes saem na ordem da primeira aparição.
+ * Cada pessoa paga seus itens mais sua parte da entrega e da taxa de serviço
+ * de cada loja de que pediu. Entrega e taxa de serviço são divididas só entre
+ * quem pediu naquela loja, na ordem em que aparecem nos itens (o centavo que
+ * sobra vai para os primeiros). As partes saem na ordem da primeira aparição.
  */
 export function calcularRateio(orders: readonly SplitInput[]): Split {
-  const byParticipant = new Map<ParticipantId, { itemsCents: number; deliveryCents: number }>();
+  const byParticipant = new Map<ParticipantId, { itemsCents: number; deliveryCents: number; serviceCents: number }>();
   const totalParts: MoneyCents[] = [];
 
   const accountOf = (participantId: ParticipantId) => {
     let account = byParticipant.get(participantId);
     if (!account) {
-      account = { itemsCents: 0, deliveryCents: 0 };
+      account = { itemsCents: 0, deliveryCents: 0, serviceCents: 0 };
       byParticipant.set(participantId, account);
     }
     return account;
@@ -57,6 +60,8 @@ export function calcularRateio(orders: readonly SplitInput[]): Split {
 
   for (const order of orders) {
     assertMoneyCents(order.deliveryFeeCents, `deliveryFeeCents da loja ${order.storeId}`);
+    const serviceFee = order.serviceFeeCents ?? 0;
+    assertMoneyCents(serviceFee, `serviceFeeCents da loja ${order.storeId}`);
     if (order.items.length === 0) {
       throw new RangeError(`pedido da loja ${order.storeId} não tem itens`);
     }
@@ -80,13 +85,22 @@ export function calcularRateio(orders: readonly SplitInput[]): Split {
     for (const portion of dividirIgual(order.deliveryFeeCents, buyers)) {
       accountOf(portion.participantId).deliveryCents += portion.amountCents;
     }
-    totalParts.push(order.deliveryFeeCents);
+    for (const portion of dividirIgual(serviceFee, buyers)) {
+      accountOf(portion.participantId).serviceCents += portion.amountCents;
+    }
+    totalParts.push(order.deliveryFeeCents, serviceFee);
   }
 
   const shares: ParticipantShare[] = [...byParticipant].map(([participantId, account]) => {
-    const totalCents = account.itemsCents + account.deliveryCents;
+    const totalCents = account.itemsCents + account.deliveryCents + account.serviceCents;
     assertMoneyCents(totalCents, `total de ${participantId}`);
-    return { participantId, itemsCents: account.itemsCents, deliveryCents: account.deliveryCents, totalCents };
+    return {
+      participantId,
+      itemsCents: account.itemsCents,
+      deliveryCents: account.deliveryCents,
+      serviceCents: account.serviceCents,
+      totalCents,
+    };
   });
 
   const totalCents = somarCents(totalParts);

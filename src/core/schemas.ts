@@ -2,7 +2,6 @@ import { z } from 'zod';
 
 export const MAX_QUANTITY = 10;
 export const MAX_STORES_PER_PROPOSAL = 2;
-export const MAX_OPTIONS_PER_MODEL_PROPOSAL = 3;
 export const MAX_JUSTIFICATION_LENGTH = 280;
 
 /** No Zod 4, z.int() já exige inteiro seguro. */
@@ -34,6 +33,7 @@ export const MenuItemSchema = z.object({
   description: z.string().exactOptional(),
   priceCents: MoneyCentsSchema,
   available: z.boolean(),
+  category: z.enum(['food', 'drink']).exactOptional(),
 });
 
 export const ProposedItemSchema = z.object({
@@ -51,6 +51,7 @@ export const StoreOrderSchema = z
     items: z.array(ProposedItemSchema).min(1),
     subtotalCents: MoneyCentsSchema,
     deliveryFeeCents: MoneyCentsSchema,
+    serviceFeeCents: MoneyCentsSchema.exactOptional(),
     totalCents: MoneyCentsSchema,
   })
   .superRefine((order, ctx) => {
@@ -60,8 +61,8 @@ export const StoreOrderSchema = z
     if (order.subtotalCents !== sum(order.items.map((i) => i.unitPriceCents * i.quantity))) {
       ctx.addIssue({ code: 'custom', message: 'subtotalCents não bate com os itens', path: ['subtotalCents'] });
     }
-    if (order.totalCents !== order.subtotalCents + order.deliveryFeeCents) {
-      ctx.addIssue({ code: 'custom', message: 'totalCents ≠ subtotalCents + deliveryFeeCents', path: ['totalCents'] });
+    if (order.totalCents !== order.subtotalCents + order.deliveryFeeCents + (order.serviceFeeCents ?? 0)) {
+      ctx.addIssue({ code: 'custom', message: 'totalCents ≠ subtotal + entrega + serviço', path: ['totalCents'] });
     }
   });
 
@@ -70,10 +71,11 @@ export const ParticipantShareSchema = z
     participantId: IdSchema,
     itemsCents: MoneyCentsSchema,
     deliveryCents: MoneyCentsSchema,
+    serviceCents: MoneyCentsSchema,
     totalCents: MoneyCentsSchema,
   })
-  .refine((share) => share.totalCents === share.itemsCents + share.deliveryCents, {
-    message: 'totalCents ≠ itemsCents + deliveryCents',
+  .refine((share) => share.totalCents === share.itemsCents + share.deliveryCents + share.serviceCents, {
+    message: 'totalCents ≠ itens + entrega + serviço',
     path: ['totalCents'],
   });
 
@@ -110,9 +112,9 @@ export const ProposalSchema = z
   });
 
 // ---------------------------------------------------------------------------
-// Saída do modelo: só IDs, quantidade e justificativa. Estrito: qualquer campo
-// extra (por exemplo, um preço inventado) reprova a saída. Preços, totais e
-// rateio são preenchidos pelo código a partir do catálogo.
+// Escolha de item (pessoa, loja, item, quantidade): usada por validarEscolhas
+// e pelo ajuste. Estrito: qualquer campo extra (ex.: um preço) reprova.
+// Preços, totais e rateio vêm sempre do catálogo e do código.
 // ---------------------------------------------------------------------------
 
 export const ModelPickSchema = z.strictObject({
@@ -123,23 +125,7 @@ export const ModelPickSchema = z.strictObject({
   isSubstitute: z.boolean().exactOptional(),
 });
 
-export const ModelOptionSchema = z
-  .strictObject({
-    picks: z.array(ModelPickSchema).min(1),
-    justification: JustificationSchema,
-  })
-  .refine((option) => distinctStores(option.picks) <= MAX_STORES_PER_PROPOSAL, {
-    message: `no máximo ${MAX_STORES_PER_PROPOSAL} lojas por opção`,
-    path: ['picks'],
-  });
-
-export const ModelProposalSchema = z.strictObject({
-  options: z.array(ModelOptionSchema).min(1).max(MAX_OPTIONS_PER_MODEL_PROPOSAL),
-});
-
 export type ModelPick = z.infer<typeof ModelPickSchema>;
-export type ModelOption = z.infer<typeof ModelOptionSchema>;
-export type ModelProposal = z.infer<typeof ModelProposalSchema>;
 
 // ---------------------------------------------------------------------------
 // Saída do modelo na coleta. Todos os campos são obrigatórios (nullable em vez
@@ -154,21 +140,46 @@ export const MAX_CLARIFICATION_LENGTH = 200;
 
 const PreferenceListSchema = z.array(z.string().trim().min(1).max(MAX_PREFERENCE_LENGTH)).max(MAX_PREFERENCE_ITEMS);
 
-export const ColetaOutputSchema = z
-  .strictObject({
-    kind: z.enum(['preference', 'question', 'irrelevant', 'ambiguous']),
-    foodPreferences: PreferenceListSchema,
-    dietaryRestrictions: PreferenceListSchema,
-    avoids: PreferenceListSchema,
-    budgetText: z.string().trim().min(1).max(40).nullable(),
-    clarification: z.string().trim().min(1).max(MAX_CLARIFICATION_LENGTH).nullable(),
-  })
-  .refine((output) => output.kind !== 'ambiguous' || output.clarification !== null, {
-    message: 'kind "ambiguous" exige clarification',
-    path: ['clarification'],
-  });
+const COLETA_CAMPOS = {
+  kind: z.enum(['preference', 'question', 'irrelevant', 'ambiguous']),
+  foodPreferences: PreferenceListSchema,
+  dietaryRestrictions: PreferenceListSchema,
+  avoids: PreferenceListSchema,
+  wishes: PreferenceListSchema,
+  budgetText: z.string().trim().min(1).max(40).nullable(),
+  clarification: z.string().trim().min(1).max(MAX_CLARIFICATION_LENGTH).nullable(),
+};
+const ambiguoExigePergunta = (o: { kind: string; clarification: string | null }) =>
+  o.kind !== 'ambiguous' || o.clarification !== null;
+
+export const ColetaOutputSchema = z.strictObject(COLETA_CAMPOS).refine(ambiguoExigePergunta, {
+  message: 'kind "ambiguous" exige clarification',
+  path: ['clarification'],
+});
 
 export type ColetaOutput = z.infer<typeof ColetaOutputSchema>;
+
+/**
+ * Saída da coleta em lote: um resultado por participante do lote, cada um
+ * com o participantId exato. O schema é montado por chamada, com os ids do
+ * lote, para o modelo não inventar nem esquecer ninguém (fora disso: nova tentativa).
+ */
+export function criarColetaLoteSchema(participantIds: readonly string[]) {
+  const [primeiro, ...resto] = participantIds;
+  if (primeiro === undefined) throw new Error('lote vazio');
+  const item = z
+    .strictObject({ participantId: z.enum([primeiro, ...resto]), ...COLETA_CAMPOS })
+    .refine(ambiguoExigePergunta, { message: 'kind "ambiguous" exige clarification', path: ['clarification'] });
+
+  return z.strictObject({ resultados: z.array(item) }).refine(
+    (o) =>
+      o.resultados.length === participantIds.length &&
+      new Set(o.resultados.map((r) => r.participantId)).size === participantIds.length,
+    { message: `devolva exatamente um resultado para cada participante: ${participantIds.join(', ')}`, path: ['resultados'] },
+  );
+}
+
+export type ColetaLoteOutput = z.infer<ReturnType<typeof criarColetaLoteSchema>>;
 
 // ---------------------------------------------------------------------------
 // Saída do modelo ao interpretar um pedido de ajuste ("troca o meu por um café").
@@ -180,6 +191,8 @@ export const AjusteOutputSchema = z
   .strictObject({
     kind: z.enum(['swap', 'not_adjustment', 'ambiguous']),
     menuItemId: IdSchema.nullable(),
+    /** Qual item atual da pessoa sai; null se ela tem um só ou se não dá para saber. */
+    replaceMenuItemId: IdSchema.nullable(),
     quantity: QuantitySchema.nullable(),
     clarification: z.string().trim().min(1).max(MAX_CLARIFICATION_LENGTH).nullable(),
   })
@@ -190,3 +203,48 @@ export const AjusteOutputSchema = z
   });
 
 export type AjusteOutput = z.infer<typeof AjusteOutputSchema>;
+
+// ---------------------------------------------------------------------------
+// Proposta: o modelo só faz o casamento semântico. Para cada pessoa e cada
+// desejo dela (na ordem), lista ids que atendem e ids substitutos, do melhor
+// para o pior; o que não aparece "não serve". Quem monta lojas, preços,
+// pedido mínimo, orçamento e rateio é o código.
+// ---------------------------------------------------------------------------
+
+export const MAX_IDS_POR_CLASSE = 8;
+
+/** Schema montado por chamada: ids e número de desejos de cada pessoa. */
+export function criarClassificacaoSchema(desejosPorPessoa: ReadonlyMap<string, number>) {
+  const ids = [...desejosPorPessoa.keys()];
+  const [primeiro, ...resto] = ids;
+  if (primeiro === undefined) throw new Error('nenhuma pessoa para classificar');
+  const lista = z.array(IdSchema).max(MAX_IDS_POR_CLASSE);
+
+  return z
+    .strictObject({
+      pessoas: z.array(
+        z.strictObject({
+          participantId: z.enum([primeiro, ...resto]),
+          desejos: z.array(z.strictObject({ atende: lista, substitutos: lista })),
+        }),
+      ),
+    })
+    .refine(
+      (o) =>
+        o.pessoas.length === ids.length &&
+        new Set(o.pessoas.map((p) => p.participantId)).size === ids.length &&
+        o.pessoas.every((p) => p.desejos.length === desejosPorPessoa.get(p.participantId)),
+      {
+        message: `um item por pessoa (${ids.join(', ')}) e um item em "desejos" para cada desejo dela, na ordem`,
+        path: ['pessoas'],
+      },
+    );
+}
+
+export type ClassificacaoOutput = z.infer<ReturnType<typeof criarClassificacaoSchema>>;
+
+/** Justificativa da proposta e, se houver, da alternativa, numa chamada só. */
+export const JustificativaSchema = z.strictObject({
+  justification: JustificationSchema,
+  alternativeJustification: JustificationSchema.nullable(),
+});

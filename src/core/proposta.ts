@@ -1,35 +1,50 @@
 import { buscarCandidatas } from './catalogo.js';
-import type { CoreAction, MenuItemId, ParticipantId, Proposal, ProposedItem } from './contracts.js';
+import { cotarTaxas } from './taxas.js';
+import { MAX_ITENS_POR_PESSOA } from './coleta.js';
+import type { CoreAction, DeliveryAddress, MenuItem, MenuItemId, Participant, ParticipantId, Proposal, ProposedItem, StoreId } from './contracts.js';
 import type { LlmCallRecord } from './llm.js';
 import { LlmSaidaInvalidaError, gerarEstruturado } from './llm.js';
 import type { CatalogPort, LlmPort } from './ports.js';
-import { SISTEMA_PROPOSTA, montarPromptProposta } from './prompts/proposta.js';
-import { idsElegiveis, itemIncerto, itensElegiveis } from './regras/elegibilidade.js';
+import type { PessoaPrompt, ResumoEscolha } from './prompts/proposta.js';
+import {
+  SISTEMA_CLASSIFICACAO,
+  SISTEMA_JUSTIFICATIVA,
+  justificativaPadrao,
+  montarPromptClassificacao,
+  montarPromptJustificativa,
+} from './prompts/proposta.js';
+import type { DesejoClassificado, Escolha, Metricas, PessoaClassificada } from './regras/combinacoes.js';
+import { compararMetricas, enumerarCombinacoes, escolherNaCombinacao, medir } from './regras/combinacoes.js';
+import { categoriaDoDesejo, categoriaDoItem } from './regras/categoria.js';
+import { itemIncerto, itensElegiveis } from './regras/elegibilidade.js';
 import { montarPedidos } from './regras/montar-pedidos.js';
 import { calcularRateio } from './regras/rateio.js';
 import type { PickRejectionReason, TimedCatalogSnapshot } from './regras/validar-escolhas.js';
-import { validarEscolhas } from './regras/validar-escolhas.js';
 import type { ProblemaProposta } from './regras/verificar-proposta.js';
 import { verificarProposta } from './regras/verificar-proposta.js';
-import type { ModelOption } from './schemas.js';
-import { ModelProposalSchema } from './schemas.js';
+import { JustificativaSchema, criarClassificacaoSchema } from './schemas.js';
 import type { CoreSession } from './sessao.js';
 import { TransicaoInvalidaError, apresentarProposta } from './sessao.js';
+
+/** Texto provisório só para validar a proposta antes da justificativa final. */
+export const JUSTIFICATIVA_PADRAO = 'Combinação de lojas que melhor atende o pedido de cada um.';
 
 export interface PropostaDeps {
   catalog: CatalogPort;
   llm: LlmPort;
   /** ISO 8601 da consulta ao catálogo. */
   now: string;
-  /** Id da nova proposta, gerado por quem chama. */
+  /** Endereço confirmado: as buscas de lojas e cardápios dependem dele. */
+  address: DeliveryAddress;
+  /** Id da nova proposta, gerado por quem chama. A alternativa recebe o sufixo "-b". */
   proposalId: string;
   registrar?: (record: LlmCallRecord) => void;
   timeoutMs?: number;
 }
 
-export type DescarteReason = PickRejectionReason | 'not_eligible' | 'duplicate_pick' | 'over_budget';
+export type DescarteReason = PickRejectionReason | 'not_eligible' | 'duplicate_pick' | 'drink_for_food';
 
-/** Escolha do modelo descartada pelo código, com o motivo. */
+/** Item que o modelo citou ou o código escolheu e foi descartado, com o motivo. */
 export interface Descarte {
   participantId: ParticipantId;
   menuItemId: MenuItemId;
@@ -47,9 +62,18 @@ export type PropostaResult =
       ok: true;
       session: CoreSession;
       proposal: Proposal;
+      /** Segunda melhor combinação, com itens diferentes ("Outra opção"). */
+      alternative?: Proposal;
       catalog: TimedCatalogSnapshot;
       discarded: Descarte[];
       uncertain: ItemIncerto[];
+      metricas: Metricas;
+      metricasAlternativa?: Metricas;
+      combinacoesAvaliadas: number;
+      /** Classificação do modelo (só ids elegíveis), guardada para sugerir outro item a quem estourar o orçamento. */
+      classificacao: PessoaClassificada[];
+      /** Lojas em que a taxa de serviço não pôde ser cotada (a proposta sai sem ela). */
+      taxaServicoIndisponivel?: StoreId[];
       actions: CoreAction[];
     }
   | {
@@ -59,20 +83,32 @@ export type PropostaResult =
       problems?: ProblemaProposta[];
     };
 
-interface OpcaoAvaliada {
-  proposal?: Proposal;
-  discarded: Descarte[];
-  problems: ProblemaProposta[];
+/** Desejos da pessoa: wishes (até 3) ou, sem eles, um desejo geral a partir do gosto. */
+export function desejosDe(participant: Participant): string[] {
+  const wishes = (participant.preferences.wishes ?? []).map((w) => w.trim()).filter(Boolean);
+  if (wishes.length > 0) return [...new Set(wishes)].slice(0, MAX_ITENS_POR_PESSOA);
+  const gosto = participant.preferences.foodPreferences ?? [];
+  return [gosto.length > 0 ? gosto.join(', ') : 'qualquer comida'];
+}
+
+interface OpcaoValida {
+  proposal: Proposal;
+  metricas: Metricas;
+  escolhas: Escolha[];
+  descartes: Descarte[];
 }
 
 /**
- * Fase de proposta (sem tool calling):
- * 1. Recuperação em código pela CatalogPort.
- * 2. Filtro em código: cada pessoa só pode receber itens elegíveis
- *    (restrições, avoids, orçamento unitário, loja aberta, disponível).
- * 3. Modelo capable escolhe um item por pessoa, em até 2 lojas.
- * 4. Código valida cada opção, recalcula pedidos e rateio e escolhe a melhor
- *    por cobertura, depois menos lojas, depois menor total.
+ * Fase de proposta:
+ * 1. Recuperação em código pela CatalogPort e filtro de itens elegíveis por
+ *    pessoa (restrições, avoids, orçamento unitário, loja aberta, disponível).
+ * 2. Modelo capable (1 chamada): para cada desejo de cada pessoa, classifica
+ *    itens elegíveis em "atende", "substituto" ou "não serve".
+ * 3. Código enumera todas as combinações de 1 e 2 lojas, escolhe o melhor
+ *    item por desejo, confere pedido mínimo e orçamento, ordena as
+ *    combinações (compararMetricas) e fica com a melhor e a alternativa.
+ * 4. Modelo fast (1 chamada): uma frase objetiva para cada uma, a partir
+ *    dos motivos que o código calculou. Se falhar, o código escreve a frase.
  */
 export async function propor(session: CoreSession, deps: PropostaDeps): Promise<PropostaResult> {
   if (session.status !== 'collecting' && session.status !== 'reviewing') {
@@ -80,124 +116,260 @@ export async function propor(session: CoreSession, deps: PropostaDeps): Promise<
   }
   if (session.participants.length === 0) return { ok: false, reason: 'no_participants' };
 
-  const catalog = await buscarCandidatas(deps.catalog, session.participants, deps.now);
-  const participantes = session.participants.map((participant) => ({
-    participant,
-    itensPermitidos: itensElegiveis(participant, catalog),
-  }));
-  if (participantes.every((p) => p.itensPermitidos.length === 0)) {
-    return { ok: false, reason: 'no_candidates', catalog };
-  }
+  const catalog = await buscarCandidatas(deps.catalog, session.participants, deps.now, deps.address);
+  const pessoas: PessoaPrompt[] = session.participants
+    .map((participant) => ({ participant, desejos: desejosDe(participant), itensPermitidos: itensElegiveis(participant, catalog) }))
+    .filter((p) => p.itensPermitidos.length > 0);
+  if (pessoas.length === 0) return { ok: false, reason: 'no_candidates', catalog };
 
-  let output;
+  const llmOpcoes = {
+    llm: deps.llm,
+    ...(deps.timeoutMs !== undefined && { timeoutMs: deps.timeoutMs }),
+    ...(deps.registrar && { registrar: deps.registrar }),
+  };
+
+  let classificacao;
   try {
-    output = await gerarEstruturado({
-      llm: deps.llm,
-      phase: 'proposta',
+    classificacao = await gerarEstruturado({
+      ...llmOpcoes,
+      phase: 'proposta_classificacao',
       tier: 'capable',
-      system: SISTEMA_PROPOSTA,
-      prompt: montarPromptProposta(participantes, catalog.stores, session.pendingQuestions ?? []),
-      outputName: 'proposta',
-      schema: ModelProposalSchema,
-      ...(deps.timeoutMs !== undefined && { timeoutMs: deps.timeoutMs }),
-      ...(deps.registrar && { registrar: deps.registrar }),
+      system: SISTEMA_CLASSIFICACAO,
+      prompt: montarPromptClassificacao(pessoas, catalog.stores),
+      outputName: 'proposta_classificacao',
+      schema: criarClassificacaoSchema(new Map(pessoas.map((p) => [p.participant.id, p.desejos.length]))),
     });
   } catch (error) {
     if (!(error instanceof LlmSaidaInvalidaError)) throw error;
     return { ok: false, reason: 'model_failed', catalog };
   }
 
-  const avaliadas = output.options.map((option) => avaliarOpcao(option, session, catalog, deps.proposalId));
-  const melhor = avaliadas
-    .filter((a): a is OpcaoAvaliada & { proposal: Proposal } => a.proposal !== undefined)
-    .sort(compararPropostas)[0];
-  if (!melhor) {
-    return { ok: false, reason: 'no_valid_option', catalog, problems: avaliadas.flatMap((a) => a.problems) };
-  }
+  const discarded: Descarte[] = [];
+  // Guardrails em código, independentes do modelo:
+  // - só ids elegíveis da própria pessoa;
+  // - desejo de comida nunca recebe bebida (nem como "atende", nem como substituto).
+  const itemDoCatalogo = new Map(catalog.menuItems.map((i) => [i.id, i]));
+  const classificadas: PessoaClassificada[] = classificacao.pessoas.map((p) => {
+    const pessoa = pessoas.find((x) => x.participant.id === p.participantId);
+    const permitidos = new Set(pessoa?.itensPermitidos.map((i) => i.id));
+    const filtrar = (ids: readonly string[], desejo: string) =>
+      [...new Set(ids)].filter((id) => {
+        if (!permitidos.has(id)) {
+          discarded.push({ participantId: p.participantId, menuItemId: id, reason: 'not_eligible' });
+          return false;
+        }
+        const item = itemDoCatalogo.get(id);
+        if (item && categoriaDoDesejo(desejo) === 'food' && categoriaDoItem(item) === 'drink') {
+          discarded.push({ participantId: p.participantId, menuItemId: id, reason: 'drink_for_food' });
+          return false;
+        }
+        return true;
+      });
+    return {
+      participantId: p.participantId,
+      desejos: p.desejos.map((d, i) => {
+        const desejo = pessoa?.desejos[i] ?? '';
+        return { atende: filtrar(d.atende, desejo), substitutos: filtrar(d.substitutos, desejo) };
+      }),
+    };
+  });
 
-  const uncertain = melhor.proposal.orders
+  /** Substituto da mesma categoria do desejo (para o desempate). */
+  const mesmaCategoria = (e: Escolha): boolean => {
+    const desejo = pessoas.find((x) => x.participant.id === e.participantId)?.desejos[e.desejo] ?? '';
+    const item = itemDoCatalogo.get(e.menuItemId);
+    return !item || categoriaDoItem(item) === categoriaDoDesejo(desejo);
+  };
+
+  const itemPorId = new Map(catalog.menuItems.map((i) => [i.id, i]));
+  const lojaDoItem = new Map(catalog.menuItems.map((i) => [i.id, i.storeId]));
+  const combinacoes = enumerarCombinacoes(catalog.stores.map((s) => s.id));
+
+  const validas: OpcaoValida[] = [];
+  const problemas: ProblemaProposta[] = [];
+  for (const combinacao of combinacoes) {
+    const escolhas = escolherNaCombinacao(combinacao, classificadas, lojaDoItem);
+    const avaliada = avaliarCombinacao(escolhas, session, catalog, classificadas, itemPorId, deps.proposalId, mesmaCategoria);
+    if (avaliada.opcao) validas.push(avaliada.opcao);
+    else problemas.push(...avaliada.problems);
+  }
+  validas.sort((a, b) => compararMetricas(a.metricas, b.metricas));
+  const [melhor] = validas;
+  if (!melhor) return { ok: false, reason: 'no_valid_option', catalog, problems: unicos(problemas) };
+
+  // Alternativa: a próxima combinação com um conjunto de itens diferente.
+  const assinatura = (o: OpcaoValida) =>
+    o.escolhas.map((e) => `${e.participantId}:${e.menuItemId}`).sort().join('|');
+  const alternativa = validas.find((o) => assinatura(o) !== assinatura(melhor));
+  discarded.push(...melhor.descartes);
+
+  // Resumo factual de cada opção (quem ficou com substituto ou sem item, e por quê).
+  const nomeLoja = new Map(catalog.stores.map((s) => [s.id, s.name]));
+  const nomeDe = (id: ParticipantId) => session.participants.find((p) => p.id === id)?.displayName ?? id;
+  const resumir = (opcao: OpcaoValida): ResumoEscolha => {
+    const lojasEscolhidas = new Set(opcao.proposal.orders.map((o) => o.storeId));
+    const motivoSubstituto = (desejo: DesejoClassificado | undefined): string => {
+      if (!desejo || desejo.atende.length === 0) return 'nenhum item do cardápio atende o pedido';
+      const fora = [...new Set(desejo.atende.map((id) => lojaDoItem.get(id)).filter((s): s is StoreId => !!s && !lojasEscolhidas.has(s)))];
+      return fora.length > 0
+        ? `o item pedido só existe em ${fora.map((s) => nomeLoja.get(s) ?? s).join(' ou ')}, fora das lojas escolhidas`
+        : 'o item pedido não está disponível nas lojas escolhidas';
+    };
+    return {
+      lojas: opcao.proposal.orders.map((o) => nomeLoja.get(o.storeId) ?? o.storeId),
+      pessoas: session.participants
+        .filter((p) => opcao.escolhas.some((e) => e.participantId === p.id))
+        .map((p) => ({
+          nome: p.displayName,
+          itens: opcao.escolhas
+            .filter((e) => e.participantId === p.id)
+            .map((e) => ({
+              item: itemPorId.get(e.menuItemId)?.name ?? e.menuItemId,
+              loja: nomeLoja.get(e.storeId) ?? e.storeId,
+              substituto: e.isSubstitute,
+              ...(e.isSubstitute && {
+                motivo: motivoSubstituto(classificadas.find((c) => c.participantId === p.id)?.desejos[e.desejo]),
+              }),
+            })),
+        })),
+      semItem: opcao.proposal.uncoveredParticipantIds.map((id) => ({
+        nome: nomeDe(id),
+        motivo: classificadas.some((c) => c.participantId === id)
+          ? 'nenhuma opção nas lojas escolhidas'
+          : 'nenhum item do catálogo respeita as restrições e o orçamento',
+      })),
+    };
+  };
+
+  const resumoMelhor = resumir(melhor);
+  const resumoAlternativa = alternativa ? resumir(alternativa) : null;
+  const textos = await justificar(resumoMelhor, resumoAlternativa, session, llmOpcoes);
+
+  // Taxa de serviço: cotada no iFood só para a escolhida e a alternativa (uma chamada por loja).
+  const cotada = await cotarTaxas({ ...melhor.proposal, justification: textos.principal }, deps.catalog, deps.address, catalog);
+  const proposal: Proposal = cotada.proposal;
+  const cotadaAlt =
+    alternativa && resumoAlternativa
+      ? await cotarTaxas(
+          { ...alternativa.proposal, id: `${deps.proposalId}-b`, justification: textos.alternativa ?? justificativaPadrao(resumoAlternativa) },
+          deps.catalog,
+          deps.address,
+          catalog,
+        )
+      : undefined;
+  const alternative: Proposal | undefined = cotadaAlt?.proposal;
+  const falhasTaxa = [...new Set([...cotada.falhas, ...(cotadaAlt?.falhas ?? [])])];
+
+  const uncertain = proposal.orders
     .flatMap((o) => o.items)
     .filter((item) => {
       const restricoes = session.participants.find((p) => p.id === item.participantId)?.preferences.dietaryRestrictions ?? [];
-      const menuItem = catalog.menuItems.find((m) => m.id === item.menuItemId);
+      const menuItem = itemPorId.get(item.menuItemId);
       return menuItem !== undefined && itemIncerto(menuItem, restricoes);
     })
     .map((item) => ({ participantId: item.participantId, menuItemId: item.menuItemId }));
 
-  const next = apresentarProposta(session, melhor.proposal);
+  const next = apresentarProposta(session, proposal, alternative);
   return {
     ok: true,
     session: next,
-    proposal: melhor.proposal,
+    proposal,
+    ...(alternative && alternativa && { alternative, metricasAlternativa: alternativa.metricas }),
     catalog,
-    discarded: melhor.discarded,
+    discarded,
     uncertain,
+    metricas: melhor.metricas,
+    combinacoesAvaliadas: combinacoes.length,
+    classificacao: classificadas,
+    ...(falhasTaxa.length > 0 && { taxaServicoIndisponivel: falhasTaxa }),
     actions: [{ type: 'session_updated', session: next }],
   };
 }
 
-/** Cobertura primeiro; empate: menos lojas; depois menor total. */
-function compararPropostas(a: { proposal: Proposal }, b: { proposal: Proposal }): number {
-  const cobertura = (p: Proposal) => p.split.shares.length;
-  return (
-    cobertura(b.proposal) - cobertura(a.proposal) ||
-    a.proposal.orders.length - b.proposal.orders.length ||
-    a.proposal.split.totalCents - b.proposal.split.totalCents
-  );
+/**
+ * Transforma as escolhas de uma combinação em proposta e valida (catálogo,
+ * pedido mínimo, rateio). O orçamento não invalida a combinação: quem passa
+ * dele é contado para o desempate e, depois, perguntado (orcamento.ts).
+ */
+function avaliarCombinacao(
+  escolhas: readonly Escolha[],
+  session: CoreSession,
+  catalog: TimedCatalogSnapshot,
+  classificadas: readonly PessoaClassificada[],
+  itemPorId: ReadonlyMap<MenuItemId, MenuItem>,
+  proposalId: string,
+  mesmaCategoria: (escolha: Escolha) => boolean,
+): { opcao?: OpcaoValida; problems: ProblemaProposta[] } {
+  if (escolhas.length === 0) return { problems: [] };
+  const items: ProposedItem[] = escolhas.map((e) => ({
+    participantId: e.participantId,
+    storeId: e.storeId,
+    menuItemId: e.menuItemId,
+    quantity: 1,
+    unitPriceCents: itemPorId.get(e.menuItemId)?.priceCents ?? 0,
+    ...(e.isSubstitute && { isSubstitute: true }),
+  }));
+  const orders = montarPedidos(items, catalog.stores);
+  const proposal: Proposal = {
+    id: proposalId,
+    sessionId: session.id,
+    orders,
+    split: calcularRateio(orders),
+    uncoveredParticipantIds: session.participants.map((p) => p.id).filter((id) => !items.some((i) => i.participantId === id)),
+    justification: JUSTIFICATIVA_PADRAO,
+  };
+
+  const problems = verificarProposta(proposal, session, catalog);
+  if (problems.length > 0) return { problems };
+  return {
+    opcao: {
+      proposal,
+      metricas: medir([...escolhas], classificadas, orders.length, proposal.split.totalCents, mesmaCategoria, acimaComEntrega(proposal, session)),
+      escolhas: [...escolhas],
+      descartes: [],
+    },
+    problems,
+  };
 }
 
-/**
- * Valida uma opção do modelo: descarta escolhas fora dos itens elegíveis da
- * pessoa, repetidas ou fora do catálogo; preço sempre do catálogo. Quem
- * estoura o orçamento (item + parte da entrega) sai da opção e o rateio é
- * refeito. Outros problemas (pedido mínimo, 3ª loja...) invalidam a opção.
- */
-function avaliarOpcao(option: ModelOption, session: CoreSession, catalog: TimedCatalogSnapshot, proposalId: string): OpcaoAvaliada {
-  const discarded: Descarte[] = [];
-  const elegiveis = new Map(session.participants.map((p) => [p.id, idsElegiveis(p, catalog)]));
-  let items: ProposedItem[] = [];
-
-  for (const pick of option.picks) {
-    const descartar = (reason: DescarteReason) =>
-      discarded.push({ participantId: pick.participantId, menuItemId: pick.menuItemId, reason });
-
-    if (items.some((i) => i.participantId === pick.participantId)) {
-      descartar('duplicate_pick');
-      continue;
-    }
-    const { accepted, rejected } = validarEscolhas([pick], session, catalog);
-    const [item] = accepted;
-    if (!item) {
-      descartar(rejected[0]?.reason ?? 'item_not_in_catalog');
-    } else if (!elegiveis.get(pick.participantId)?.has(pick.menuItemId)) {
-      descartar('not_eligible');
-    } else {
-      items.push(item);
-    }
+/** 2ª chamada (fast): uma frase por opção. Se falhar, o código escreve a frase. */
+async function justificar(
+  escolha: ResumoEscolha,
+  alternativa: ResumoEscolha | null,
+  session: CoreSession,
+  llmOpcoes: { llm: LlmPort; timeoutMs?: number; registrar?: (record: LlmCallRecord) => void },
+): Promise<{ principal: string; alternativa: string | null }> {
+  try {
+    const saida = await gerarEstruturado({
+      ...llmOpcoes,
+      phase: 'proposta_justificativa',
+      tier: 'fast',
+      system: SISTEMA_JUSTIFICATIVA,
+      prompt: montarPromptJustificativa(escolha, alternativa, session.pendingQuestions ?? []),
+      outputName: 'proposta_justificativa',
+      schema: JustificativaSchema,
+    });
+    return { principal: saida.justification, alternativa: alternativa ? saida.alternativeJustification : null };
+  } catch (error) {
+    if (!(error instanceof LlmSaidaInvalidaError)) throw error;
+    return { principal: justificativaPadrao(escolha), alternativa: alternativa ? justificativaPadrao(alternativa) : null };
   }
+}
 
-  for (;;) {
-    if (items.length === 0) return { discarded, problems: [] };
+function unicos(problemas: readonly ProblemaProposta[]): ProblemaProposta[] {
+  const vistos = new Set<string>();
+  return problemas.filter((p) => {
+    const chave = JSON.stringify(p);
+    if (vistos.has(chave)) return false;
+    vistos.add(chave);
+    return true;
+  });
+}
 
-    const orders = montarPedidos(items, catalog.stores);
-    const proposal: Proposal = {
-      id: proposalId,
-      sessionId: session.id,
-      orders,
-      split: calcularRateio(orders),
-      uncoveredParticipantIds: session.participants.map((p) => p.id).filter((id) => !items.some((i) => i.participantId === id)),
-      justification: option.justification,
-    };
-
-    const problems = verificarProposta(proposal, session, catalog);
-    if (problems.length === 0) return { proposal, discarded, problems };
-
-    if (!problems.every((p) => p.code === 'over_budget')) return { discarded, problems };
-    const estouraram = new Set(problems.flatMap((p) => (p.code === 'over_budget' ? [p.participantId] : [])));
-
-    for (const item of items.filter((i) => estouraram.has(i.participantId))) {
-      discarded.push({ participantId: item.participantId, menuItemId: item.menuItemId, reason: 'over_budget' });
-    }
-    items = items.filter((i) => !estouraram.has(i.participantId));
-  }
+/** Quantas pessoas com orçamento pagam, com a parte da entrega, mais que ele (só para o desempate). */
+function acimaComEntrega(proposal: Proposal, session: CoreSession): number {
+  return proposal.split.shares.filter((share) => {
+    const budget = session.participants.find((p) => p.id === share.participantId)?.preferences.budgetCents;
+    return budget !== undefined && share.totalCents > budget;
+  }).length;
 }

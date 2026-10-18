@@ -1,4 +1,4 @@
-import type { OrderAuthorization, ParticipantId, Proposal, SessionState, SessionStatus } from './contracts.js';
+import type { DeliveryAddress, MenuItemId, MoneyCents, OrderAuthorization, ParticipantId, Proposal, SessionState, SessionStatus, StoreId } from './contracts.js';
 
 /** Autorização de compra registrada uma única vez, no fechamento. O horário vem de quem chama. */
 export type Closure = OrderAuthorization;
@@ -9,11 +9,51 @@ export interface PendingQuestion {
   text: string;
 }
 
+/**
+ * Endereço de entrega da sessão, que corre em paralelo à coleta:
+ * - awaiting_text: esperando o organizador digitar (no privado);
+ * - pending_confirmation: há um candidato (padrão ou digitado) esperando [Sim]/[Confirmar];
+ * - confirmed: vale para as buscas, a proposta e o pedido.
+ */
+export interface EnderecoSessao {
+  status: 'awaiting_text' | 'pending_confirmation' | 'confirmed';
+  /** Endereço validado esperando a confirmação do organizador. */
+  candidate?: DeliveryAddress;
+  /** De onde veio o candidato. */
+  origin?: 'default' | 'typed';
+  /** Último endereço confirmado. Durante uma troca, continua guardado, mas não vale até a nova confirmação. */
+  confirmed?: DeliveryAddress;
+}
+
+/** Pergunta de orçamento esperando a resposta da própria pessoa. */
+export interface PerguntaOrcamento {
+  participantId: ParticipantId;
+  /** "valor": aceita passar do orçamento? "sugestao": aceita o item sugerido (ou fica sem)? */
+  etapa: 'valor' | 'sugestao';
+  /** Total perguntado (itens + entrega + serviço). */
+  totalCents: MoneyCents;
+  /** Na etapa "sugestao": o item sugerido e o que ele substitui. Ausente: nada cabe, só "fico sem". */
+  sugestao?: { menuItemId: MenuItemId; storeId: StoreId; replaceMenuItemId: MenuItemId; totalCents: MoneyCents };
+}
+
+export interface EstadoOrcamento {
+  /** Proposta (id sem as revisões -rN) a que as respostas se referem. */
+  proposalBaseId: string;
+  pendentes: PerguntaOrcamento[];
+  /** Quem aceitou passar do orçamento, e até quanto. */
+  aceitos: { participantId: ParticipantId; totalCents: MoneyCents }[];
+}
+
 /** Estado interno do core; compatível com SessionState para a interface. */
 export interface CoreSession extends SessionState {
+  address?: EnderecoSessao;
   proposal?: Proposal;
+  /** Segunda melhor combinação, para o botão "Outra opção". Some quando a proposta muda. */
+  alternative?: Proposal;
   closure?: Closure;
   pendingQuestions?: PendingQuestion[];
+  /** Perguntas de orçamento da proposta atual (quem passou do orçamento). */
+  budget?: EstadoOrcamento;
 }
 
 /** Transições permitidas. closed e cancelled são finais. */
@@ -70,19 +110,36 @@ export function criarSessao(input: Pick<SessionState, 'id' | 'organizerId' | 'pa
 }
 
 /** Coleta → proposta, ou troca a proposta atual durante a revisão. */
-export function apresentarProposta(session: CoreSession, proposal: Proposal): CoreSession {
+export function apresentarProposta(session: CoreSession, proposal: Proposal, alternative?: Proposal): CoreSession {
   transitar(session, 'reviewing');
-  if (proposal.sessionId !== session.id) {
-    throw new Error(`proposta ${proposal.id} é de outra sessão (${proposal.sessionId})`);
+  for (const p of [proposal, alternative]) {
+    if (p && p.sessionId !== session.id) throw new Error(`proposta ${p.id} é de outra sessão (${p.sessionId})`);
   }
-  return { ...session, status: 'reviewing', proposal };
+  // Proposta nova (ou ajustada) invalida a alternativa anterior.
+  const next: CoreSession = { ...session, status: 'reviewing', proposal };
+  if (alternative) next.alternative = alternative;
+  else delete next.alternative;
+  return next;
 }
 
-/** Proposta → coleta, descartando a proposta atual. */
+/**
+ * "Outra opção": a alternativa vira a proposta atual e a atual vira a
+ * alternativa (apertar de novo volta). Da confirmação, volta para revisão.
+ */
+export function trocarPorAlternativa(session: CoreSession): CoreSession {
+  transitar(session, 'reviewing');
+  const { proposal, alternative } = session;
+  if (!proposal || !alternative) throw new Error('não há alternativa para esta proposta');
+  return { ...session, status: 'reviewing', proposal: alternative, alternative: proposal };
+}
+
+/** Proposta → coleta, descartando a proposta atual e a alternativa. */
 export function voltarParaColeta(session: CoreSession): CoreSession {
   transitar(session, 'collecting');
   const next: CoreSession = { ...session, status: 'collecting' };
   delete next.proposal;
+  delete next.alternative;
+  delete next.budget;
   return next;
 }
 

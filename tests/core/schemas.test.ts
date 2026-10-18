@@ -5,7 +5,6 @@ import { calcularRateio } from '../../src/core/regras/rateio.js';
 import {
   MAX_JUSTIFICATION_LENGTH,
   MenuItemSchema,
-  ModelProposalSchema,
   ParticipantShareSchema,
   ProposalSchema,
   ProposedItemSchema,
@@ -35,18 +34,6 @@ function proposal(): Proposal {
     justification: 'Uma loja só cobre as duas pessoas e fica dentro do limite.',
   };
 }
-
-const modelOutput = () => ({
-  options: [
-    {
-      picks: [
-        { participantId: 'ana', storeId: 'burger', menuItemId: 'x-salada', quantity: 1 },
-        { participantId: 'bia', storeId: 'burger', menuItemId: 'veggie', quantity: 2, isSubstitute: true },
-      ],
-      justification: 'Hamburgueria com opção vegetariana.',
-    },
-  ],
-});
 
 describe('tipos dos schemas de domínio são iguais aos do contrato', () => {
   it('compila', () => {
@@ -111,21 +98,30 @@ describe('StoreOrderSchema', () => {
     expect(StoreOrderSchema.safeParse({ ...order(), items: [item('ana', 2500, { storeId: 'outra' })] }).success).toBe(false);
     expect(StoreOrderSchema.safeParse({ ...order(), items: [] }).success).toBe(false);
   });
+
+  it('total inclui a taxa de serviço quando ela existe', () => {
+    expect(StoreOrderSchema.safeParse({ ...order(), serviceFeeCents: 155, totalCents: 3255 }).success).toBe(true);
+    expect(StoreOrderSchema.safeParse({ ...order(), serviceFeeCents: 155 }).success).toBe(false);
+    expect(StoreOrderSchema.safeParse({ ...order(), serviceFeeCents: -1, totalCents: 3099 }).success).toBe(false);
+  });
 });
 
 describe('SplitSchema', () => {
   it('rejeita partes que não somam o total ou participante repetido', () => {
-    const share = { participantId: 'ana', itemsCents: 1000, deliveryCents: 100, totalCents: 1100 };
+    const share = { participantId: 'ana', itemsCents: 1000, deliveryCents: 100, serviceCents: 0, totalCents: 1100 };
     expect(SplitSchema.safeParse({ shares: [share], totalCents: 1100 }).success).toBe(true);
     expect(SplitSchema.safeParse({ shares: [share], totalCents: 1101 }).success).toBe(false);
     expect(SplitSchema.safeParse({ shares: [share, share], totalCents: 2200 }).success).toBe(false);
     expect(SplitSchema.safeParse({ shares: [{ ...share, totalCents: 1000 }], totalCents: 1000 }).success).toBe(false);
   });
 
-  it('parte individual precisa ter total = itens + entrega', () => {
-    const share = { participantId: 'ana', itemsCents: 1000, deliveryCents: 100, totalCents: 1100 };
+  it('parte individual precisa ter total = itens + entrega + serviço', () => {
+    const share = { participantId: 'ana', itemsCents: 1000, deliveryCents: 100, serviceCents: 0, totalCents: 1100 };
     expect(ParticipantShareSchema.safeParse(share).success).toBe(true);
     expect(ParticipantShareSchema.safeParse({ ...share, totalCents: 1099 }).success).toBe(false);
+    expect(ParticipantShareSchema.safeParse({ ...share, serviceCents: 50, totalCents: 1150 }).success).toBe(true);
+    expect(ParticipantShareSchema.safeParse({ ...share, serviceCents: 50 }).success).toBe(false);
+    expect(ParticipantShareSchema.safeParse({ itemsCents: 1000, deliveryCents: 100, totalCents: 1100, participantId: 'ana' }).success).toBe(false);
   });
 });
 
@@ -160,37 +156,3 @@ describe('ProposalSchema', () => {
   });
 });
 
-describe('ModelProposalSchema (saída do modelo)', () => {
-  it('aceita saída só com IDs, quantidade, isSubstitute e justificativa', () => {
-    expect(ModelProposalSchema.safeParse(modelOutput()).success).toBe(true);
-  });
-
-  it('rejeita preço ou qualquer campo extra vindo do modelo', () => {
-    const withPrice = modelOutput();
-    const [option] = withPrice.options;
-    if (!option) throw new Error('fixture sem opção');
-    expect(
-      ModelProposalSchema.safeParse({
-        options: [{ ...option, picks: [{ ...option.picks[0], unitPriceCents: 1 }] }],
-      }).success,
-    ).toBe(false);
-    expect(ModelProposalSchema.safeParse({ options: [{ ...option, totalCents: 100 }] }).success).toBe(false);
-    expect(ModelProposalSchema.safeParse({ ...withPrice, split: {} }).success).toBe(false);
-  });
-
-  it('rejeita mais de 2 lojas numa opção', () => {
-    const picks = ['a', 'b', 'c'].map((storeId) => ({ participantId: 'ana', storeId, menuItemId: 'x', quantity: 1 }));
-    expect(ModelProposalSchema.safeParse({ options: [{ picks, justification: 'ok' }] }).success).toBe(false);
-  });
-
-  it('rejeita quantity fora de 1 a 10, isSubstitute não booleano e opções vazias ou demais', () => {
-    const pick = { participantId: 'ana', storeId: 'a', menuItemId: 'x', quantity: 1 };
-    const option = (p: object) => ({ options: [{ picks: [{ ...pick, ...p }], justification: 'ok' }] });
-    expect(ModelProposalSchema.safeParse(option({ quantity: 11 })).success).toBe(false);
-    expect(ModelProposalSchema.safeParse(option({ quantity: 0 })).success).toBe(false);
-    expect(ModelProposalSchema.safeParse(option({ isSubstitute: 'sim' })).success).toBe(false);
-    expect(ModelProposalSchema.safeParse({ options: [] }).success).toBe(false);
-    const one = { picks: [pick], justification: 'ok' };
-    expect(ModelProposalSchema.safeParse({ options: [one, one, one, one] }).success).toBe(false);
-  });
-});

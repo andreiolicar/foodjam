@@ -84,3 +84,30 @@ describe('CatalogoFake', () => {
     expect(ids(await catalog.searchStores('pizza'))).toEqual(['l1']);
   });
 });
+
+describe('CatalogoFake.validateAddress', () => {
+  it.each([
+    ['rua das flores', 'incomplete'],
+    ['Rua A, 1', 'incomplete'],
+    ['Rua Inexistente, 1 - Lugar Nenhum', 'not_found'],
+    ['Rua A, 10 - Centro, Manaus', 'out_of_area'],
+  ] as const)('%j → %s', async (texto, reason) => {
+    expect(await new CatalogoFake().validateAddress(texto)).toEqual({ ok: false, reason });
+  });
+
+  it('normaliza espaços e capitalização e devolve um id', async () => {
+    const r = await new CatalogoFake().validateAddress('  rua das  flores, 123 - centro,  são paulo ');
+    expect(r).toMatchObject({ ok: true, address: { formatted: 'Rua das Flores, 123 - Centro, São Paulo' } });
+    expect(r.ok && r.address.id).toMatch(/^addr-/);
+  });
+
+  it('registra o endereço recebido nas buscas', async () => {
+    const fake = new CatalogoFake();
+    await fake.searchStores('bolo', { formatted: 'Rua X, 1' });
+    await fake.getMenu(LOJAS.padaria, { formatted: 'Rua X, 1' });
+    expect(fake.calls).toEqual([
+      { operation: 'searchStores', input: 'bolo', address: 'Rua X, 1' },
+      { operation: 'getMenu', input: LOJAS.padaria, address: 'Rua X, 1' },
+    ]);
+  });
+});

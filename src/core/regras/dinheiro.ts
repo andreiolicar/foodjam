@@ -17,3 +17,10 @@ export function somarCents(valores: readonly MoneyCents[]): MoneyCents {
   assertMoneyCents(total, 'soma');
   return total;
 }
+
+/** "R$ 25,90" a partir de centavos (só para textos; contas continuam em centavos). */
+export function formatarBRL(valor: MoneyCents): string {
+  assertMoneyCents(valor);
+  const reais = Math.floor(valor / 100).toLocaleString('pt-BR');
+  return `R$ ${reais},${String(valor % 100).padStart(2, '0')}`;
+}

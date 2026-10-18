@@ -15,12 +15,23 @@ export type ProblemaProposta =
   | { code: 'delivery_fee_changed'; storeId: StoreId; proposedCents: MoneyCents; currentCents: MoneyCents }
   | { code: 'below_minimum'; storeId: StoreId }
   | { code: 'split_mismatch' }
-  | { code: 'over_budget'; participantId: ParticipantId }
-  | { code: 'stale_catalog'; fetchedAt: string; maxAgeMs: number };
+  /** Fechamento com pessoas acima do orçamento que ainda não aceitaram o valor. */
+  | { code: 'budget_pending'; participantIds: ParticipantId[] }
+  /** Fechamento: a taxa de serviço cotada agora difere da proposta. */
+  | { code: 'service_fee_changed'; storeId: StoreId; proposedCents: MoneyCents | null; currentCents: MoneyCents }
+  /** Fechamento: não foi possível cotar a taxa de serviço no iFood. */
+  | { code: 'service_fee_unavailable'; storeId: StoreId }
+  | { code: 'stale_catalog'; fetchedAt: string; maxAgeMs: number }
+  /** Fechamento sem endereço de entrega confirmado pelo organizador. */
+  | { code: 'address_not_confirmed' }
+  /** Ajuste: a pessoa tem vários itens e não ficou claro qual trocar. */
+  | { code: 'which_item'; participantId: ParticipantId; menuItemIds: MenuItemId[] };
 
 /**
  * Validação completa de uma proposta contra a sessão e o catálogo atual.
  * Lista vazia = proposta pode seguir. Usada no ajuste e no fechamento.
+ * O orçamento de cada pessoa NÃO é checado aqui: estourar vira pergunta à
+ * pessoa (orcamento.ts), e o fechamento bloqueia enquanto houver pendência.
  */
 export function verificarProposta(
   proposal: Proposal,
@@ -72,13 +83,6 @@ export function verificarProposta(
   if (!isDeepStrictEqual(calcularRateio(proposal.orders), proposal.split)) {
     problems.push({ code: 'split_mismatch' });
     return problems;
-  }
-
-  for (const share of proposal.split.shares) {
-    const budget = session.participants.find((p) => p.id === share.participantId)?.preferences.budgetCents;
-    if (budget !== undefined && share.totalCents > budget) {
-      problems.push({ code: 'over_budget', participantId: share.participantId });
-    }
   }
 
   return problems;

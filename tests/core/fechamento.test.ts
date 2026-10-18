@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { fechar } from '../../src/core/fechamento.js';
+import { avaliarOrcamentos, responderOrcamento } from '../../src/core/orcamento.js';
 import { NaoAutorizadoError, TransicaoInvalidaError } from '../../src/core/sessao.js';
-import { AGORA, LOJAS, ORG, alterarCatalogo, cenarioPadaria } from './fixtures.js';
+import { AGORA, ENDERECO, LOJAS, ORG, alterarCatalogo, cenarioPadaria } from './fixtures.js';
 
 describe('fechar', () => {
   it('organizador fecha e recebe pedidos por loja, rateio e a autorização', async () => {
@@ -15,6 +16,7 @@ describe('fechar', () => {
       sessionId: 's1',
       proposalId: 'p1',
       authorization: { proposalId: 'p1', authorizedBy: ORG, authorizedAt: AGORA },
+      deliveryAddress: ENDERECO,
       orders: confirmacao.proposal?.orders,
       split: confirmacao.proposal?.split,
     });
@@ -114,12 +116,34 @@ describe('fechar', () => {
     expect(fechar(adulterado, ORG, AGORA, catalog)).toEqual({ ok: false, problems: [{ code: 'split_mismatch' }] });
   });
 
-  it('não fecha se alguém passou do orçamento', async () => {
+  it('não fecha enquanto alguém acima do orçamento não respondeu', async () => {
+    // Bolo do Caio (R$ 8,90) passa de R$ 8.
+    const { catalog, confirmacao } = await cenarioPadaria(800);
+    expect(fechar(confirmacao, ORG, AGORA, catalog)).toEqual({
+      ok: false,
+      problems: [{ code: 'budget_pending', participantIds: ['caio'] }],
+    });
+  });
+
+  it('o orçamento inclui a entrega: itens dentro mas total acima também precisa de resposta', async () => {
+    // Bolo R$ 8,90 ≤ R$ 10; com R$ 1,63 de entrega, R$ 10,53.
     const { catalog, confirmacao } = await cenarioPadaria(1000);
     expect(fechar(confirmacao, ORG, AGORA, catalog)).toEqual({
       ok: false,
-      problems: [{ code: 'over_budget', participantId: 'caio' }],
+      problems: [{ code: 'budget_pending', participantIds: ['caio'] }],
     });
+  });
+
+  it('fecha depois que quem passou do orçamento aceitou o valor', async () => {
+    const { catalog, confirmacao } = await cenarioPadaria(1000);
+    const perguntada = avaliarOrcamentos(confirmacao).session;
+    const respondida = responderOrcamento(perguntada, 'caio', 'aceito', { catalog, classificacao: [] }).session;
+    expect(fechar(respondida, ORG, AGORA, catalog).ok).toBe(true);
+  });
+
+  it('fecha quando todos cabem no orçamento com entrega', async () => {
+    const { catalog, confirmacao } = await cenarioPadaria(1100);
+    expect(fechar(confirmacao, ORG, AGORA, catalog).ok).toBe(true);
   });
 
   it.each([

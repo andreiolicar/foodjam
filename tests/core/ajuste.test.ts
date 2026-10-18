@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ajustar, proximaRevisao } from '../../src/core/ajuste.js';
-import { cancelar } from '../../src/core/sessao.js';
+import { apresentarProposta, cancelar } from '../../src/core/sessao.js';
 import { TransicaoInvalidaError } from '../../src/core/sessao.js';
-import { LOJAS, ORG, cenarioPadaria } from './fixtures.js';
+import { LOJAS, ORG, cenarioPadaria, item, proposta } from './fixtures.js';
 
 const soma = (values: number[]) => values.reduce((a, b) => a + b, 0);
 
@@ -51,7 +51,7 @@ describe('ajustar', () => {
 
     expect(result.proposal.orders.map((o) => o.storeId)).toEqual([LOJAS.padaria, LOJAS.hamburgueria]);
     const caio = result.proposal.split.shares.find((s) => s.participantId === 'caio');
-    expect(caio).toEqual({ participantId: 'caio', itemsCents: 2590, deliveryCents: 799, totalCents: 3389 });
+    expect(caio).toEqual({ participantId: 'caio', itemsCents: 2590, deliveryCents: 799, serviceCents: 0, totalCents: 3389 });
     expect(result.proposal.split.totalCents).toBe(soma(result.proposal.orders.map((o) => o.totalCents)));
   });
 
@@ -70,11 +70,19 @@ describe('ajustar', () => {
     expect(!tres.ok && tres.problems[0]?.code).toBe('invalid_proposal');
   });
 
-  it('item que estoura o orçamento da pessoa é recusado sem expor o valor', async () => {
+  it('ajuste acima do orçamento passa: o orçamento vira pergunta para a pessoa depois', async () => {
+    // Lanche Natural (R$ 13,90) passa de R$ 10; quem decide é a própria pessoa.
+    const { catalog, revisao } = await cenarioPadaria(1000);
+    const result = ajustar(revisao, { participantId: 'caio', storeId: LOJAS.padaria, menuItemId: 'pad-lanche-natural' }, catalog);
+    expect(result.ok).toBe(true);
+  });
+
+  it('a parte da entrega não tira ninguém: itens dentro do orçamento passam mesmo com o total acima', async () => {
+    // Lanche Natural R$ 13,90 ≤ R$ 15; com R$ 1,63 de entrega o total vai a R$ 15,53, e tudo bem.
     const { catalog, revisao } = await cenarioPadaria(1500);
     const result = ajustar(revisao, { participantId: 'caio', storeId: LOJAS.padaria, menuItemId: 'pad-lanche-natural' }, catalog);
-    expect(result).toEqual({ ok: false, problems: [{ code: 'over_budget', participantId: 'caio' }] });
-    expect(JSON.stringify(result)).not.toContain('1500');
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.proposal.split.shares.find((s) => s.participantId === 'caio')?.totalCents).toBe(1390 + 163);
   });
 
   it.each([
@@ -135,5 +143,40 @@ describe('ajustar', () => {
     expect(() => ajustar(cancelada, { participantId: 'caio', storeId: LOJAS.padaria, menuItemId: 'pad-cafe' }, catalog)).toThrow(
       TransicaoInvalidaError,
     );
+  });
+});
+
+describe('ajustar: pessoa com vários itens', () => {
+  async function comDoisItens() {
+    const { catalog, revisao } = await cenarioPadaria();
+    const p = proposta(catalog, [item(catalog, 'bia', 'pad-misto'), item(catalog, 'bia', 'pad-bolo-cenoura'), item(catalog, 'caio', 'pad-cafe')], 'p2');
+    return { catalog, session: apresentarProposta(revisao, p) };
+  }
+  const itens = (r: { ok: boolean; proposal?: { orders: { items: { participantId: string; menuItemId: string }[] }[] } }) =>
+    r.proposal?.orders.flatMap((o) => o.items).map((i) => `${i.participantId}:${i.menuItemId}`);
+
+  it('troca só o item indicado, no mesmo lugar', async () => {
+    const { catalog, session } = await comDoisItens();
+    const r = ajustar(session, { participantId: 'bia', storeId: LOJAS.padaria, menuItemId: 'pad-cafe', replaceMenuItemId: 'pad-bolo-cenoura' }, catalog);
+    expect(itens(r as never)).toEqual(['bia:pad-misto', 'bia:pad-cafe', 'caio:pad-cafe']);
+  });
+
+  it('com vários itens e sem indicar qual sai: which_item com os itens da pessoa', async () => {
+    const { catalog, session } = await comDoisItens();
+    const r = ajustar(session, { participantId: 'bia', storeId: LOJAS.padaria, menuItemId: 'pad-cafe' }, catalog);
+    expect(r).toEqual({ ok: false, problems: [{ code: 'which_item', participantId: 'bia', menuItemIds: ['pad-misto', 'pad-bolo-cenoura'] }] });
+  });
+
+  it('item indicado que não é da pessoa: which_item', async () => {
+    const { catalog, session } = await comDoisItens();
+    const r = ajustar(session, { participantId: 'bia', storeId: LOJAS.padaria, menuItemId: 'pad-cafe', replaceMenuItemId: 'pad-cafe' }, catalog);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.problems[0]?.code).toBe('which_item');
+  });
+
+  it('com um item só, não precisa indicar', async () => {
+    const { catalog, session } = await comDoisItens();
+    const r = ajustar(session, { participantId: 'caio', storeId: LOJAS.padaria, menuItemId: 'pad-misto' }, catalog);
+    expect(itens(r as never)).toEqual(['bia:pad-misto', 'bia:pad-bolo-cenoura', 'caio:pad-misto']);
   });
 });
