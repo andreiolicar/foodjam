@@ -16,10 +16,10 @@ O objetivo do MVP é ajudar um grupo a fazer um pedido em conjunto:
 ## O que funciona hoje
 
 - **Core (Íris):** coleta de preferências em linguagem natural (em lote), endereço de entrega, proposta com 1 ou 2 lojas e alternativa, rateio em centavos com entrega e taxa de serviço, orçamento resolvido no privado, ajustes por texto e fechamento idempotente com `AuthorizedOrder`. Veja [a API do core](docs/api-core.md).
-- **Bot do Telegram (grammY):** início por menção ou `/iniciar`, endereço e valores no privado, card da proposta com botões, `/montar` e `/cancelar`.
-- **Modelo de IA:** qualquer API compatível com OpenAI, configurada no `.env`; sem chave, usa um modelo fake (heurístico, sem rede).
-- **Catálogo:** nesta versão o core usa o catálogo fake (`CatalogoFake`, 5 lojas fictícias). O cliente MCP do iFood está em `feat/ifood-mcp`; ligar o catálogo do core a ele é o próximo passo.
-- **Compra:** o core entrega o pedido autorizado e não compra nada; o executor do pedido no iFood ainda não existe.
+- **Bot do Telegram (grammY):** início por menção ou `/iniciar`, endereço confirmado no grupo e confirmações individuais de orçamento no privado, card da proposta com botões, `/montar` e `/cancelar`.
+- **Modelo de IA em produção:** Groq real obrigatório. Configuração ausente ou falha do provedor interrompe a operação; não há fallback silencioso para modelo fake.
+- **Catálogo em produção:** adaptador MCP real da IF-05, com uma conexão autenticada compartilhada durante a execução. Preços e disponibilidade desconhecidos permanecem pendentes.
+- **Demo integrada:** o bot mostra uma proposta preliminar, com revisão, outra opção, ajustes e cancelamento. Preparação comercial e aceites financeiros ficam pendentes; nenhuma compra ou criação automática de carrinho é executada. Veja [a experiência coletiva IF-06](src/ifood/IF-06.md) e [o handoff grammY + IF-05](src/ifood/GRAMMY-INTEGRATION.md).
 
 Sem `TELEGRAM_BOT_TOKEN`, `npm run dev` mostra `foodjam: bootstrap inicializado.`, avisa que o bot não foi iniciado e encerra.
 
@@ -44,11 +44,12 @@ npm ci
 npm run dev
 ```
 
-Com `TELEGRAM_BOT_TOKEN` no `.env`, a saída esperada é:
+Com Telegram, MCP e Groq configurados e OAuth autorizado, a composição registra as fontes:
 
 ```text
 foodjam: bootstrap inicializado.
-foodjam: bot @seu_bot iniciado.
+FoodJam fontes: catalog=ifood-mcp llm=groq modo=preliminar interface=grammy
+foodjam: interface grammY iniciada em modo preliminar.
 ```
 
 Para desenvolver com recarga automática, use `npm run bot:dev`. Só um processo pode usar o mesmo token por vez (senão o Telegram responde 409); para testar em paralelo, cada pessoa cria o próprio bot no @BotFather.
@@ -64,7 +65,7 @@ npm start
 
 ## Variáveis de ambiente
 
-Todas as variáveis são opcionais: sem elas, os testes e o simulador rodam com modelo e catálogo fakes. Para preparar sua configuração local, copie o exemplo:
+Os testes usam respostas controladas. A entrada de produção exige Telegram, MCP e Groq reais. Os fakes continuam disponíveis para testes e simuladores explícitos. Para preparar sua configuração local, consulte o handoff e o exemplo:
 
 ```bash
 cp .env.example .env
@@ -73,11 +74,11 @@ cp .env.example .env
 | Variável | Para que serve |
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | Token do bot (do @BotFather). Sem ele, o bot não sobe. |
-| `ENDERECO_PADRAO` | Opcional: endereço oferecido ao organizador no início ([Sim] [Outro endereço]). Sem ele, o bot pede o endereço no privado. |
+| Endereço de entrega | Na demo real, selecionado de `listAddresses` e confirmado pelo organizador no grupo; não é inferido de `ENDERECO_PADRAO`. |
 | `IFOOD_MCP_ENDPOINT` | Endpoint informado: `https://consumer-mcp.ifood.com.br/marketplace`. |
 | `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` | Modelo de IA (API compatível com OpenAI). Os opcionais por nível e de reserva estão comentados no `.env.example`. |
 
-A autenticação do iFood ainda precisa ser confirmada. As variáveis de credenciais dessa integração serão definidas depois dessa confirmação.
+O MCP exige `IFOOD_MCP_CLIENT_ID`, `IFOOD_MCP_CLIENT_SECRET` e `IFOOD_MCP_CALLBACK_URL`, além de OAuth interativo local. Consulte [a inicialização do iFood](src/ifood/README.md).
 
 **Nunca envie tokens ou chaves para o Git.** O arquivo `.env` está ignorado; o `.env.example` deve conter apenas exemplos sem segredos.
 
@@ -110,7 +111,7 @@ foodjam/
 └── package-lock.json     # Versões exatas das dependências
 ```
 
-O fluxo é: **Telegram → Core / Agente IA → Integração MCP → iFood**. Hoje o trecho até o core funciona de ponta a ponta; o core fala com o catálogo por uma porta própria (`CatalogPort`), atendida pelo catálogo fake até a ligação com o MCP.
+O fluxo é: **Telegram → Core / Agente IA → Integração MCP → iFood**. A entrada única `src/index.ts` usa a composição real de `src/app.ts` e a porta de descoberta, que representa informações comerciais ainda não confirmadas. A porta cotada e seus testes permanecem preservados; o bot real não usa catálogos simulados.
 
 O core controla as regras de negócio. Valores monetários usam **centavos inteiros**: `2590` representa R$ 25,90. O modelo de IA não deve fazer os cálculos financeiros nem autorizar a compra final.
 
