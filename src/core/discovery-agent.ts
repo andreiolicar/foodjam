@@ -108,7 +108,6 @@ export function criarAgenteDescoberta(deps: { catalog: DiscoveryCatalogPort; llm
     // Executada somente dentro de serial(): nenhuma operação da sessão pode
     // substituir a proposta entre esta conferência e a mutação abaixo.
     if (expected !== undefined && record.session.preliminary?.id !== expected) return { outcome: 'proposal_stale', session: record.session, actions: [] };
-    if (action === 'revisar') return { outcome: 'preliminary_review', session: record.session, actions: [] };
     if (action === 'outra_opcao') {
       const { preliminary, preliminaryAlternative } = record.session;
       if (!preliminary || !preliminaryAlternative) return { outcome: 'no_alternative', session: record.session, actions: [message(id, actor, 'Não há outra opção validada nesta amostra do catálogo.')] };

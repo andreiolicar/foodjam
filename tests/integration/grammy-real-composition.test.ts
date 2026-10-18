@@ -68,10 +68,9 @@ it('entrada real conecta grammY/Core/adaptador MCP, preserva revisão/alternativ
     expect(publicText).toContain('Disponibilidade e valores comerciais ainda precisam de confirmação.');
     expect(publicText).not.toMatch(new RegExp(`${merchant}|${products.join('|')}|loja-burger|burger-x-salada|R\\$ 0,00`));
     const confirm = vi.spyOn(h.runtime.iris, 'fechar'); const readCount = transport.read.mock.calls.length;
-    const review = h.button('Revisar proposta preliminar');
-    await h.click(72, review.data, group, review.m.id); await h.click(71, 'proposta:confirmar', group, review.m.id);
+    const card = h.button('Outra opção');
+    await h.click(71, 'proposta:confirmar', group, card.m.id);
     expect(confirm).not.toHaveBeenCalled(); expect(transport.read).toHaveBeenCalledTimes(readCount);
-    await h.click(71, review.data, group, review.m.id); expect(h.sent.at(-1)?.text).toContain('Nenhuma compra');
     const before = http.mock.calls.length; const alternative = h.button('Outra opção'); await h.click(71, alternative.data, group, alternative.m.id);
     expect(http.mock.calls.length).toBe(before);
     const afterSwitch = h.sent.length; await h.click(71, alternative.data, group, alternative.m.id); expect(h.sent.length).toBe(afterSwitch);

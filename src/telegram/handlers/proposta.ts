@@ -3,7 +3,7 @@ import type { Bot, CallbackQueryContext, Context } from 'grammy';
 import type { AcaoPropostaPreliminar, Agente, Agrupador, AuthorizedOrder, Resposta } from '../../core/index.js';
 import { apresentarActions } from '../services/apresentacao.js';
 import { DADOS_CARD, textoPedido } from '../services/card.js';
-import { exibirProposta, retirarBotoesDoCard, cardAtual, propostaDoCard } from '../services/proposta-tela.js';
+import { exibirProposta, retirarBotoesDoCard, propostaDoCard } from '../services/proposta-tela.js';
 import { cancelarPedido } from './cancelar.js';
 import { exibirRevisaoCarrinho } from '../services/cart-tela.js';
 import { lembrarSessao } from '../services/privado.js';
@@ -110,19 +110,6 @@ export function registrarProposta(bot: Bot, iris: Agente, agrupador: Agrupador, 
     }
     await ctx.answerCallbackQuery();
     await cancelarPedido(ctx, iris, agrupador);
-  });
-
-  bot.callbackQuery(DADOS_CARD.revisar, async ctx => {
-    if (preliminaryOnly) {
-      const r = await chamar(ctx, agrupador, async () => ({ outcome: 'error', actions: [] }), { iris, action: 'revisar' });
-      if (r?.resposta.outcome === 'preliminary_review') await ctx.reply('Revisão preliminar: confira os itens e quem ficou sem item. Valores finais e disponibilidade dependem de preparação comercial autorizada e consulta ao carrinho. Nenhuma compra foi confirmada.');
-      return;
-    }
-    const sessionId = String(ctx.chat?.id); const session = await iris.obter(sessionId);
-    if (session?.organizerId !== String(ctx.from.id)) { await ctx.answerCallbackQuery({ text: 'Só quem organizou pode revisar a proposta.', show_alert: true }); return; }
-    if (!session.preliminary || !ctx.callbackQuery.message || !cardAtual(sessionId, ctx.callbackQuery.message.message_id)) { await ctx.answerCallbackQuery({ text: 'Use a proposta preliminar atual.', show_alert: true }); return; }
-    await ctx.answerCallbackQuery();
-    await ctx.reply('Revisão preliminar: confira os itens e quem ficou sem item. Valores finais e disponibilidade dependem de preparação comercial autorizada e consulta ao carrinho. Nenhuma compra foi confirmada.');
   });
 
   // Confirmar: só o organizador; o core revalida catálogo e taxa e emite o pedido autorizado.

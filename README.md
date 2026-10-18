@@ -1,174 +1,125 @@
 # foodjam
 
-Agente de IA para organizar pedidos coletivos em grupos do Telegram, com integração ao MCP do iFood.
+**Íris**, agente de IA que organiza pedidos coletivos de comida em grupos do Telegram, com catálogo real do iFood via MCP.
 
-Projeto do **Hackathon SEMCOMP × iFood 2026**, no desafio **Vendendo com Agentes**.
+🌐 **Site do projeto:** [foodjam.online](https://foodjam.online/)
 
-## O que queremos construir
+Projeto do **Hackathon SEMCOMP × iFood 2026**, desafio **Vendendo com Agentes**.
 
-O objetivo do MVP é ajudar um grupo a fazer um pedido em conjunto:
+## O problema e a solução
 
-1. Reunir os participantes e suas preferências, restrições alimentares e orçamentos.
-2. Consultar as opções disponíveis por meio do MCP do iFood.
-3. Organizar uma proposta de pedido e calcular o valor de cada pessoa.
-4. Solicitar autorização explícita da pessoa responsável antes de concluir uma compra.
+Pedir comida em grupo costuma virar uma conversa longa: cada um quer uma coisa, tem restrições, um limite de gasto, e alguém precisa juntar tudo, achar lojas que atendam e dividir a conta.
 
-## O que funciona hoje
+A Íris entra no grupo, entende em linguagem natural o que cada pessoa quer, busca opções no iFood e devolve uma proposta de pedido com no máximo duas lojas. Quem organizou decide pelos botões.
 
-- **Core (Íris):** coleta de preferências em linguagem natural (em lote), endereço de entrega, proposta com 1 ou 2 lojas e alternativa, rateio em centavos com entrega e taxa de serviço, orçamento resolvido no privado, ajustes por texto e fechamento idempotente com `AuthorizedOrder`. Veja [a API do core](docs/api-core.md).
-- **Bot do Telegram (grammY):** início por menção ou `/iniciar`, endereço confirmado no grupo e confirmações individuais de orçamento no privado, card da proposta com botões, `/montar` e `/cancelar`.
-- **Modelo de IA em produção:** Groq real como principal, Gemini e OpenRouter como reservas configuráveis pela cascata da equipe (`AI_2_*`, `AI_3_*`). Não há fallback para modelo fake.
-- **Catálogo em produção:** adaptador MCP real da IF-05, com uma conexão autenticada compartilhada durante a execução. Preços e disponibilidade desconhecidos permanecem pendentes.
-- **Demo integrada:** o bot mostra uma proposta preliminar, com revisão, outra opção, ajustes e cancelamento. Preparação comercial e aceites financeiros ficam pendentes; nenhuma compra ou criação automática de carrinho é executada. Veja [a experiência coletiva IF-06](src/ifood/IF-06.md) e [o handoff grammY + IF-05](src/ifood/GRAMMY-INTEGRATION.md).
+## Como funciona no grupo
 
-Sem `TELEGRAM_BOT_TOKEN`, `npm run dev` mostra `foodjam: bootstrap inicializado.`, avisa que o bot não foi iniciado e encerra.
+1. **Início:** alguém menciona o bot ou usa `/iniciar` e vira o organizador.
+2. **Endereço:** a Íris mostra um endereço salvo na conta iFood, e o organizador confirma no grupo ou percorre os outros. `/endereco` troca o endereço depois.
+3. **Coleta:** cada pessoa responde à mensagem da Íris com o que quer ("dois pães de queijo e um café", "sou vegetariano", "até 30 reais"). Mensagens próximas são processadas em lote.
+4. **Proposta:** o organizador usa `/montar`. A Íris mostra uma proposta preliminar com fotos e avaliações, quem recebe o quê e quem ficou sem item. Os botões permitem ver outra opção, voltar para a coleta ou cancelar. Novas mensagens ajustam a proposta.
+5. **Carrinho (opcional):** com a preparação comercial habilitada, o organizador pode montar o carrinho no iFood para revisar valores reais. **Nenhuma compra ou pagamento é feito:** o fechamento fica bloqueado nesta versão.
 
-## Tecnologias
+Orçamentos são privados: perguntas sobre valor vão no privado, e cada pessoa precisa mandar `/start` ao bot uma vez.
 
-- **Node.js e TypeScript** com verificação estrita de tipos e módulos ESM.
-- **npm** para instalar dependências e executar os comandos.
-- **tsx** para executar TypeScript durante o desenvolvimento.
-- **ESLint e Vitest** para qualidade de código e testes.
-- **dotenv** para carregar variáveis de ambiente.
-- **grammY** para o bot do Telegram.
-- **Zod** para validar a saída do modelo e os contratos; **SDK MCP** para a integração com o iFood.
+## Princípios
 
-## Como instalar e executar
+- **A IA interpreta, o código decide.** O modelo extrai preferências e casa desejos com itens do cardápio. Preços, lojas, pedido mínimo, rateio e autorização ficam em código testado.
+- **Dinheiro em centavos inteiros** (`2590` = R$ 25,90). O rateio fecha sempre no centavo.
+- **Sem valor inventado.** Preço, frete ou taxa que o iFood não confirmou aparecem como "a confirmar".
+- **Só o organizador** confirma endereço, monta, prepara carrinho e cancela.
+- **Dados pessoais e segredos não vão para logs nem para o Git.**
 
-Use **Node.js 24 LTS** ou **22.13.0+ na linha 22**, com npm. O repositório é privado: sua conta precisa ter acesso.
+## Arquitetura
+
+```text
+Telegram (grammY)  →  Core / Íris (regras + IA)  →  Integração MCP  →  iFood
+```
+
+| Módulo | O que faz | Responsável |
+| --- | --- | --- |
+| [`src/telegram`](src/telegram/README.md) | Mensagens, botões, cards da proposta e lotes de mensagens | Allan |
+| [`src/core`](src/core/README.md) | Sessão, coleta, descoberta, proposta, rateio, orçamento e cascata de LLMs | Ana Paula |
+| [`src/ifood`](src/ifood/README.md) | Cliente MCP com OAuth, catálogo, endereços e carrinho (com allowlists por operação) | Andrei |
+| `src/app.ts` | Composição real: Telegram + core + Groq + MCP | — |
+
+O core não conhece Telegram nem iFood: ele usa portas próprias (`ports.ts`) e contratos compartilhados (`contracts.ts`).
+
+**IA:** qualquer API compatível com OpenAI. Em produção, Groq é o provedor principal, com Gemini e OpenRouter como reservas em cascata. Se um provedor falha (cota, timeout, erro), o próximo é usado.
+
+## Como rodar
+
+Requisitos: **Node.js 24 LTS** (ou 22.13+) e acesso ao repositório.
 
 ```bash
 git clone https://github.com/andreiolicar/foodjam.git
 cd foodjam
 npm ci
-npm run dev
+cp .env.example .env   # preencha as variáveis abaixo
+npm run dev            # ou: npm run dev -- --env caminho/do/.env
 ```
 
-Com Telegram, MCP e Groq configurados e OAuth autorizado, a composição registra as fontes:
+Sem `TELEGRAM_BOT_TOKEN`, o bot não sobe. Com tudo configurado, o log mostra `catalog=ifood-mcp llm=groq modo=preliminar`. Só um processo pode usar cada token; para testar em paralelo, crie seu próprio bot no @BotFather.
 
-```text
-foodjam: bootstrap inicializado.
-FoodJam fontes: catalog=ifood-mcp llm=groq modo=preliminar interface=grammy
-foodjam: interface grammY iniciada em modo preliminar.
-```
+Para testar sem Telegram nem iFood, use `npm run simular`, que simula um grupo no terminal com catálogo fake.
 
-Para desenvolver com recarga automática, use `npm run bot:dev`. Só um processo pode usar o mesmo token por vez (senão o Telegram responde 409); para testar em paralelo, cada pessoa cria o próprio bot no @BotFather.
-
-No grupo: mencione o bot ou use `/iniciar`, cada pessoa escreve o que quer, e quem organizou usa `/montar` e decide pelos botões. Cada participante precisa mandar `/start` ao bot uma vez, para receber mensagens no privado.
-
-Para compilar e executar o JavaScript gerado:
-
-```bash
-npm run build
-npm start
-```
-
-## Variáveis de ambiente
-
-Os testes usam respostas controladas. A entrada de produção exige Telegram, MCP e Groq reais. Os fakes continuam disponíveis para testes e simuladores explícitos. Para preparar sua configuração local, consulte o handoff e o exemplo:
-
-```bash
-cp .env.example .env
-```
+### Variáveis de ambiente
 
 | Variável | Para que serve |
 | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | Token do bot (do @BotFather). Sem ele, o bot não sobe. |
-| Endereço de entrega | Na demo real, selecionado de `listAddresses` e confirmado pelo organizador no grupo; não é inferido de `ENDERECO_PADRAO`. |
-| `IFOOD_MCP_ENDPOINT` | Endpoint informado: `https://consumer-mcp.ifood.com.br/marketplace`. |
-| `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` | Modelo de IA (API compatível com OpenAI). Os opcionais por nível e de reserva estão comentados no `.env.example`. |
-| `AI_2_*`, `AI_3_*` | Reservas da aplicação real: Gemini e OpenRouter, nesta ordem, com endpoint, chave e modelos próprios por tier. O Core genérico admite até `AI_9_*` nos simuladores. |
+| `TELEGRAM_BOT_TOKEN` | Token do bot (@BotFather). |
+| `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL*`, `AI_API_KEY` | Provedor principal de IA (Groq na produção). |
+| `AI_2_*`, `AI_3_*` | Provedores reserva da cascata (Gemini, OpenRouter). |
+| `IFOOD_MCP_ENDPOINT`, `IFOOD_MCP_CLIENT_ID`, `IFOOD_MCP_CLIENT_SECRET`, `IFOOD_MCP_CALLBACK_URL` | MCP do iFood. O OAuth é interativo na primeira execução. |
+| `FOODJAM_CART_PREPARATION_ENABLED`, `FOODJAM_CART_JOURNAL_DIR` | Opcional: habilita "Preparar carrinho" e define onde fica o registro privado dos carrinhos. |
+| `FOODJAM_DISCOVERY_*` | Opcional: limites da busca no catálogo (termos, lojas, itens, tempo). |
 
-O MCP exige `IFOOD_MCP_CLIENT_ID`, `IFOOD_MCP_CLIENT_SECRET` e `IFOOD_MCP_CALLBACK_URL`, além de OAuth interativo local. Consulte [a inicialização do iFood](src/ifood/README.md).
+Detalhes em [`.env.example`](.env.example) e em [`src/ifood/README.md`](src/ifood/README.md). **Nunca faça commit do `.env`.**
 
-**Nunca envie tokens ou chaves para o Git.** O arquivo `.env` está ignorado; o `.env.example` deve conter apenas exemplos sem segredos.
-
-## Organização do código
-
-```text
-foodjam/
-├── src/
-│   ├── telegram/         # Conversas, botões e mensagens do bot
-│   ├── core/             # Agente de IA, regras e contracts.ts
-│   ├── ifood/            # Integração com o MCP do iFood
-│   └── index.ts          # Ponto de entrada da aplicação
-├── tests/
-│   ├── core/             # Regras de negócio do core
-│   └── telegram/         # Bot de verdade (grammY + core) com a API do Telegram simulada
-├── scripts/              # Simulador de conversa e avaliação da coleta
-├── entregaveis/          # Entregáveis do hackathon
-├── docs/
-│   ├── api-core.md       # API do core para o bot (fluxo, botões, outcomes)
-│   ├── core-decisoes.md  # Decisões e medições do core (modelos, tokens)
-│   ├── architecture.md  # Arquitetura e limites dos módulos
-│   ├── teste-pedido-colaborativo-iris.md
-│   └── feedback-mcp/
-│       └── MCP-02-beneficios-e-total-do-carrinho.md
-├── .env.example          # Exemplo de configuração local
-├── eslint.config.js      # Regras de qualidade de código
-├── tsconfig.json         # Verificação de tipos de fontes e testes
-├── tsconfig.build.json   # Compilação apenas das fontes para dist/
-├── package.json          # Dependências e comandos
-└── package-lock.json     # Versões exatas das dependências
-```
-
-O fluxo é: **Telegram → Core / Agente IA → Integração MCP → iFood**. A entrada única `src/index.ts` usa a composição real de `src/app.ts` e a porta de descoberta, que representa informações comerciais ainda não confirmadas. A porta cotada e seus testes permanecem preservados; o bot real não usa catálogos simulados.
-
-O core controla as regras de negócio. Valores monetários usam **centavos inteiros**: `2590` representa R$ 25,90. O modelo de IA não deve fazer os cálculos financeiros nem autorizar a compra final.
-
-Os contratos de `src/core/contracts.ts` são um ponto de partida e poderão mudar conforme a integração. Consulte [a arquitetura](docs/architecture.md) para conhecer os limites e as decisões do projeto.
-
-## Documentação
-
-- [API do core](docs/api-core.md): como o bot usa o core (fluxo, botões, outcomes, orçamento e fechamento).
-- [Decisões do core](docs/core-decisoes.md): escolhas de modelo, lote e medições.
-- [Arquitetura](docs/architecture.md): responsabilidades e limites dos módulos.
-- [Teste de pedido colaborativo](docs/teste-pedido-colaborativo-iris.md): relatório do teste realizado com a Íris.
-- [Feedback MCP-02](docs/feedback-mcp/MCP-02-beneficios-e-total-do-carrinho.md): observações sobre benefícios e alterações no total do carrinho.
-
-Os relatórios foram mantidos com seus nomes e conteúdos originais.
-
-## Comandos e testes
+## Comandos
 
 | Comando | O que faz |
 | --- | --- |
-| `npm run dev` | Sobe o bot com tsx (precisa de `TELEGRAM_BOT_TOKEN`). |
-| `npm run bot:dev` | Igual ao `dev`, com recarga automática ao editar o código. |
+| `npm run dev` / `npm run bot:dev` | Sobe o bot (o segundo recarrega ao editar). |
 | `npm run simular` | Simula um grupo no terminal, sem Telegram. |
-| `npm run build` | Compila TypeScript para a pasta `dist/`. |
-| `npm start` | Executa a versão compilada. Requer o build antes. |
-| `npm run lint` | Verifica as regras de qualidade do código. |
-| `npm run typecheck` | Verifica os tipos sem gerar arquivos. |
-| `npm test` | Executa os testes uma vez. |
-| `npm run check` | Executa lint, verificação de tipos e testes. |
+| `npm run avaliar:coleta` | Mede a qualidade da coleta com um provedor de IA. |
+| `npm run listar:modelos` | Lista os ids de modelo de um provedor. |
+| `npm run check` | Lint, tipos e testes. **Rode antes de abrir PR.** |
+| `npm run build` / `npm start` | Compila para `dist/` e executa. |
 
-Os testes cobrem as regras de negócio do core e os fluxos do bot (com o grammY de verdade e a API do Telegram simulada), além da inicialização sem `.env`. Nenhum teste acessa serviços externos.
+Os testes (Vitest) cobrem as regras do core, o cliente MCP e os fluxos do bot com o grammY de verdade e a API do Telegram simulada. Nenhum teste acessa a rede.
 
-## Como a equipe deve trabalhar
+## Estrutura
 
-| Responsável | Módulo | Branch |
-| --- | --- | --- |
-| Desenvolvedor 1 — Andrei | [iFood](src/ifood/README.md) | `feat/ifood-mcp` |
-| Desenvolvedor 2 — Allan | [Telegram](src/telegram/README.md) | `feat/telegram-bot` |
-| Desenvolvedor 3 — Ana Paula| [Core / Agente IA](src/core/README.md) | `feat/core-agent` |
-
-Comece pela `main` atualizada e crie sua branch. Exemplo para a integração iFood:
-
-```bash
-git switch main
-git pull --ff-only
-git switch -c feat/ifood-mcp
+```text
+src/
+├── core/        # Íris: regras de negócio, prompts, LLM e contratos
+├── telegram/    # Bot grammY
+├── ifood/       # Integração MCP (e documentação de cada etapa IF-0x)
+├── app.ts       # Composição real
+└── index.ts     # Entrada
+tests/           # core, ifood, telegram e integração
+scripts/         # Simulador, avaliação da coleta e utilitários do iFood
+docs/            # Arquitetura, API do core, decisões e relatórios
 ```
 
-Cada desenvolvedor trabalha principalmente na sua pasta. Combinem mudanças nos contratos compartilhados antes de implementá-las e coordenem alterações nas dependências e no ponto de entrada.
+## Documentação
 
-Antes de abrir um **pull request para `main`**, execute:
+- [Arquitetura](docs/architecture.md): limites e responsabilidades dos módulos.
+- [API do core](docs/api-core.md): fluxo, botões e outcomes usados pelo bot.
+- [Decisões do core](docs/core-decisoes.md): escolha de modelos, lote e medições.
+- [Integração iFood](docs/integracao-ifood.md) e [handoff grammY + MCP](src/ifood/GRAMMY-INTEGRATION.md).
+- [Experiência coletiva (IF-06)](src/ifood/IF-06.md) e [revisão de carrinho no Telegram](docs/telegram-cart-review.md).
+- [Teste de pedido colaborativo](docs/teste-pedido-colaborativo-iris.md) e [feedback MCP-02](docs/feedback-mcp/MCP-02-beneficios-e-total-do-carrinho.md).
 
-```bash
-npm run check
-npm run build
-```
+## Contribuindo
 
-No PR, explique o que mudou e como testar. As alterações entram por pull requests; evite commits diretos na `main`.
+Crie uma branch a partir da `main` atualizada, trabalhe principalmente no seu módulo e abra um pull request. Mudanças em `src/core/contracts.ts` são compartilhadas: combine com a equipe antes. Antes do PR, rode `npm run check` e `npm run build`.
 
-Nos imports locais de TypeScript, use a extensão `.js`, para que o código também funcione após a compilação. Para importar apenas contratos, use `import type`.
+Convenções: TypeScript estrito com ESM, imports locais com extensão `.js` e `import type` para tipos.
+
+## Limitações conhecidas
+
+- **Sem compra:** pagamento e envio do pedido estão bloqueados; a proposta é preliminar.
+- **Endereço só da conta:** endereços novos precisam ser cadastrados no app do iFood.
+- **Descontos sem detalhamento:** o MCP ainda não detalha os benefícios do carrinho (ver MCP-02), então o rateio final depende de validação.

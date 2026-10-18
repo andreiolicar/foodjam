@@ -35,8 +35,8 @@ Arquivos centrais da adaptação: `src/app.ts`, `src/index.ts`, `src/core/discov
 - O agrupador grammY, a coleta do Core e o provedor configurado são reutilizados. A classificação da IF-05 continua por pessoa, com os schemas e a validação do Core.
 - O card usa nomes do MCP e dos participantes, mostra cobertura e substituições e não publica IDs internos nem endereço. Preço desconhecido, disponibilidade desconhecida, frete, taxas, descontos, total final e verificação do orçamento ficam explicitamente pendentes.
 - Outra opção troca por uma alternativa já classificada na mesma amostra, sem nova chamada ao modelo. Ausência de alternativa é informada. Ajustes invalidam a proposta anterior e passam novamente pelo Core.
-- Cancelamento e revisão são restritos ao organizador; callbacks de cards substituídos são rejeitados. Mensagens privadas e botões de orçamento da interface original permanecem, assim como os testes do fluxo cotado. No modo preliminar, nenhum clique registra aceite de valor desconhecido.
-- `Revisar proposta preliminar` substitui `Confirmar pedido` na produção. Mesmo um callback antigo/forjado de confirmação não chama `fechar` ou executor. A fachada real também bloqueia `fechar`.
+- Cancelamento e volta para a coleta são restritos ao organizador; callbacks de cards substituídos são rejeitados. Mensagens privadas e botões de orçamento da interface original permanecem, assim como os testes do fluxo cotado. No modo preliminar, nenhum clique registra aceite de valor desconhecido.
+- Na produção, o card preliminar não tem `Confirmar pedido`. Mesmo um callback antigo/forjado de confirmação não chama `fechar` ou executor. A fachada real também bloqueia `fechar`.
 
 ## Reconciliação da cascata com a main
 

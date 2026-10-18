@@ -12,7 +12,7 @@ it('card preliminar mantém o visual e apresenta incerteza, cobertura e nomes se
   expect(text).toContain('1 de 2'); expect(text).toContain('Pessoa p2'); expect(text).toContain('valores finais não confirmados');
   expect(text).not.toMatch(/private-|Endereço privado|R\$ 0/);
   const labels = botoesPreliminares(true).flat().map(b => b.texto).join(' ');
-  expect(labels).toContain('Revisar proposta preliminar'); expect(labels).toContain('Outra opção'); expect(labels).not.toContain('Confirmar pedido');
+  expect(labels).not.toContain('Revisar proposta preliminar'); expect(labels).toContain('Outra opção'); expect(labels).not.toContain('Confirmar pedido');
 });
 it.each([undefined, true, false])('disponibilidade %s mantém incerteza comercial apenas no resumo e indisponibilidade explícita no item', available => {
   const item = { id: 'private-item', storeId: 'private-merchant', name: 'Produto <teste>', priceCents: 2590,

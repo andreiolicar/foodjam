@@ -131,7 +131,7 @@ export interface NomesCatalogo {
   itens: Record<MenuItemId, string>;
 }
 
-export type AcaoPropostaPreliminar = 'outra_opcao' | 'voltar_coleta' | 'cancelar' | 'revisar';
+export type AcaoPropostaPreliminar = 'outra_opcao' | 'voltar_coleta' | 'cancelar';
 
 export interface Agente {
   /** Preparar exige callback autenticado do organizador e revisão vigente. Não compra. */

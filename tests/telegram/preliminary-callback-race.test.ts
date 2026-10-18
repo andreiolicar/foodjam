@@ -19,7 +19,7 @@ async function proposed(onAction?: () => void) {
   return { ...f, h, old, execute };
 }
 
-it.each(['outra', 'voltar', 'cancelar', 'revisar'])('rejeita %s do card substituído durante flush', async action => {
+it.each(['outra', 'voltar', 'cancelar'])('rejeita %s do card substituído durante flush', async action => {
   const f = await proposed();
   f.collection('preference', { '102': ['açaí'] });
   await f.h.texto(other, 'Agora quero açaí');
@@ -41,7 +41,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-it.each(['outra', 'voltar', 'cancelar', 'revisar'])('recusa %s dentro da fila mesmo se a mensagem do card ainda não mudou', async action => {
+it.each(['outra', 'voltar', 'cancelar'])('recusa %s dentro da fila mesmo se a mensagem do card ainda não mudou', async action => {
   const called = deferred(); const entered = deferred(); const release = deferred();
   const f = await proposed(called.resolve);
   f.generate.mockImplementationOnce(async () => {
@@ -87,15 +87,14 @@ it('cancelar por texto continua independente de um card antigo ou de mensagens p
   expect((await f.iris.obter(String(GRUPO)))?.status).toBe('cancelled');
 });
 
-it.each(['voltar', 'cancelar', 'revisar'])('preserva permissão e ação %s válida no card atual sem autorizar compra', async action => {
+it.each(['voltar', 'cancelar'])('preserva permissão e ação %s válida no card atual sem autorizar compra', async action => {
   const f = await proposed(); const before = (await f.iris.obter(String(GRUPO)))?.preliminary;
   await f.h.clicar(other, `proposta:${action}`, { chatId: GRUPO, messageId: f.old.messageId });
   expect((await f.iris.obter(String(GRUPO)))?.preliminary).toEqual(before);
   await f.h.clicar(owner, `proposta:${action}`, { chatId: GRUPO, messageId: f.old.messageId });
   const session = await f.iris.obter(String(GRUPO));
   expect(session?.status).toBe(action === 'cancelar' ? 'cancelled' : 'collecting');
-  if (action === 'revisar') expect(session?.preliminary).toEqual(before);
-  else expect(session?.preliminary).toBeUndefined();
+  expect(session?.preliminary).toBeUndefined();
   expect(session).not.toHaveProperty('order');
   await f.h.clicar(owner, 'proposta:confirmar', { chatId: GRUPO, messageId: f.old.messageId });
   expect(f.execute).not.toHaveBeenCalled();
