@@ -1,4 +1,4 @@
-import type { Agente, NomesCatalogo, Resposta, Organizador } from './agente.js';
+import type { AcaoPropostaPreliminar, Agente, NomesCatalogo, Resposta, Organizador } from './agente.js';
 import type { DeliveryAddress, DiscoveryItem, DiscoveryStore, PreliminaryProposal, IncomingMessage, CoreAction } from './contracts.js';
 import type { DiscoveryCatalogPort, LlmPort, SessionStore, SessionRecord } from './ports.js';
 import { SessoesEmMemoria } from './sessoes.js';
@@ -56,14 +56,20 @@ export function criarAgenteDescoberta(deps: { catalog: DiscoveryCatalogPort; llm
     const address = record.session.address?.status === 'confirmed' ? record.session.address.confirmed : undefined;
     if (!address) return { outcome: 'address_required', actions: [], session: record.session };
     const collection = structuredClone(collections.get(id) ?? []);
-    if (collection.length && collection.every(row => row.outcome !== 'preference_updated')) return { outcome: 'preferences_required', session: record.session, collection, actions: [] };
+    // A coleta só preenche este perfil quando reconhece uma preferência. Listas
+    // vazias também são legítimas: representam indiferença alimentar explícita.
+    const participants = record.session.participants.filter(p => Object.keys(p.preferences).length > 0);
+    if (!participants.length) return { outcome: 'preferences_required', session: record.session, collection, actions: [] };
     const revision = record.proposalCount + 1;
     const base = clear(record.session); await sessions.set({ ...record, session: base, proposalCount: revision });
-    const result = await proporDescoberta(base, { port: deps.catalog, ...(deps.discoveryLimits ? { limits: deps.discoveryLimits } : {}), llm: deps.llm, address, mode: 'model', ...(deps.registrar ? { registrar: deps.registrar } : {}), proposalId: `${id}-preliminary-${revision}` });
-    const session = { ...base, ...(result.proposal ? { preliminary: result.proposal } : {}), ...(result.alternatives?.[0] ? { preliminaryAlternative: result.alternatives[0] } : {}) };
+    const result = await proporDescoberta({ ...base, participants }, { port: deps.catalog, ...(deps.discoveryLimits ? { limits: deps.discoveryLimits } : {}), llm: deps.llm, address, mode: 'model', ...(deps.registrar ? { registrar: deps.registrar } : {}), proposalId: `${id}-preliminary-${revision}` });
+    // A cobertura pública mantém as pessoas sem perfil, mas não lhes atribui itens.
+    const proposal = result.proposal ? { ...result.proposal, participants: structuredClone(base.participants) } : undefined;
+    const alternative = result.alternatives?.[0] ? { ...result.alternatives[0], participants: structuredClone(base.participants) } : undefined;
+    const session = { ...base, ...(proposal ? { preliminary: proposal } : {}), ...(alternative ? { preliminaryAlternative: alternative } : {}) };
     await sessions.set({ ...record, session, proposalCount: revision, discoveryCatalog: { stores: result.stores, items: result.items } });
     return { outcome: result.proposal ? 'preliminary_ready' : result.reason ?? 'no_candidates', actions: !result.proposal && result.coverage?.limited ? [{ type: 'send_message', sessionId: id, text: 'A pesquisa atingiu limites de amostra, chamadas ou tempo; não foi pesquisado o catálogo completo.' }] : [], session,
-      ...(result.proposal ? { preliminary: result.proposal } : {}), ...(session.preliminaryAlternative ? { preliminaryAlternative: session.preliminaryAlternative } : {}), collection, stores: result.stores, items: result.items };
+      ...(proposal ? { preliminary: proposal } : {}), ...(session.preliminaryAlternative ? { preliminaryAlternative: session.preliminaryAlternative } : {}), collection, stores: result.stores, items: result.items };
   }
   async function collect(id: string, items: readonly ItemLote[]): Promise<RespostaDescoberta> {
     const record = await sessions.get(id);
@@ -86,12 +92,39 @@ export function criarAgenteDescoberta(deps: { catalog: DiscoveryCatalogPort; llm
     }
     return { ...result, session, collection: [...collection.values()], outcome: 'preferences_updated' };
   }
+  async function proposalAction(id: string, actor: string, action: AcaoPropostaPreliminar, expected?: string): Promise<RespostaDescoberta> {
+    const record = await sessions.get(id);
+    if (!active(record)) return { outcome: expected === undefined ? 'no_session' : 'proposal_stale', actions: [] };
+    if (record.session.organizerId !== actor) return denied(record, actor);
+    // Executada somente dentro de serial(): nenhuma operação da sessão pode
+    // substituir a proposta entre esta conferência e a mutação abaixo.
+    if (expected !== undefined && record.session.preliminary?.id !== expected) return { outcome: 'proposal_stale', session: record.session, actions: [] };
+    if (action === 'revisar') return { outcome: 'preliminary_review', session: record.session, actions: [] };
+    if (action === 'outra_opcao') {
+      const { preliminary, preliminaryAlternative } = record.session;
+      if (!preliminary || !preliminaryAlternative) return { outcome: 'no_alternative', session: record.session, actions: [message(id, actor, 'Não há outra opção validada nesta amostra do catálogo.')] };
+      // Identidade nova em toda apresentação, inclusive ao voltar à alternativa
+      // anterior: um clique atrasado não pode reencontrar a mesma identidade.
+      const revision = record.proposalCount + 1;
+      const session = { ...record.session, preliminary: { ...preliminaryAlternative, id: `${id}-preliminary-${revision}` }, preliminaryAlternative: preliminary };
+      await sessions.set({ ...record, session, proposalCount: revision });
+      return { outcome: 'switched', session, preliminary: session.preliminary, preliminaryAlternative: preliminary, ...(record.discoveryCatalog ? { items: record.discoveryCatalog.items, stores: record.discoveryCatalog.stores } : {}), collection: collections.get(id) ?? [], actions: [] };
+    }
+    const session = action === 'cancelar' ? cancelarSessao(clear(record.session), actor) : clear(record.session);
+    await sessions.set({ ...record, session });
+    return { outcome: action === 'cancelar' ? 'cancelled' : 'collecting', session, actions: [] };
+  }
   return {
+    agirNaPropostaPreliminar(id: string, actor: string, proposalId: string, action: AcaoPropostaPreliminar) { return serial(id, async () => {
+      if (typeof proposalId !== 'string' || !proposalId) return { outcome: 'proposal_stale', actions: [] };
+      return proposalAction(id, actor, action, proposalId);
+    }); },
     iniciar(id: string, organizer: Organizador) { return serial(id, async () => {
       const record = await sessions.get(id);
+      const previousCount = record?.proposalCount ?? 0;
       if (active(record)) return { outcome: 'already_active', actions: [], session: record.session };
       collections.delete(id);
-      await sessions.set({ session: criarSessao({ id, organizerId: organizer.id, participants: [{ ...organizer, preferences: {} }] }), proposalCount: 0 });
+      await sessions.set({ session: criarSessao({ id, organizerId: organizer.id, participants: [{ ...organizer, preferences: {} }] }), proposalCount: previousCount });
       const selected = await choose(id, organizer.id, 0);
       return { ...selected, outcome: selected.outcome === 'address_default_proposed' ? 'started' : selected.outcome };
     }); },
@@ -112,20 +145,8 @@ export function criarAgenteDescoberta(deps: { catalog: DiscoveryCatalogPort; llm
     mensagem(input: IncomingMessage, displayName?: string) { return serial(input.sessionId, () => collect(input.sessionId, [{ participantId: input.participantId, text: input.text, ...(displayName ? { displayName } : {}) }])); },
     mensagens(id: string, items: readonly ItemLote[]) { return serial(id, () => collect(id, items)); },
     propor(id: string, actor: string) { return serial(id, () => propose(id, actor)); },
-    outraOpcao(id: string, actor: string) { return serial(id, async () => {
-      const record = await sessions.get(id); if (!active(record)) return { outcome: 'no_session', actions: [] };
-      if (record.session.organizerId !== actor) return denied(record, actor);
-      const { preliminary, preliminaryAlternative } = record.session;
-      if (!preliminary || !preliminaryAlternative) return { outcome: 'no_alternative', session: record.session, actions: [message(id, actor, 'Não há outra opção validada nesta amostra do catálogo.')] };
-      const session = { ...record.session, preliminary: preliminaryAlternative, preliminaryAlternative: preliminary };
-      await sessions.set({ ...record, session });
-      return { outcome: 'switched', session, preliminary: preliminaryAlternative, preliminaryAlternative: preliminary, ...(record.discoveryCatalog ? { items: record.discoveryCatalog.items, stores: record.discoveryCatalog.stores } : {}), collection: collections.get(id) ?? [], actions: [] };
-    }); },
-    reabrirColeta(id: string, actor: string) { return serial(id, async () => {
-      const record = await sessions.get(id); if (!active(record)) return { outcome: 'no_session', actions: [] };
-      if (record.session.organizerId !== actor) return denied(record, actor);
-      const session = clear(record.session); await sessions.set({ ...record, session }); return { outcome: 'collecting', session, actions: [] };
-    }); },
+    outraOpcao(id: string, actor: string) { return serial(id, () => proposalAction(id, actor, 'outra_opcao')); },
+    reabrirColeta(id: string, actor: string) { return serial(id, () => proposalAction(id, actor, 'voltar_coleta')); },
     responderOrcamento(id: string, actor: string) { return serial(id, async () => {
       const record = await sessions.get(id); if (!active(record)) return { outcome: 'no_session', actions: [] };
       if (!record.session.participants.some(p => p.id === actor)) return denied(record, actor);
@@ -136,11 +157,7 @@ export function criarAgenteDescoberta(deps: { catalog: DiscoveryCatalogPort; llm
       if (record.session.organizerId !== actor) return denied(record, actor);
       return { outcome: 'commercial_pending', session: record.session, actions: [message(id, actor, 'Esta é uma proposta preliminar. Preparação comercial autorizada, valores atuais e aceites vinculados ao carrinho são necessários antes de qualquer fechamento.')] };
     }); },
-    cancelar(id: string, actor: string) { return serial(id, async () => {
-      const record = await sessions.get(id); if (!active(record)) return { outcome: 'no_session', actions: [] };
-      if (record.session.organizerId !== actor) return denied(record, actor);
-      const session = cancelarSessao(clear(record.session), actor); await sessions.set({ ...record, session }); return { outcome: 'cancelled', session, actions: [] };
-    }); },
+    cancelar(id: string, actor: string) { return serial(id, () => proposalAction(id, actor, 'cancelar')); },
     async obter(id: string) { return (await sessions.get(id))?.session; },
     async nomes(id: string): Promise<NomesCatalogo | undefined> { const snapshot = (await sessions.get(id))?.discoveryCatalog; return snapshot ? { lojas: Object.fromEntries(snapshot.stores.map(s => [s.id, s.name])), itens: Object.fromEntries(snapshot.items.map(i => [i.id, i.name])) } : undefined; },
   } satisfies Agente;

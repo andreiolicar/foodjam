@@ -9,11 +9,12 @@ type IrisCard = Pick<Agente, 'nomes' | 'obter'>;
 
 // Mensagem do card com botões em cada grupo: ao desenhar outro card (ou a proposta
 // sair da mesa), os botões do anterior são retirados para ninguém clicar numa sugestão velha.
-const ultimoCard = new Map<SessionId, number>();
-export const cardAtual = (sessionId: string, messageId: number) => ultimoCard.get(sessionId) === messageId;
+const ultimoCard = new Map<SessionId, { messageId: number; proposalId: string }>();
+export const cardAtual = (sessionId: string, messageId: number) => ultimoCard.get(sessionId)?.messageId === messageId;
+export const propostaDoCard = (sessionId: string, messageId: number) => cardAtual(sessionId, messageId) ? ultimoCard.get(sessionId)?.proposalId : undefined;
 
 export async function retirarBotoesDoCard(api: ApiCard, sessionId: SessionId): Promise<void> {
-  const messageId = ultimoCard.get(sessionId);
+  const messageId = ultimoCard.get(sessionId)?.messageId;
   if (messageId === undefined) return;
   ultimoCard.delete(sessionId);
   try {
@@ -65,7 +66,7 @@ export async function exibirProposta(
   const card = resposta.preliminary ? await montarPreliminar(iris, sessionId, resposta) : await montarCard(iris, sessionId, resposta, proposal!);
   await retirarBotoesDoCard(api, sessionId);
   const enviada = await api.sendMessage(sessionId, card.texto, card.opcoes);
-  ultimoCard.set(sessionId, enviada.message_id);
+  ultimoCard.set(sessionId, { messageId: enviada.message_id, proposalId: (resposta.preliminary ?? proposal)!.id });
 
   await apresentarActions(api, resposta, botUsername);
   return true;
@@ -76,12 +77,13 @@ export async function exibirProposta(
  * valor e saiu da lista de espera). Sem card na tela, não faz nada.
  */
 export async function atualizarCard(api: ApiCard, iris: IrisCard, sessionId: SessionId, resposta: Resposta): Promise<void> {
-  const messageId = ultimoCard.get(sessionId);
+  const messageId = ultimoCard.get(sessionId)?.messageId;
   if (messageId === undefined || !resposta.proposal && !resposta.preliminary) return;
 
   const card = resposta.preliminary ? await montarPreliminar(iris, sessionId, resposta) : await montarCard(iris, sessionId, resposta, resposta.proposal!);
   try {
     await api.editMessageText(sessionId, messageId, card.texto, card.opcoes);
+    ultimoCard.set(sessionId, { messageId, proposalId: (resposta.preliminary ?? resposta.proposal)!.id });
   } catch {
     // texto igual ou mensagem apagada; ignora
   }

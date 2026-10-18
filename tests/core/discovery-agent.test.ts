@@ -22,6 +22,7 @@ it('preserva coleta em lote, endereço confirmado e revisão preliminar sem port
 it('loja que fecha entre busca e cardápio é informada e não recebe proposta', async () => {
   const agent = criarAgenteDescoberta({ catalog: { ...port, getStore: async () => ({ id: 'store', name: 'Loja', isOpen: false }) }, llm });
   await agent.iniciar('group', { id: 'a', displayName: 'A' }); await agent.confirmarEndereco('group', 'a');
+  await agent.mensagens('group', [{ participantId: 'a', text: 'Hambúrguer' }, { participantId: 'b', text: 'Hambúrguer' }]);
   const result = await agent.propor('group', 'a');
   expect(result.outcome).toBe('store_closed'); expect(result.preliminary).toBeUndefined();
 });

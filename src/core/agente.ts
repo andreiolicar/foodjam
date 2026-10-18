@@ -126,7 +126,11 @@ export interface NomesCatalogo {
   itens: Record<MenuItemId, string>;
 }
 
+export type AcaoPropostaPreliminar = 'outra_opcao' | 'voltar_coleta' | 'cancelar' | 'revisar';
+
 export interface Agente {
+  /** Ação vinculada ao card exibido; verifica identidade dentro da fila da sessão. */
+  agirNaPropostaPreliminar?(sessionId: SessionId, actorId: ParticipantId, proposalId: string, action: AcaoPropostaPreliminar): Promise<Resposta>;
   /** Alguém mencionou o bot: abre a sessão do chat (ou devolve a que já está ativa). */
   iniciar(sessionId: SessionId, organizador: Organizador): Promise<Resposta>;
   /** Mensagem de alguém do grupo: preferência na coleta, pedido de ajuste na proposta. */

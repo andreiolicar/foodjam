@@ -1,9 +1,9 @@
 import type { Bot, CallbackQueryContext, Context } from 'grammy';
 
-import type { Agente, Agrupador, AuthorizedOrder, Resposta } from '../../core/index.js';
+import type { AcaoPropostaPreliminar, Agente, Agrupador, AuthorizedOrder, Resposta } from '../../core/index.js';
 import { apresentarActions } from '../services/apresentacao.js';
 import { DADOS_CARD, textoPedido } from '../services/card.js';
-import { exibirProposta, retirarBotoesDoCard, cardAtual } from '../services/proposta-tela.js';
+import { exibirProposta, retirarBotoesDoCard, cardAtual, propostaDoCard } from '../services/proposta-tela.js';
 import { cancelarPedido } from './cancelar.js';
 
 type Acao = (sessionId: string, actorId: string) => Promise<Resposta>;
@@ -17,13 +17,20 @@ async function chamar(
   ctx: CallbackQueryContext<Context>,
   agrupador: Agrupador,
   acao: Acao,
-  preliminaryOnly = false,
+  preliminary?: { iris: Agente; action: AcaoPropostaPreliminar },
 ): Promise<{ sessionId: string; resposta: Resposta } | undefined> {
   const sessionId = String(ctx.chat?.id);
-  if (preliminaryOnly && (!ctx.callbackQuery.message || !cardAtual(sessionId, ctx.callbackQuery.message.message_id))) { await ctx.answerCallbackQuery({ text: 'Esta proposta foi substituída. Use o card atual.', show_alert: true }); return; }
+  const messageId = ctx.callbackQuery.message?.message_id;
+  const expected = messageId === undefined ? undefined : propostaDoCard(sessionId, messageId);
+  const stale = () => ctx.answerCallbackQuery({ text: 'Esta proposta foi substituída. Use o card atual.', show_alert: true });
+  if (preliminary && !expected) { await stale(); return; }
   try {
     await agrupador.esvaziar(sessionId);
-    const resposta = await acao(sessionId, String(ctx.from.id));
+    if (preliminary && (propostaDoCard(sessionId, messageId!) !== expected || !preliminary.iris.agirNaPropostaPreliminar)) { await stale(); return; }
+    const resposta = preliminary
+      ? await preliminary.iris.agirNaPropostaPreliminar!(sessionId, String(ctx.from.id), expected!, preliminary.action)
+      : await acao(sessionId, String(ctx.from.id));
+    if (resposta.outcome === 'proposal_stale') { await stale(); return; }
 
     if (resposta.outcome === 'not_authorized') {
       const aviso = resposta.actions.find((a) => a.type === 'send_message')?.text;
@@ -46,7 +53,7 @@ export type ExecutorPedido = (order: AuthorizedOrder) => void | Promise<void>;
 export function registrarProposta(bot: Bot, iris: Agente, agrupador: Agrupador, aoAutorizar: ExecutorPedido, preliminaryOnly = false): void {
   // "Outra opção": troca pela alternativa que o core já calculou (e de volta), sem chamar o modelo.
   bot.callbackQuery(DADOS_CARD.outra, async (ctx) => {
-    const r = await chamar(ctx, agrupador, (s, a) => iris.outraOpcao(s, a), preliminaryOnly);
+    const r = await chamar(ctx, agrupador, (s, a) => iris.outraOpcao(s, a), preliminaryOnly ? { iris, action: 'outra_opcao' } : undefined);
     if (!r) return;
 
     if (r.resposta.outcome === 'switched') {
@@ -58,7 +65,7 @@ export function registrarProposta(bot: Bot, iris: Agente, agrupador: Agrupador, 
 
   // "Voltar para a coleta": descarta a proposta e mantém as preferências.
   bot.callbackQuery(DADOS_CARD.voltar, async (ctx) => {
-    const r = await chamar(ctx, agrupador, (s, a) => iris.reabrirColeta(s, a), preliminaryOnly);
+    const r = await chamar(ctx, agrupador, (s, a) => iris.reabrirColeta(s, a), preliminaryOnly ? { iris, action: 'voltar_coleta' } : undefined);
     if (!r) return;
 
     await apresentarActions(ctx.api, r.resposta, ctx.me.username);
@@ -70,14 +77,26 @@ export function registrarProposta(bot: Bot, iris: Agente, agrupador: Agrupador, 
   });
 
   bot.callbackQuery(DADOS_CARD.cancelar, async (ctx) => {
-    if (preliminaryOnly && (!ctx.callbackQuery.message || !cardAtual(String(ctx.chat?.id), ctx.callbackQuery.message.message_id))) {
-      await ctx.answerCallbackQuery({ text: 'Esta proposta foi substituída. Use o card atual.', show_alert: true }); return;
+    if (preliminaryOnly) {
+      const r = await chamar(ctx, agrupador, (s, a) => iris.cancelar(s, a), { iris, action: 'cancelar' });
+      if (!r) return;
+      await apresentarActions(ctx.api, r.resposta, ctx.me.username);
+      if (r.resposta.outcome === 'cancelled') {
+        await retirarBotoesDoCard(ctx.api, r.sessionId);
+        await ctx.reply('Pedido cancelado. Para começar outro, me mencione ou use /iniciar.');
+      }
+      return;
     }
     await ctx.answerCallbackQuery();
     await cancelarPedido(ctx, iris, agrupador);
   });
 
   bot.callbackQuery(DADOS_CARD.revisar, async ctx => {
+    if (preliminaryOnly) {
+      const r = await chamar(ctx, agrupador, async () => ({ outcome: 'error', actions: [] }), { iris, action: 'revisar' });
+      if (r?.resposta.outcome === 'preliminary_review') await ctx.reply('Revisão preliminar: confira os itens e quem ficou sem item. Valores finais e disponibilidade dependem de preparação comercial autorizada e consulta ao carrinho. Nenhuma compra foi confirmada.');
+      return;
+    }
     const sessionId = String(ctx.chat?.id); const session = await iris.obter(sessionId);
     if (session?.organizerId !== String(ctx.from.id)) { await ctx.answerCallbackQuery({ text: 'Só quem organizou pode revisar a proposta.', show_alert: true }); return; }
     if (!session.preliminary || !ctx.callbackQuery.message || !cardAtual(sessionId, ctx.callbackQuery.message.message_id)) { await ctx.answerCallbackQuery({ text: 'Use a proposta preliminar atual.', show_alert: true }); return; }
