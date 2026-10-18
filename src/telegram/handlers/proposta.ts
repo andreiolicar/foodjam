@@ -3,7 +3,7 @@ import type { Bot, CallbackQueryContext, Context } from 'grammy';
 import type { Agente, Agrupador, AuthorizedOrder, Resposta } from '../../core/index.js';
 import { apresentarActions } from '../services/apresentacao.js';
 import { DADOS_CARD, textoPedido } from '../services/card.js';
-import { exibirProposta, retirarBotoesDoCard } from '../services/proposta-tela.js';
+import { exibirProposta, retirarBotoesDoCard, cardAtual } from '../services/proposta-tela.js';
 import { cancelarPedido } from './cancelar.js';
 
 type Acao = (sessionId: string, actorId: string) => Promise<Resposta>;
@@ -17,8 +17,10 @@ async function chamar(
   ctx: CallbackQueryContext<Context>,
   agrupador: Agrupador,
   acao: Acao,
+  preliminaryOnly = false,
 ): Promise<{ sessionId: string; resposta: Resposta } | undefined> {
   const sessionId = String(ctx.chat?.id);
+  if (preliminaryOnly && (!ctx.callbackQuery.message || !cardAtual(sessionId, ctx.callbackQuery.message.message_id))) { await ctx.answerCallbackQuery({ text: 'Esta proposta foi substituída. Use o card atual.', show_alert: true }); return; }
   try {
     await agrupador.esvaziar(sessionId);
     const resposta = await acao(sessionId, String(ctx.from.id));
@@ -31,8 +33,8 @@ async function chamar(
 
     await ctx.answerCallbackQuery();
     return { sessionId, resposta };
-  } catch (error) {
-    console.error('Erro no botão da proposta:', error);
+  } catch {
+    console.error('Erro no botão da proposta. Dados privados omitidos.');
     await ctx.answerCallbackQuery({ text: 'Não foi possível concluir. Tente de novo.' });
     return undefined;
   }
@@ -41,10 +43,10 @@ async function chamar(
 /** Recebe o pedido autorizado (fronteira com quem executa a compra no iFood). */
 export type ExecutorPedido = (order: AuthorizedOrder) => void | Promise<void>;
 
-export function registrarProposta(bot: Bot, iris: Agente, agrupador: Agrupador, aoAutorizar: ExecutorPedido): void {
+export function registrarProposta(bot: Bot, iris: Agente, agrupador: Agrupador, aoAutorizar: ExecutorPedido, preliminaryOnly = false): void {
   // "Outra opção": troca pela alternativa que o core já calculou (e de volta), sem chamar o modelo.
   bot.callbackQuery(DADOS_CARD.outra, async (ctx) => {
-    const r = await chamar(ctx, agrupador, (s, a) => iris.outraOpcao(s, a));
+    const r = await chamar(ctx, agrupador, (s, a) => iris.outraOpcao(s, a), preliminaryOnly);
     if (!r) return;
 
     if (r.resposta.outcome === 'switched') {
@@ -56,7 +58,7 @@ export function registrarProposta(bot: Bot, iris: Agente, agrupador: Agrupador, 
 
   // "Voltar para a coleta": descarta a proposta e mantém as preferências.
   bot.callbackQuery(DADOS_CARD.voltar, async (ctx) => {
-    const r = await chamar(ctx, agrupador, (s, a) => iris.reabrirColeta(s, a));
+    const r = await chamar(ctx, agrupador, (s, a) => iris.reabrirColeta(s, a), preliminaryOnly);
     if (!r) return;
 
     await apresentarActions(ctx.api, r.resposta, ctx.me.username);
@@ -68,12 +70,28 @@ export function registrarProposta(bot: Bot, iris: Agente, agrupador: Agrupador, 
   });
 
   bot.callbackQuery(DADOS_CARD.cancelar, async (ctx) => {
+    if (preliminaryOnly && (!ctx.callbackQuery.message || !cardAtual(String(ctx.chat?.id), ctx.callbackQuery.message.message_id))) {
+      await ctx.answerCallbackQuery({ text: 'Esta proposta foi substituída. Use o card atual.', show_alert: true }); return;
+    }
     await ctx.answerCallbackQuery();
     await cancelarPedido(ctx, iris, agrupador);
   });
 
+  bot.callbackQuery(DADOS_CARD.revisar, async ctx => {
+    const sessionId = String(ctx.chat?.id); const session = await iris.obter(sessionId);
+    if (session?.organizerId !== String(ctx.from.id)) { await ctx.answerCallbackQuery({ text: 'Só quem organizou pode revisar a proposta.', show_alert: true }); return; }
+    if (!session.preliminary || !ctx.callbackQuery.message || !cardAtual(sessionId, ctx.callbackQuery.message.message_id)) { await ctx.answerCallbackQuery({ text: 'Use a proposta preliminar atual.', show_alert: true }); return; }
+    await ctx.answerCallbackQuery();
+    await ctx.reply('Revisão preliminar: confira os itens e quem ficou sem item. Valores finais e disponibilidade dependem de preparação comercial autorizada e consulta ao carrinho. Nenhuma compra foi confirmada.');
+  });
+
   // Confirmar: só o organizador; o core revalida catálogo e taxa e emite o pedido autorizado.
   bot.callbackQuery(DADOS_CARD.confirmar, async (ctx) => {
+    if (preliminaryOnly) {
+      const session = await iris.obter(String(ctx.chat?.id));
+      await ctx.answerCallbackQuery({ text: session?.organizerId === String(ctx.from.id) ? 'Fechamento bloqueado: preparação comercial, valores atuais e aceites vinculados ao carrinho são necessários.' : 'Só quem organizou pode usar essa ação.', show_alert: true });
+      return;
+    }
     const r = await chamar(ctx, agrupador, (s, a) => iris.fechar(s, a));
     if (!r) return;
     const { sessionId, resposta } = r;
@@ -99,8 +117,8 @@ export function registrarProposta(bot: Bot, iris: Agente, agrupador: Agrupador, 
         if (!repetido) {
           try {
             await aoAutorizar(order);
-          } catch (error) {
-            console.error(`Erro ao entregar o pedido ${order.proposalId} ao executor:`, error);
+          } catch {
+            console.error('Erro ao entregar o pedido ao executor. Dados privados omitidos.');
           }
         }
         return;

@@ -64,7 +64,7 @@ const SINONIMOS: Record<string, string[]> = {
 
 const PALAVRAS_VAZIAS = new Set(['sem', 'alergia', 'alergico', 'alergica', 'a', 'de', 'ao', 'intolerancia', 'restricao', 'nada']);
 
-const palavrasDoItem = (item: MenuItem, store: Store | undefined) =>
+const palavrasDoItem = (item: Pick<MenuItem, 'name' | 'description'>, store: Pick<Store, 'name'> | undefined) =>
   palavras(`${store?.name ?? ''} ${item.name} ${item.description ?? ''}`);
 
 /** Palavras significativas de uma restrição sem regra conhecida ("alergia a amendoim" → ["amendoim"]). */
@@ -75,7 +75,7 @@ const palavrasChave = (texto: string) => palavras(texto).filter((w) => w.length 
  * para as demais (alergias), barra itens que citem a palavra-chave.
  * Item sem descrição não é provado seguro: veja itemIncerto.
  */
-export function violaRestricao(item: MenuItem, restricao: string): boolean {
+export function violaRestricao(item: Pick<MenuItem, 'name' | 'description'>, restricao: string): boolean {
   // Só o texto do item: o nome da loja ("Padaria Pão Quente") não diz o que o item contém.
   const texto = palavrasDoItem(item, undefined);
   const r = palavras(restricao);
@@ -93,7 +93,7 @@ export function itemIncerto(item: MenuItem, restricoes: readonly string[]): bool
 }
 
 /** Rejeição de gosto: barra itens cuja loja ou texto citem o termo (ou sinônimo). */
-export function evitado(item: MenuItem, store: Store | undefined, avoid: string): boolean {
+export function evitado(item: Pick<MenuItem, 'name' | 'description'>, store: Pick<Store, 'name'> | undefined, avoid: string): boolean {
   const texto = palavrasDoItem(item, store);
   return palavrasChave(avoid).some((palavra) => {
     const chave = Object.keys(SINONIMOS).find((k) => palavra.startsWith(k));

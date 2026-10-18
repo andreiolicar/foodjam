@@ -111,3 +111,20 @@ describe('gerarEstruturado: erro fatal do provedor', () => {
     await expect(gerarEstruturado(opcoes(llm))).resolves.toEqual({ resposta: 'ok' });
   });
 });
+
+
+describe('diagnóstico da validação estruturada', () => {
+  it('distingue rejeição do schema de falha na geração sem incluir valores nas questões', async () => {
+    const registros: LlmCallRecord[] = [];
+    const llm: LlmPort = { generate: async () => ({ resposta: 42, PRIVATE_EXTRA: 'PRIVATE_VALUE' }) };
+    await expect(gerarEstruturado({ ...opcoes(llm, registros), maxAttempts: 1 })).rejects.toBeInstanceOf(LlmSaidaInvalidaError);
+    expect(registros[0]).toMatchObject({ failureKind: 'validation', validationIssues: [
+      { code: 'invalid_type', path: ['resposta'] }, { code: 'unrecognized_keys', path: [] },
+    ] });
+    expect(JSON.stringify(registros[0]?.validationIssues)).not.toMatch(/PRIVATE_/);
+    registros.length = 0;
+    await expect(gerarEstruturado({ ...opcoes({ generate: async () => { throw new Error('PRIVATE_TRANSPORT'); } }, registros), maxAttempts: 1 })).rejects.toThrow();
+    expect(registros[0]).toMatchObject({ failureKind: 'generation' });
+    expect(registros[0]?.validationIssues).toBeUndefined();
+  });
+});

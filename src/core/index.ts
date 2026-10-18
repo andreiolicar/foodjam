@@ -35,3 +35,10 @@ export type { LlmCallRecord } from './llm.js';
 // Fakes para desenvolver e testar a integração sem iFood nem modelo real.
 export { CatalogoFake, ENDERECO_FAKE, LOJAS } from './fakes/catalogo-fake.js';
 export { FakeLlm, responderHeuristico } from './fakes/llm-fake.js';
+
+export { coletarEnderecoDigitado, selecionarEnderecoSalvo, proporDescoberta } from './discovery-flow.js';
+export { createPreparationAuthority, prepareCommercialProposal, reviewCommercial, canConfirmCommercial } from './commercial-flow.js';
+export type { DiscountPolicy } from './commercial-flow.js';
+export type { DiscoveryCatalogPort, CommercialPreparationPort } from './ports.js';
+export { criarAgenteDescoberta } from './discovery-agent.js';
+export type { RespostaDescoberta } from './discovery-agent.js';

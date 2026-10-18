@@ -27,13 +27,13 @@ Você não escolhe lojas nem calcula nada: o sistema monta as combinações, pre
 export interface PessoaPrompt {
   participant: Participant;
   desejos: readonly string[];
-  itensPermitidos: readonly MenuItem[];
+  itensPermitidos: readonly Pick<MenuItem, 'id' | 'storeId' | 'name' | 'description'>[];
 }
 
 /** Sem preços, sem orçamento: só o que é preciso para casar desejo e item. */
-export function montarPromptClassificacao(pessoas: readonly PessoaPrompt[], stores: readonly Store[]): string {
+export function montarPromptClassificacao(pessoas: readonly PessoaPrompt[], stores: readonly Pick<Store, 'id' | 'name'>[]): string {
   const nomeLoja = new Map(stores.map((s) => [s.id, s.name]));
-  const itens = new Map<string, MenuItem>();
+  const itens = new Map<string, Pick<MenuItem, 'id' | 'storeId' | 'name' | 'description'>>();
   for (const p of pessoas) for (const i of p.itensPermitidos) itens.set(i.id, i);
 
   const dadosPessoas = pessoas.map((p) => ({

@@ -5,6 +5,8 @@ export type ResponseMode = 'json_schema' | 'json_object' | 'none';
 const MODOS: readonly ResponseMode[] = ['json_schema', 'json_object', 'none'];
 
 export interface OpenAiCompatOptions {
+  /** Compatibilidade por modelo: não muda o modelo nem a validação Zod do Core. */
+  initialResponseModes?: Readonly<Partial<Record<string, ResponseMode>>>;
   /** Ex.: https://generativelanguage.googleapis.com/v1beta/openai (sem /chat/completions). */
   baseUrl: string;
   apiKey?: string;
@@ -165,6 +167,9 @@ export class OpenAiCompatLlm implements LlmPort {
   private readonly now: () => number;
 
   constructor(private readonly options: OpenAiCompatOptions) {
+    for (const [model, mode] of Object.entries(options.initialResponseModes ?? {})) {
+      if (mode !== undefined) this.modeIndex.set(model, MODOS.indexOf(mode));
+    }
     this.fetchFn = options.fetch ?? fetch;
     this.sleep = options.sleep ?? dormir;
     this.now = options.now ?? Date.now;
@@ -222,7 +227,10 @@ export class OpenAiCompatLlm implements LlmPort {
         continue;
       }
 
-      const recusouFormato = (response.status === 400 || response.status === 422) && this.modoDe(model) !== 'none';
+      const recusouFormato = (response.status === 400 || response.status === 422) && this.modoDe(model) !== 'none'
+        && !/json_validate_failed|schema_validation_failed/i.test(body)
+        && /response_format|json_schema|json_object/i.test(body)
+        && /not supported|unsupported|does not support|not available|unrecognized|unknown parameter/i.test(body);
       if (!recusouFormato) throw error;
       this.modeIndex.set(model, (this.modeIndex.get(model) ?? 0) + 1);
     }
@@ -286,21 +294,24 @@ export class OpenAiCompatLlm implements LlmPort {
  * Lê choices[0].message.content e extrai o JSON. Tolera cercas ```json e
  * texto de raciocínio antes do objeto (comum em modelos com "thinking").
  */
+export class LlmOutputError extends Error {
+  constructor(readonly code: 'missing_content' | 'missing_json_object' | 'invalid_json') { super(`Saída do modelo inválida: ${code}.`); this.name = 'LlmOutputError'; }
+}
 export function extrairJson(data: unknown): unknown {
   const content = (data as { choices?: { message?: { content?: unknown } }[] })?.choices?.[0]?.message?.content;
   if (typeof content !== 'string') {
-    throw new Error('resposta do provedor sem choices[0].message.content em texto');
+    throw new LlmOutputError('missing_content');
   }
   const semRaciocinio = content.replace(/<think>[\s\S]*?<\/think>/g, '');
   const inicio = semRaciocinio.indexOf('{');
   const fim = semRaciocinio.lastIndexOf('}');
   if (inicio < 0 || fim < inicio) {
-    throw new Error(`resposta sem objeto JSON: ${semRaciocinio.slice(0, 200)}`);
+    throw new LlmOutputError('missing_json_object');
   }
   try {
     return JSON.parse(semRaciocinio.slice(inicio, fim + 1));
   } catch {
-    throw new Error(`JSON inválido na resposta: ${semRaciocinio.slice(inicio, inicio + 200)}`);
+    throw new LlmOutputError('invalid_json');
   }
 }
 

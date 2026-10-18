@@ -73,10 +73,12 @@ export type CoreAction =
     }
   | {
       /**
-       * Pedir ao organizador, no privado, que confirme o endereço, com botões:
+       * Pedir ao organizador que confirme o endereço, no destino indicado, com botões:
        * kind "default" → [Sim] [Outro endereço]; kind "typed" → [Confirmar] [Corrigir].
        */
       type: 'confirm_address';
+      /** Destino aprovado para a confirmação; orçamento continua privado. */
+      visibility?: 'group';
       sessionId: SessionId;
       participantId: ParticipantId;
       address: DeliveryAddress;
@@ -217,4 +219,91 @@ export interface AuthorizedOrder {
   deliveryAddress: DeliveryAddress;
   orders: StoreOrder[];
   split: Split;
+}
+
+/** Descoberta real antes da cotação: ausência significa não comprovado. */
+export type DiscoveryStore = Omit<Store, 'deliveryFeeCents'> & { deliveryFeeCents?: MoneyCents };
+export type DiscoveryItem = Omit<MenuItem, 'priceCents' | 'available'> & {
+  priceCents?: MoneyCents;
+  /** Preço base conhecido; promoção/valor aplicável ainda não comprovado. */
+  basePriceCents?: MoneyCents;
+  available?: boolean;
+};
+export interface DiscoveryMenu {
+  /** Funcionamento observado ao consultar este menu, quando fornecido. */
+  storeOpen?: boolean;
+  items: DiscoveryItem[];
+  coverage: 'offers_only' | 'complete';
+  /** Consulta limitada intencionalmente; não representa fim de catálogo. */
+  truncated?: boolean;
+}
+export interface DiscoveryCoverage {
+  classificationLimited?: boolean;
+  terms: number; stores: number; items: number; requests: number; limited: boolean;
+}
+export interface PreliminaryProposal {
+  coverage?: DiscoveryCoverage;
+  id: string;
+  sessionId: SessionId;
+  organizerId: ParticipantId;
+  address: DeliveryAddress;
+  participants: Participant[];
+  items: { participantId: ParticipantId; storeId: StoreId; menuItemId: MenuItemId; quantity: number; isSubstitute?: boolean }[];
+  status: 'preliminary';
+  /** Sem total/orçamento confirmado; não é autorização de compra. */
+  pending: readonly ('commercial_validation' | 'catalog_incomplete')[];
+}
+
+export interface CartObservation {
+  cartId: string;
+  storeId: StoreId;
+  items: { menuItemId: MenuItemId; quantity: number; unitPriceCents?: MoneyCents }[];
+  amounts?: {
+    subtotalCents: MoneyCents;
+    deliveryCents: MoneyCents;
+    feesCents: MoneyCents;
+    benefitsCents: MoneyCents;
+    voucherCents: MoneyCents;
+    totalCents: MoneyCents;
+  };
+  issues: string[];
+}
+export interface PreparationContext {
+  authenticatedUserId: string;
+  sessionId: SessionId;
+  proposalId: string;
+  storeId: StoreId;
+  address: DeliveryAddress;
+  items: { menuItemId: MenuItemId; quantity: number }[];
+}
+/** Opaca: apenas a autoridade da aplicação reconhece a instância emitida. */
+export interface PreparationPermit { readonly purpose: 'prepare_cart' }
+export interface PreparationAuthority {
+  verify(permit: PreparationPermit, context: PreparationContext): void;
+}
+export type CommercialShare = Omit<ParticipantShare, 'serviceCents'> & {
+  feesCents: MoneyCents;
+  discountCents: MoneyCents;
+  /** Política local explícita; não representa a origem de descontos do iFood. */
+  unattributedAdjustment?: { creditCents: MoneyCents; debitCents: MoneyCents };
+};
+export interface CommercialSplit { shares: CommercialShare[]; totalCents: MoneyCents }
+export interface CommercialReview {
+  status: 'blocked' | 'review_required';
+  observations: CartObservation[];
+  failures: StoreId[];
+  split?: CommercialSplit;
+  /** Confirmação individual necessária para cada excesso. */
+  overBudget: { participantId: ParticipantId; totalCents: MoneyCents }[];
+  /** Todos os compradores afetados precisam aceitar a política e a revisão. */
+  adjustmentPolicy?: { name: 'proportional_unattributed_adjustment'; requiredParticipantIds: ParticipantId[] };
+  revision: string;
+}
+
+/** Texto coletado ainda não é DeliveryAddress nem localização válida. */
+export interface AddressRegistrationIntent {
+  sessionId: SessionId;
+  organizerId: ParticipantId;
+  rawText: string;
+  status: 'requires_registration_consent';
 }

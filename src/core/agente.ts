@@ -4,6 +4,10 @@ import type { ItemLote } from './coleta.js';
 import { coletar, coletarLote } from './coleta.js';
 import type {
   AuthorizedOrder,
+  DeliveryAddress,
+  DiscoveryItem,
+  DiscoveryStore,
+  PreliminaryProposal,
   CoreAction,
   IncomingMessage,
   MenuItemId,
@@ -72,6 +76,11 @@ export interface Resposta {
   actions: CoreAction[];
   session?: CoreSession;
   proposal?: Proposal;
+  preliminary?: PreliminaryProposal;
+  preliminaryAlternative?: PreliminaryProposal;
+  collection?: { participantId: string; displayName: string; outcome: string; included: boolean }[];
+  items?: DiscoveryItem[];
+  stores?: DiscoveryStore[];
   /** Segunda melhor combinação (itens diferentes), para o botão "Outra opção". */
   alternative?: Proposal;
   order?: AuthorizedOrder;
@@ -129,7 +138,7 @@ export interface Agente {
    */
   mensagens(sessionId: SessionId, itens: readonly ItemLote[]): Promise<Resposta>;
   /** Botões [Sim] / [Confirmar] do endereço. Só o organizador. Trocar o endereço descarta a proposta. */
-  confirmarEndereco(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
+  confirmarEndereco(sessionId: SessionId, actorId: ParticipantId, expected?: DeliveryAddress): Promise<Resposta>;
   /** Botões [Outro endereço] / [Corrigir]: o organizador vai digitar o endereço no privado. Só o organizador. */
   pedirOutroEndereco(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
   /** Monta (ou refaz) a proposta. Só o organizador; exige endereço confirmado. */
@@ -429,11 +438,13 @@ export function criarAgente(deps: AgenteDeps): Agente {
         }),
       ),
 
-    confirmarEndereco: (sessionId, actorId) =>
+    confirmarEndereco: (sessionId, actorId, expected) =>
       enfileirar(sessionId, () =>
         protegido(actorId, sessionId, async () => {
           const record = await ativa(sessionId, actorId);
           if (ehResposta(record)) return record;
+          const candidate = record.session.address?.candidate;
+          if (record.session.organizerId === actorId && expected && (!candidate || candidate.id !== expected.id || candidate.formatted !== expected.formatted)) return { outcome: 'address_stale', session: record.session, actions: [] };
           const r = confirmarEnderecoDaSessao(record.session, actorId);
           // Endereço mudou com proposta na mesa: a proposta (e o catálogo dela) deixam de valer.
           await salvar(record, r.session, r.proposalDiscarded ? { catalog: undefined } : {});

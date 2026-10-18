@@ -6,9 +6,13 @@ import { exibirProposta } from '../services/proposta-tela.js';
 // Sem proposta: o core já mandou o motivo no privado do organizador; o grupo recebe uma dica.
 const DICAS_SEM_PROPOSTA: Record<string, string> = {
   address_required: 'Antes de montar o pedido, quem organizou precisa confirmar o endereço de entrega no privado.',
-  no_candidates: 'Ainda não sei o que vocês querem. Mandem aqui o que querem comer e usem /montar de novo.',
+  no_candidates: 'A busca atual não encontrou produtos compatíveis na amostra pesquisada. Isso não significa que não existam no catálogo geral. Vocês podem ajustar as preferências e tentar novamente.',
   no_valid_option: 'Não encontrei uma combinação que atenda o grupo. Mandem mais detalhes e usem /montar de novo.',
-  model_failed: 'Não consegui montar a sugestão agora. Tentem /montar de novo em instantes.',
+  model_failed: 'A IA real está indisponível ou retornou dados inválidos. Preferências preservadas; confira o diagnóstico antes de repetir.',
+  preferences_required: 'A coleta ainda não reconheceu preferências válidas. Confiram as perguntas no privado.',
+  catalog_failed: 'Não foi possível consultar o catálogo real do iFood. Nenhuma simulação foi utilizada.',
+  store_closed: 'O estabelecimento consultado está fechado. Nenhum carrinho foi criado.',
+  error: 'A consulta não pôde ser concluída. A sessão permanece disponível.',
   no_session: 'Não existe pedido ativo. Me mencione ou use /iniciar para começar.',
   session_finished: 'Não existe pedido ativo. Me mencione ou use /iniciar para começar.',
 };
@@ -37,8 +41,8 @@ export function registrarMontar(bot: Bot, iris: Agente, agrupador: Agrupador): v
 
       const dica = DICAS_SEM_PROPOSTA[resposta.outcome];
       if (dica) await ctx.reply(dica);
-    } catch (error) {
-      console.error('Erro ao montar o pedido:', error);
+    } catch {
+      console.error('Erro ao montar o pedido. Dados privados omitidos.');
       await ctx.reply('Não foi possível montar o pedido. Tente /montar de novo.');
     }
   });

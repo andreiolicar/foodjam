@@ -248,3 +248,28 @@ export const JustificativaSchema = z.strictObject({
   justification: JustificationSchema,
   alternativeJustification: JustificationSchema.nullable(),
 });
+
+/** Artefato preliminar persistido: ainda não é pedido autorizado. */
+export const PreliminaryProposalSchema = z.object({
+  coverage: z.object({ classificationLimited: z.boolean().exactOptional(), terms: z.number().int().nonnegative(), stores: z.number().int().nonnegative(), items: z.number().int().nonnegative(), requests: z.number().int().nonnegative(), limited: z.boolean() }).exactOptional(),
+  id: IdSchema, sessionId: IdSchema, organizerId: IdSchema,
+  address: z.object({ id: IdSchema.exactOptional(), formatted: z.string().min(1) }),
+  participants: z.array(z.object({ id: IdSchema, displayName: z.string().min(1), preferences: z.object({
+    foodPreferences: z.array(z.string()).exactOptional(), dietaryRestrictions: z.array(z.string()).exactOptional(),
+    avoids: z.array(z.string()).exactOptional(), wishes: z.array(z.string()).exactOptional(), budgetCents: MoneyCentsSchema.exactOptional(),
+  }) })).min(1).max(20),
+  items: z.array(z.object({ participantId: IdSchema, storeId: IdSchema, menuItemId: IdSchema, quantity: QuantitySchema, isSubstitute: z.boolean().exactOptional() })).min(1),
+  status: z.literal('preliminary'), pending: z.array(z.enum(['commercial_validation', 'catalog_incomplete'])),
+}).superRefine((p, ctx) => {
+  if (!p.participants.some(person => person.id === p.organizerId) || new Set(p.participants.map(person => person.id)).size !== p.participants.length
+    || p.items.some(item => !p.participants.some(person => person.id === item.participantId)) || distinctStores(p.items) > MAX_STORES_PER_PROPOSAL) {
+    ctx.addIssue({ code: 'custom', message: 'Composição preliminar inválida.' });
+  }
+});
+
+/** Taxas agregadas não são presumidas taxa de serviço do contrato legado. */
+export const CommercialShareSchema = z.object({ participantId: IdSchema, itemsCents: MoneyCentsSchema,
+  deliveryCents: MoneyCentsSchema, feesCents: MoneyCentsSchema, discountCents: MoneyCentsSchema, totalCents: MoneyCentsSchema,
+  unattributedAdjustment: z.object({ creditCents: MoneyCentsSchema, debitCents: MoneyCentsSchema }).exactOptional(),
+}).refine(s => BigInt(s.totalCents) === BigInt(s.itemsCents) + BigInt(s.deliveryCents) + BigInt(s.feesCents) - BigInt(s.discountCents)
+  - BigInt(s.unattributedAdjustment?.creditCents ?? 0) + BigInt(s.unattributedAdjustment?.debitCents ?? 0));

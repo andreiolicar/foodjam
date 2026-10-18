@@ -1,5 +1,7 @@
 import type {
   AuthorizedOrder,
+  PreliminaryProposal,
+  DiscoveryItem,
   MoneyCents,
   NomesCatalogo,
   Participant,
@@ -130,6 +132,7 @@ export function textoPedido(dados: DadosPedido): string {
 
 export const DADOS_CARD = {
   confirmar: 'proposta:confirmar',
+  revisar: 'proposta:revisar',
   outra: 'proposta:outra',
   voltar: 'proposta:voltar',
   cancelar: 'proposta:cancelar',
@@ -143,4 +146,42 @@ export function botoesCard(temAlternativa: boolean): Botao[][] {
     [{ texto: '↩️ Voltar para a coleta', data: DADOS_CARD.voltar }],
     [{ texto: '❌ Cancelar pedido', data: DADOS_CARD.cancelar }],
   ];
+}
+
+
+/** Exploração sem cotação: valores ausentes não recebem zero ou disponibilidade implícita. */
+export function textoPropostaPreliminar(dados: {
+  proposal: PreliminaryProposal; nomes?: NomesCatalogo; items?: readonly DiscoveryItem[];
+  collection?: readonly { participantId: string; displayName: string; included: boolean }[];
+}): string {
+  const { proposal } = dados;
+  const lines = ['🍽️ <b>Sugestão preliminar da Íris</b>'];
+  for (const storeId of new Set(proposal.items.map(i => i.storeId))) {
+    const storeName = dados.nomes?.lojas[storeId];
+    if (!storeName) throw new Error('Nome do estabelecimento não confirmado.');
+    lines.push('', `🏪 <b>${escapar(storeName)}</b>`);
+    for (const chosen of proposal.items.filter(i => i.storeId === storeId)) {
+      const name = dados.nomes?.itens[chosen.menuItemId];
+      const person = proposal.participants.find(p => p.id === chosen.participantId);
+      if (!name || !person) throw new Error('Produto ou participante não confirmado.');
+      const item = dados.items?.find(i => i.id === chosen.menuItemId && i.storeId === storeId);
+      const price = item?.priceCents === undefined ? item?.basePriceCents === undefined ? 'preço a confirmar' : `preço base ${formatarBRL(item.basePriceCents)} por unidade; promoção/valor aplicável a confirmar` : `${formatarBRL(item.priceCents)} por unidade`;
+      const availability = item?.available === undefined ? 'disponibilidade não confirmada' : item.available ? 'disponibilidade informada no catálogo; confirmar no carrinho' : 'indisponível';
+      lines.push(`• ${escapar(person.displayName)}: ${chosen.quantity}× ${escapar(name)} — ${price}; ${availability}${chosen.isSubstitute ? ' <i>(sugestão parecida)</i>' : ''}`);
+    }
+  }
+  for (const person of proposal.participants.filter(p => !proposal.items.some(i => i.participantId === p.id))) lines.push(`🙋 ${escapar(person.displayName)}: sem item compatível nesta amostra.`);
+  for (const person of dados.collection ?? []) if (!person.included) lines.push(`🙋 ${escapar(person.displayName)}: preferência ainda não reconhecida; sem item nesta proposta.`);
+  const people = new Set([...proposal.participants.map(p => p.id), ...(dados.collection ?? []).map(p => p.participantId)]);
+  if (proposal.coverage?.classificationLimited) lines.push('Classificação limitada por pessoa aos candidatos da amostra priorizados por desejo.');
+  if (proposal.coverage) lines.push(`Amostra pesquisada: ${proposal.coverage.terms} buscas por desejo, ${proposal.coverage.stores} lojas, ${proposal.coverage.items} produtos.${proposal.coverage.limited ? ' Cobertura limitada.' : ''}`);
+  lines.push('', `Cobertura: ${new Set(proposal.items.map(i => i.participantId)).size} de ${people.size} pessoas com item.`,
+    'Frete, taxas, descontos, total e orçamento final estão pendentes do carrinho.',
+    'Catálogo consultado por amostra; o cardápio completo não foi comprovado. Nenhum carrinho, pagamento ou compra foi autorizado.');
+  return lines.join('\n');
+}
+
+export function botoesPreliminares(temAlternativa: boolean): Botao[][] {
+  return [[{ texto: '🔎 Revisar proposta preliminar', data: DADOS_CARD.revisar }],
+    ...botoesCard(temAlternativa).slice(1)];
 }

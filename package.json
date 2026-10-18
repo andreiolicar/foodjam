@@ -18,7 +18,10 @@
     "check": "npm run lint && npm run typecheck && npm test",
     "simular": "tsx scripts/simulador.ts",
     "avaliar:coleta": "tsx scripts/avaliar-coleta.ts",
-    "listar:modelos": "tsx scripts/listar-modelos.ts"
+    "listar:modelos": "tsx scripts/listar-modelos.ts",
+    "integrar:ifood": "tsx scripts/integracao-ifood.ts",
+    "preparar:ifood": "tsx scripts/preparar-ifood.ts",
+    "demo:ifood": "tsx scripts/demo-ifood.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",

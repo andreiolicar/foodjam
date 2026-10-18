@@ -1,5 +1,5 @@
 import { FakeLlm, responderHeuristico } from './fakes/llm-fake.js';
-import type { ReasoningEffort } from './llm-openai.js';
+import type { ReasoningEffort, ResponseMode } from './llm-openai.js';
 import { ESFORCOS, OpenAiCompatLlm } from './llm-openai.js';
 import type { LlmPort, LlmTier } from './ports.js';
 
@@ -43,7 +43,7 @@ export function temProvedorReal(env: LlmEnv): boolean {
  *   AI_MODEL_FAST_FALLBACK e AI_MODEL_CAPABLE_FALLBACK (opcionais) são os
  *   modelos reserva usados quando o principal responde 429.
  */
-export function criarLlmDoAmbiente(env: LlmEnv): LlmPort {
+export function criarLlmDoAmbiente(env: LlmEnv, dependencies: { fetch?: typeof fetch; initialResponseModes?: Readonly<Partial<Record<string, ResponseMode>>> } = {}): LlmPort {
   const provider = env.AI_PROVIDER?.trim().toLowerCase() || 'fake';
   switch (provider) {
     case 'fake':
@@ -74,6 +74,8 @@ export function criarLlmDoAmbiente(env: LlmEnv): LlmPort {
         ...(Object.keys(fallbacks).length > 0 && { fallbacks }),
         ...(Object.keys(reasoningEffort).length > 0 && { reasoningEffort }),
         ...(apiKey && { apiKey }),
+        ...(dependencies.fetch && { fetch: dependencies.fetch }),
+        ...(dependencies.initialResponseModes && { initialResponseModes: dependencies.initialResponseModes }),
       });
     }
     default:

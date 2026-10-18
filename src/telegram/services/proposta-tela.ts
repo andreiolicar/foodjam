@@ -2,7 +2,7 @@ import { InlineKeyboard, type Api } from 'grammy';
 
 import type { Agente, Proposal, Resposta, SessionId } from '../../core/index.js';
 import { apresentarActions, teclado } from './apresentacao.js';
-import { botoesCard, textoProposta } from './card.js';
+import { botoesCard, textoProposta, botoesPreliminares, textoPropostaPreliminar } from './card.js';
 
 export type ApiCard = Pick<Api, 'sendMessage' | 'editMessageReplyMarkup' | 'editMessageText'>;
 type IrisCard = Pick<Agente, 'nomes' | 'obter'>;
@@ -10,6 +10,7 @@ type IrisCard = Pick<Agente, 'nomes' | 'obter'>;
 // Mensagem do card com botões em cada grupo: ao desenhar outro card (ou a proposta
 // sair da mesa), os botões do anterior são retirados para ninguém clicar numa sugestão velha.
 const ultimoCard = new Map<SessionId, number>();
+export const cardAtual = (sessionId: string, messageId: number) => ultimoCard.get(sessionId) === messageId;
 
 export async function retirarBotoesDoCard(api: ApiCard, sessionId: SessionId): Promise<void> {
   const messageId = ultimoCard.get(sessionId);
@@ -36,6 +37,14 @@ async function montarCard(iris: IrisCard, sessionId: SessionId, resposta: Respos
   return { texto, opcoes: { parse_mode: 'HTML' as const, reply_markup: teclado(botoesCard(temAlternativa)) } };
 }
 
+async function montarPreliminar(iris: IrisCard, sessionId: string, resposta: Resposta) {
+  const proposal = resposta.preliminary!;
+  const session = resposta.session ?? await iris.obter(sessionId);
+  const nomes = await iris.nomes(sessionId);
+  return { texto: textoPropostaPreliminar({ proposal, ...(nomes ? { nomes } : {}), ...(resposta.items ? { items: resposta.items } : {}), ...(resposta.collection ? { collection: resposta.collection } : {}) }),
+    opcoes: { parse_mode: 'HTML' as const, reply_markup: teclado(botoesPreliminares(Boolean(session?.preliminaryAlternative))) } };
+}
+
 /**
  * Desenha a proposta da resposta no grupo, com os botões de decisão, e envia as
  * actions (perguntas de valor no privado, avisos). Devolve false se não há proposta.
@@ -48,12 +57,12 @@ export async function exibirProposta(
   botUsername: string,
 ): Promise<boolean> {
   const proposal = resposta.proposal;
-  if (!proposal) {
+  if (!proposal && !resposta.preliminary) {
     await apresentarActions(api, resposta, botUsername);
     return false;
   }
 
-  const card = await montarCard(iris, sessionId, resposta, proposal);
+  const card = resposta.preliminary ? await montarPreliminar(iris, sessionId, resposta) : await montarCard(iris, sessionId, resposta, proposal!);
   await retirarBotoesDoCard(api, sessionId);
   const enviada = await api.sendMessage(sessionId, card.texto, card.opcoes);
   ultimoCard.set(sessionId, enviada.message_id);
@@ -68,9 +77,9 @@ export async function exibirProposta(
  */
 export async function atualizarCard(api: ApiCard, iris: IrisCard, sessionId: SessionId, resposta: Resposta): Promise<void> {
   const messageId = ultimoCard.get(sessionId);
-  if (messageId === undefined || !resposta.proposal) return;
+  if (messageId === undefined || !resposta.proposal && !resposta.preliminary) return;
 
-  const card = await montarCard(iris, sessionId, resposta, resposta.proposal);
+  const card = resposta.preliminary ? await montarPreliminar(iris, sessionId, resposta) : await montarCard(iris, sessionId, resposta, resposta.proposal!);
   try {
     await api.editMessageText(sessionId, messageId, card.texto, card.opcoes);
   } catch {

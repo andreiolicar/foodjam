@@ -1,4 +1,4 @@
-import type { DeliveryAddress, MenuItem, MenuItemId, MoneyCents, SessionId, Store, StoreId } from './contracts.js';
+import type { CartObservation, DiscoveryItem, DiscoveryMenu, DiscoveryStore, PreparationContext, PreparationPermit, DeliveryAddress, MenuItem, MenuItemId, MoneyCents, SessionId, Store, StoreId } from './contracts.js';
 import type { TimedCatalogSnapshot } from './regras/validar-escolhas.js';
 import type { PessoaClassificada } from './regras/combinacoes.js';
 import type { CoreSession } from './sessao.js';
@@ -12,6 +12,7 @@ export interface SessionRecord {
   classificacao?: PessoaClassificada[];
   /** Quantas propostas já foram geradas (para ids previsíveis). */
   proposalCount: number;
+  discoveryCatalog?: { stores: DiscoveryStore[]; items: DiscoveryItem[] };
 }
 
 /**
@@ -101,4 +102,18 @@ export class StoreNotFoundError extends Error {
     super(`loja não encontrada: ${storeId}`);
     this.name = 'StoreNotFoundError';
   }
+}
+
+/** Fase de exploração: não promete preço, estoque ou frete final. */
+export interface DiscoveryCatalogPort {
+  /** Ofertas encontradas por desejo, sempre com associação explícita à loja. */
+  searchItems?(query: string, address: DeliveryAddress): Promise<DiscoveryItem[]>;
+  listSavedAddresses(): Promise<DeliveryAddress[]>;
+  searchStores(query: string, address: DeliveryAddress): Promise<DiscoveryStore[]>;
+  getMenu(storeId: StoreId, address: DeliveryAddress): Promise<DiscoveryMenu>;
+  getStore(storeId: StoreId, address: DeliveryAddress): Promise<DiscoveryStore>;
+}
+/** Não existe submissão/compras nesta porta. */
+export interface CommercialPreparationPort {
+  prepare(context: PreparationContext, permit: PreparationPermit): Promise<CartObservation>;
 }

@@ -1,4 +1,4 @@
-import type { CoreAction, ParticipantId, Resposta, SessionId } from '../../core/index.js';
+import type { CoreAction, DeliveryAddress, ParticipantId, Resposta, SessionId } from '../../core/index.js';
 import { callbackEndereco, callbackOrcamento } from './callbacks.js';
 
 export interface Botao {
@@ -16,6 +16,8 @@ export interface Envio {
   privado?: { participantId: ParticipantId; sessionId: SessionId };
   /** Pergunta de valor (budget_question ou item_suggestion): a nova substitui os botões da anterior. */
   orcamento?: true;
+  endereco?: DeliveryAddress;
+  confirmacaoEndereco?: { participantId: ParticipantId; sessionId: SessionId };
 }
 
 function privado(sessionId: SessionId, participantId: ParticipantId, text: string, botoes?: Botao[][]): Envio {
@@ -50,14 +52,19 @@ export function planejarEnvio(action: CoreAction): Envio | undefined {
       return privado(action.sessionId, action.participantId, action.text);
 
     case 'confirm_address': {
+      if (action.visibility === 'group') return { chatId: action.sessionId,
+        text: `📍 Endereço de entrega\n\nEntregar em: ${action.address.formatted}`,
+        endereco: action.address, confirmacaoEndereco: { sessionId: action.sessionId, participantId: action.participantId },
+        botoes: [[{ texto: '✅ Confirmar endereço', data: callbackEndereco('confirmar', action.sessionId) }], [{ texto: '✏️ Corrigir / informar outro', data: callbackEndereco('outro', action.sessionId) }]],
+      };
       const [sim, outro] =
         action.kind === 'default' ? [ROTULOS.sim, ROTULOS.outroEndereco] : [ROTULOS.confirmar, ROTULOS.corrigir];
-      return privado(action.sessionId, action.participantId, action.text, [
+      return { ...privado(action.sessionId, action.participantId, action.text, [
         [
           { texto: sim, data: callbackEndereco('confirmar', action.sessionId) },
           { texto: outro, data: callbackEndereco('outro', action.sessionId) },
         ],
-      ]);
+      ]), endereco: action.address };
     }
 
     case 'budget_question':
