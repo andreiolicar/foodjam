@@ -40,46 +40,52 @@ Não há consulta adicional `getItem`, nem avaliação individual do produto.
 
 ## Apresentação e estabilidade
 
-A proposta preliminar usa uma única mensagem `sendPhoto` com `InputFile`, legenda
-HTML compacta e o mesmo teclado de revisão, alternativa, retorno e cancelamento.
-A foto principal é a primeira URL válida de um produto efetivamente selecionado,
-conferido pelo par produto/loja. Todos os produtos e participantes continuam no
-texto. Não há fotos complementares separadas. A própria mensagem com foto recebe
-a identidade do card e a revisão da proposta.
+A proposta preliminar começa com um único resumo textual: título, cobertura por
+pessoa, observações da amostra, pessoas sem item e avisos de catálogo/comerciais.
+Não inclui lista de produtos, preços, subtotal ou total. O resumo é o único dono
+dos botões e da identidade pública usada nos callbacks.
 
-A legenda preserva lojas, avaliações, produtos, pessoas, quantidades, preço unitário
-comprovado ou sua incerteza, disponibilidade, cobertura e avisos comerciais.
-Nenhum nome ou aviso é truncado. O limite é conservador: até 1.024 unidades UTF-16
-contando também a marcação HTML e entidades escapadas, garantindo caber após a
-interpretação do Telegram. Se exceder, usa o card textual completo sem download.
+Depois, cada par produto/loja efetivamente selecionado recebe uma mensagem
+individual, em resposta ao resumo, com nome do produto, pessoas/quantidades,
+estabelecimento, sua própria avaliação, preço unitário comprovado ou incerteza,
+e disponibilidade. Um produto compartilhado por duas pessoas ocupa uma única
+mensagem com ambas; registros idênticos não repetem a mesma pessoa. Produtos
+distintos continuam separados mesmo quando usam a mesma URL de imagem.
+Nenhum candidato rejeitado recebe mensagem. Não há limite artificial de duas
+fotos: envia no máximo uma por produto selecionado, conforme este novo contrato.
 
-A tentativa única de foto (download e envio juntos) tem prazo de 2 segundos e
-aborto; mesmo se o transporte ignorar o sinal, o fluxo passa ao texto completo.
-Foto ausente, inválida, redirecionada, grande, inacessível ou recusada pelo Telegram
-resulta em `sendMessage` com o card completo e todos os botões. Nenhum segundo
-produto é enviado como foto extra. Atualizar/reapresentar a mesma revisão não
-reenvia a foto. Trocar para alternativa cria o card da nova revisão.
+A mensagem de item usa `sendPhoto` com legenda HTML completa de até 1.024 unidades
+UTF-16, contando também marcação e entidades de forma conservadora. Sem imagem
+válida, legenda longa, falha ou timeout de mídia, usa `sendMessage` para aquele
+item, sem truncamento nem reinserção no resumo. Itens não têm botões. As mensagens
+são sequenciais; falha de um item não bloqueia os próximos. O resumo já está
+entregue e interativo antes do download. Download+envio de foto têm prazo conjunto
+de 2 segundos; fallback textual individual também tem prazo de 2 segundos.
+São preservados HTTPS, host comprovado, bloqueio de redirecionamento, MIME e teto
+de 5 MB. URLs e erros remotos não são registrados.
 
-O estado registra se o card é foto ou texto. Atualizações usam `editMessageCaption`
-ou `editMessageText`, respectivamente. Se uma legenda crescer além do limite ou
-for recusada, substitui a foto pelo card textual completo e invalida a mensagem
-anterior. Um erro benigno de mensagem não modificada não gera novo card.
+Reapresentar/revisar a mesma identidade não reenvia itens. Atualizações editam o
+resumo com `editMessageText`, a foto com `editMessageCaption` e itens textuais com
+`editMessageText`. Se a legenda crescer demais ou a edição for recusada, substitui
+somente a mensagem daquele item por texto completo. Atualizações da mesma revisão
+são serializadas; metadados atualizados durante o envio são reaplicados ao item.
 
-Substituição, retorno à coleta ou cancelamento invalidam a identidade do card
-anterior imediatamente. A limpeza de fotos/botões é best effort e tem prazo, sem
-atrasar o novo card. Uma resposta tardia de mídia é removida quando seu ID fica
-disponível; nunca é registrada como card, mesmo se o fallback já foi entregue.
-Se o Telegram aceitar uma requisição mas não devolver o ID, não é possível garantir
-a remoção física da mensagem; seus callbacks continuam sem identidade válida.
-Uma falha de exclusão também pode deixar mensagem histórica visível, cujos botões
-são recusados. A revisão e o token da apresentação são conferidos antes e depois
-dos awaits e imediatamente antes de registrar a mensagem. A proteção existente do
-Core recusa callbacks antigos, inclusive antes da atualização visual.
+Troca de alternativa, substituição, cancelamento e volta à coleta invalidam a
+identidade do resumo e limpam resumo e mensagens de item. Cada envio é protegido
+por token de apresentação e revisão do Core, com conferências antes/depois dos
+awaits e registro síncrono do ID. Respostas tardias são removidas; uma edição tardia
+repete a limpeza para não restaurar callbacks antigos. Mensagens de item nunca
+são reconhecidas como cards de callback. O Core mantém sua validação independente.
+
+A limpeza remota é best effort e limitada por tempo. Se o Telegram aceitar uma
+requisição mas não devolver seu ID, não é possível garantir remoção física; se
+exclusão falhar, mensagens históricas podem ficar visíveis. Os itens respondem ao
+resumo original e nunca recebem a identidade de uma proposta nova. Callback de
+resumo antigo permanece inválido mesmo se a remoção física falhar.
 
 Avaliação aparece por loja como `⭐ 4,7 (850 avaliações)`; sem contagem, `⭐ 4,7`.
-Sem nota válida, omite a linha. Zero só aparece quando explicitamente comprovado.
-Nomes e produtos mantêm escape HTML também nas legendas. Avaliações são exclusivas
-de cada estabelecimento, inclusive nas propostas com duas lojas.
+Sem nota válida, omite a linha. Nomes são escapados em HTML. Nenhum valor financeiro
+é somado e nenhum orçamento final ou operação comercial é autorizado.
 
 ## Verificação e integração posterior ao PR #9
 
@@ -135,3 +141,35 @@ Este refinamento não modifica contratos de descoberta, seleção, preços, casc
 credenciais, permissões comerciais ou handlers de callbacks. Não há nova consulta
 MCP para obter foto. Integração posterior exige conferir a base e repetir as
 validações; publicação e ativação continuam fora desta tarefa.
+
+## Refinamento por item (base e290370)
+
+Mudança isolada em `codex/proposal-item-cards`, a partir do último commit aprovado.
+O patch de diagnóstico ativo permanece em sua própria worktree e não é misturado
+à mudança visual. Sem consultas reais, reinício, publicação ou alteração da
+seleção/cascata/permissões comerciais.
+
+RED: 31 dos 32 cenários iniciais do novo formato falharam no contrato anterior.
+GREEN: regressões de resumo+itens, fallback, associação, deduplicação, edições,
+limite de legenda, callbacks, limpeza e respostas tardias. Uma regressão adicional
+reproduziu metadados antigos numa foto em voo antes da correção. Os testes do
+contrato anterior de card único com foto foram substituídos pelo novo contrato;
+os cenários de segurança e concorrência foram preservados e ampliados.
+
+Validação local do novo contrato: 48 testes de mensagens por item; suíte completa
+com 1.512 testes em 80 arquivos, lint/typecheck e build aprovados. Baseline de
+1.493 testes aprovado antes da mudança. Os 29 testes do card único anterior foram
+substituídos pelos 48 testes do novo formato, preservando e ampliando seus casos
+de fallback, timeout, edição e concorrência. Nenhuma fixture MCP foi alterada.
+
+A revisão independente reproduziu dois gaps antes da consolidação: catchup de
+edição sem prazo bloqueava o próximo produto; item sem ID após falha textual não
+era tentado novamente. Sete regressões adicionais falharam em RED e passaram em
+GREEN. Edições de item e resumo agora têm prazo de 2 segundos; item ausente só é
+retentado quando sua chave não está em envio. Itens já entregues não são reenviados.
+Edição tardia remove apenas o ID original, preservando o substituto textual.
+
+O caso de edição tardia após fallback também recusado foi reproduzido em RED e
+corrigido: o ID abandonado é invalidado antes de tentar o texto; uma nova tentativa
+não reutiliza esse ID. A limpeza tardia preserva o item novo. Revisão final:
+100/100 testes selecionados, incluindo os 48 casos novos, sem bloqueadores.

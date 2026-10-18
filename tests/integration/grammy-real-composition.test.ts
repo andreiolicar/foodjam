@@ -126,9 +126,16 @@ it('composição de produção procura hambúrguer e açaí em duas lojas e most
       { participantId: '71', storeId: merchant, menuItemId: products[0], quantity: 1 },
       { participantId: '72', storeId: second, menuItemId: products[1], quantity: 1 },
     ]);
-    const card = h.sent.findLast(m => m.text.includes('Sugestão preliminar'))!.text;
+    const summary = h.sent.findLast(m => m.text.includes('Sugestão preliminar'))!.text;
+    expect(summary).not.toMatch(/R\$|Hambúrguer do MCP|Açaí 500ml|[Tt]otal/);
+    const individual = h.sent.filter(m => m.text.startsWith('🍽️ <b>') && !m.text.includes('Sugestão preliminar'));
+    expect(individual).toHaveLength(2);
+    expect(individual[0]!.text).toContain('Pessoa 71'); expect(individual[0]!.text).not.toContain('Pessoa 72');
+    expect(individual[1]!.text).toContain('Pessoa 72'); expect(individual[1]!.text).not.toContain('Pessoa 71');
+    expect(individual.every(m => m.buttons.length === 0)).toBe(true);
+    const card = h.sent.map(m => m.text).join('\n');
     expect(card).toContain('2 de 2'); expect(card).toContain('R$ 25,90 por unidade'); expect(card).toContain('R$ 32,50 por unidade');
-    expect(card).toContain('disponibilidade não confirmada'); expect(card).toContain('pendentes do carrinho');
+    expect(card).toContain('disponibilidade não confirmada'); expect(summary).toContain('valores finais não confirmados');
     expect(transport.read.mock.calls.every(([name]) => ['listAddresses', 'searchOffers', 'getMerchant', 'browseOffers'].includes(name))).toBe(true);
     await h.text(72, '/endereco'); expect((await h.runtime.iris.obter(String(group)))?.preliminary).toBeDefined();
     await h.text(71, '/endereco'); expect((await h.runtime.iris.obter(String(group)))?.preliminary).toBeUndefined();
@@ -183,10 +190,10 @@ it.each([false, true])('composição real apresenta avaliação getMerchant e ca
   h.runtime.bot.api.config.use(async (prev, method, payload) => {
     const p = payload as Record<string, unknown>;
     if (method === 'sendPhoto') {
-      expect(p.reply_parameters).toBeUndefined();
+      expect(p.reply_parameters).toEqual({ message_id: h.sent.findLast(m => m.text.includes('Sugestão preliminar'))!.id });
       expect(p.parse_mode).toBe('HTML');
-      expect(String(p.caption)).toContain('Sugestão preliminar');
-      expect(p.reply_markup).toBeDefined();
+      expect(String(p.caption)).not.toContain('Sugestão preliminar');
+      expect(p.reply_markup).toBeUndefined();
       if (failPhoto) return { ok: false, error_code: 400, description: 'Controlled media failure' } as never;
       const result = await prev(method, payload);
       media.push({ card: (result as {result:{message_id:number}}).result.message_id, caption: String(p.caption), buttons: p.reply_markup });
@@ -199,21 +206,27 @@ it.each([false, true])('composição real apresenta avaliação getMerchant e ca
   try {
     await h.text(71, 'Hambúrguer'); await h.text(72, 'Hambúrguer'); await h.text(71, '/montar');
     const old = h.button('Outra opção');
-    expect(old.m.text).toContain('⭐ 4,7 (850 avaliações)'); expect(old.m.text).not.toContain('⭐ 1,2');
+    expect(old.m.text).not.toMatch(/⭐|Hambúrguer MCP|R\$/);
+    expect(h.sent.some(m => m.text.includes('⭐ 4,7 (850 avaliações)'))).toBe(true); expect(h.sent.some(m => m.text.includes('⭐ 1,2'))).toBe(false);
     const chosen = (await h.runtime.iris.obter(String(group)))!.preliminary!.items.map(i => i.menuItemId);
     if (!failPhoto) {
-      expect(media).toHaveLength(1); expect(media[0]!.card).toBe(old.m.id);
-      expect(media[0]!.caption).toContain('Pessoa 71'); expect(media[0]!.caption).toContain('Pessoa 72');
-      expect(media.every(m => chosen.some(id => m.caption.includes(`Hambúrguer MCP ${products.indexOf(id) + 1}`)) && m.buttons)).toBe(true);
+      expect(media).toHaveLength(new Set(chosen).size); expect(media[0]!.card).not.toBe(old.m.id);
+      expect(media.map(m => m.caption).join('\n')).toContain('Pessoa 71'); expect(media.map(m => m.caption).join('\n')).toContain('Pessoa 72');
+      expect(media.every(m => chosen.some(id => m.caption.includes(`Hambúrguer MCP ${products.indexOf(id) + 1}`)) && !m.buttons)).toBe(true);
+    }
+    if (!failPhoto) {
+      const snapshot = await h.runtime.iris.obter(String(group));
+      await h.click(71, 'proposta:cancelar', group, media[0]!.card);
+      expect(await h.runtime.iris.obter(String(group))).toEqual(snapshot);
     }
     const before = media.length;
     await h.click(71, old.data, group, old.m.id);
     const alternative = h.button('Outra opção');
     expect(alternative.m.id).not.toBe(old.m.id);
-    if (!failPhoto) expect(removed.length).toBe(before);
+    if (!failPhoto) expect(removed.length).toBe(before + 1);
     const snapshot = await h.runtime.iris.obter(String(group));
     await h.click(71, old.data, group, old.m.id);
-    // O card com foto anterior também perde sua identidade após a troca.
+    // O resumo anterior perde sua identidade; mensagens de item nunca têm callbacks.
     await h.click(71, 'proposta:cancelar', group, old.m.id);
     expect(await h.runtime.iris.obter(String(group))).toEqual(snapshot);
     expect(alerts.filter(text => text.includes('substituída')).length).toBeGreaterThanOrEqual(2);

@@ -22,22 +22,22 @@ function setup(chosen = ['a', 'b', 'c']) {
   return { group, response, iris, api, sendMessage, sendPhoto, deleteMessage, events, fetchImage, replace() { current = { ...preliminary, id: 'p2' }; return { ...response, preliminary: current }; } };
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
-it('envia somente foto principal dos escolhidos com card e callbacks na legenda', async () => {
+it('envia resumo e uma foto por produto escolhido, com callbacks somente no resumo', async () => {
   const f = setup(['b', 'a', 'c']);
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
-  expect(f.events).toEqual(['photo']);
-  expect(f.fetchImage.mock.calls.map(args => String(args[0]))).toEqual([image('b')]);
+  expect(f.events).toEqual(['card', 'photo', 'photo', 'photo']);
+  expect(f.fetchImage.mock.calls.map(args => String(args[0]))).toEqual([image('b'), image('a'), image('c')]);
   const options = (f.sendPhoto.mock.calls as unknown[][]).map(args => args[2]) as Record<string, unknown>[];
-  expect(options[0]).toMatchObject({ caption: expect.stringContaining('Produto &lt;b&gt;'), parse_mode: 'HTML', reply_markup: expect.anything() });
-  expect(options[0]).not.toHaveProperty('reply_parameters');
+  expect(options[0]).toMatchObject({ caption: expect.stringContaining('Produto &lt;b&gt;'), parse_mode: 'HTML' });
+  expect(options[0]).toHaveProperty('reply_parameters', { message_id: 11 }); expect(options[0]).not.toHaveProperty('reply_markup');
   expect(propostaDoCard(f.group, 11)).toBe('p1');
 });
-it('deduplica fotos e não reenvia na atualização ou reapresentação da mesma proposta', async () => {
+it('mantém produtos distintos mesmo com URL igual e não reenvia na mesma revisão', async () => {
   const f = setup(['a', 'b']); f.response.items![1]!.itemImageUrl = image('a');
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
   await atualizarCard(f.api, f.iris, f.group, f.response);
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
-  expect(f.sendPhoto).toHaveBeenCalledTimes(1); expect(f.sendMessage).not.toHaveBeenCalled();
+  expect(f.sendPhoto).toHaveBeenCalledTimes(2); expect(f.sendMessage).toHaveBeenCalledTimes(1);
 });
 it.each(['missing', 'unsafe', 'foreign'])('sem imagem utilizável (%s) entrega card sem download', async mode => {
   const f = setup(['a']);
@@ -45,7 +45,7 @@ it.each(['missing', 'unsafe', 'foreign'])('sem imagem utilizável (%s) entrega c
   if (mode === 'unsafe') f.response.items![0]!.itemImageUrl = 'http://localhost/image.jpg';
   if (mode === 'foreign') f.response.items![0]!.storeId = 'other-store';
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
-  expect(f.sendMessage).toHaveBeenCalledTimes(1); expect(f.fetchImage).not.toHaveBeenCalled(); expect(f.sendPhoto).not.toHaveBeenCalled();
+  expect(f.sendMessage).toHaveBeenCalledTimes(2); expect(f.fetchImage).not.toHaveBeenCalled(); expect(f.sendPhoto).not.toHaveBeenCalled();
 });
 it.each(['telegram', 'download', 'redirect', 'size', 'type'])('falha de mídia %s mantém card e botões da revisão correta', async failure => {
   const f = setup(['a']);
@@ -56,7 +56,7 @@ it.each(['telegram', 'download', 'redirect', 'size', 'type'])('falha de mídia %
   if (failure === 'type') f.fetchImage.mockResolvedValueOnce(new Response('<html>not an image</html>', { headers: { 'content-type': 'text/html' } }));
   const errorLog = vi.spyOn(console, 'error');
   await expect(exibirProposta(f.api, f.iris, f.group, f.response, 'bot')).resolves.toBe(true);
-  expect(f.sendMessage).toHaveBeenCalledTimes(1); expect(propostaDoCard(f.group, 11)).toBe('p1');
+  expect(f.sendMessage).toHaveBeenCalledTimes(2); expect(propostaDoCard(f.group, 11)).toBe('p1');
   if (failure !== 'telegram') expect(f.sendPhoto).not.toHaveBeenCalled();
   expect(f.fetchImage).toHaveBeenCalledWith(image('a'), expect.objectContaining({ redirect: 'error', signal: expect.any(AbortSignal) }));
   expect(errorLog).not.toHaveBeenCalled(); errorLog.mockRestore();
@@ -66,7 +66,7 @@ it.each(['download', 'telegram'])('mídia pendurada em %s tem prazo finito e ent
   if (phase === 'download') f.fetchImage.mockImplementationOnce(() => new Promise(() => {}));
   else f.sendPhoto.mockImplementationOnce(() => new Promise(() => {}));
   const pending = exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
-  await vi.advanceTimersByTimeAsync(0); expect(f.sendMessage).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(0); expect(f.sendMessage).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(2500); await expect(pending).resolves.toBe(true);
   expect(propostaDoCard(f.group, 11)).toBe('p1');
 });
@@ -83,7 +83,7 @@ it('resposta tardia de foto substituída é removida e não envia fotos restante
   resolve({ message_id: 90 }); await pending;
   expect(f.sendPhoto).toHaveBeenCalledTimes(1);
   expect(f.deleteMessage).toHaveBeenCalledWith(f.group, 90, expect.any(AbortSignal));
-  expect(propostaDoCard(f.group, 90)).toBeUndefined(); expect(propostaDoCard(f.group, 11)).toBe('p2');
+  expect(propostaDoCard(f.group, 90)).toBeUndefined(); expect(propostaDoCard(f.group, 12)).toBe('p2');
 });
 it('retirar card remove mídia anterior e invalida callbacks', async () => {
   const f = setup(['a']); await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
@@ -101,7 +101,7 @@ it('quando a proposta muda durante download, não envia foto nem a próxima cand
   const f = setup(['a', 'b']);
   f.fetchImage.mockImplementationOnce(async () => { f.replace(); return new Response(new Uint8Array([255,216,255]), { headers: { 'content-type': 'image/jpeg' } }); });
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
-  expect(f.sendMessage).not.toHaveBeenCalled(); expect(f.sendPhoto).not.toHaveBeenCalled(); expect(f.fetchImage).toHaveBeenCalledTimes(1);
+  expect(f.sendMessage).toHaveBeenCalledTimes(1); expect(f.sendPhoto).not.toHaveBeenCalled(); expect(f.fetchImage).toHaveBeenCalledTimes(1);
 });
 it('resposta depois do timeout é removida mesmo quando o transporte ignora aborto', async () => {
   vi.useFakeTimers(); const f = setup(['a']);
@@ -118,7 +118,7 @@ it('falha na limpeza da foto velha não bloqueia entrega de um novo card', async
   f.deleteMessage.mockRejectedValueOnce(new Error('PRIVATE_DELETE'));
   const next = f.replace(); next.items = [];
   await expect(exibirProposta(f.api, f.iris, f.group, next, 'bot')).resolves.toBe(true);
-  expect(f.sendMessage).toHaveBeenCalledTimes(1); expect(propostaDoCard(f.group, 12)).toBe('p2');
+  expect(f.sendMessage).toHaveBeenCalledTimes(3); expect(propostaDoCard(f.group, 13)).toBe('p2');
 });
 it('verificação de sessão atrasada não permite que apresentação antiga retire botões da revisão nova', async () => {
   const f = setup(['a']); await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
@@ -136,8 +136,8 @@ it('verificação de sessão atrasada não permite que apresentação antiga ret
   await started;
   await exibirProposta(f.api, f.iris, f.group, response3, 'bot');
   release(); await older;
-  expect(f.sendMessage).toHaveBeenCalledTimes(1);
-  expect(propostaDoCard(f.group, 12)).toBe('p3');
+  expect(f.sendMessage).toHaveBeenCalledTimes(3);
+  expect(propostaDoCard(f.group, 13)).toBe('p3');
 });
 it('cancelamento entre conferência e registro do card textual não ressuscita sua identidade nem botões', async () => {
   const f = setup(['a']); delete f.response.items![0]!.itemImageUrl; const session = await f.iris.obter();
@@ -151,7 +151,7 @@ it('cancelamento entre conferência e registro do card textual não ressuscita s
   });
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
   expect(cancelled).toBe(true); expect(propostaDoCard(f.group, 11)).toBeUndefined();
-  expect(f.api.editMessageReplyMarkup).toHaveBeenCalledWith(f.group, 11, expect.anything());
+  expect(f.api.editMessageReplyMarkup).toHaveBeenCalledWith(f.group, 11, expect.anything(), expect.any(AbortSignal));
   expect(f.sendPhoto).not.toHaveBeenCalled();
 });
 it('cancelamento entre conferência e registro de foto ainda remove a foto enviada', async () => {

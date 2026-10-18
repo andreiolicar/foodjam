@@ -156,53 +156,61 @@ export interface DadosPropostaPreliminar {
   collection?: readonly { participantId: string; displayName: string; included: boolean }[];
 }
 
+/** Resumo da sessão: detalhes de produto pertencem somente às mensagens individuais. */
 export function textoPropostaPreliminar(dados: DadosPropostaPreliminar): string {
-  return renderPreliminar(dados, false);
-}
-
-/** Sem truncamento: conta HTML e unidades UTF-16 de forma conservadora. */
-export function legendaPropostaPreliminar(dados: DadosPropostaPreliminar): string | undefined {
-  const caption = renderPreliminar(dados, true);
-  return caption.length <= 1024 ? caption : undefined;
-}
-
-function renderPreliminar(dados: DadosPropostaPreliminar, compact: boolean): string {
   const { proposal } = dados;
-  const lines = ['🍽️ <b>Sugestão preliminar da Íris</b>'];
-  for (const storeId of new Set(proposal.items.map(i => i.storeId))) {
-    const storeName = dados.nomes?.lojas[storeId];
-    if (!storeName) throw new Error('Nome do estabelecimento não confirmado.');
-    lines.push('', `🏪 <b>${escapar(storeName)}</b>`);
-    const store = dados.stores?.find(s => s.id === storeId);
+  const people = new Set([...proposal.participants.map(p => p.id), ...(dados.collection ?? []).map(p => p.participantId)]);
+  const lines = ['🍽️ <b>Sugestão preliminar da Íris</b>',
+    `Cobertura: ${new Set(proposal.items.map(i => i.participantId)).size} de ${people.size} pessoas com item.`];
+  for (const person of proposal.participants.filter(p => !proposal.items.some(i => i.participantId === p.id))) lines.push(`🙋 ${escapar(person.displayName)}: sem item compatível nesta amostra.`);
+  for (const person of dados.collection ?? []) if (!person.included) lines.push(`🙋 ${escapar(person.displayName)}: preferência ainda não reconhecida; sem item nesta proposta.`);
+  if (proposal.coverage?.classificationLimited) lines.push('Classificação limitada por pessoa aos candidatos da amostra priorizados por desejo.');
+  if (proposal.coverage) lines.push(`Amostra pesquisada: ${proposal.coverage.terms} buscas por desejo, ${proposal.coverage.stores} lojas, ${proposal.coverage.items} produtos.${proposal.coverage.limited ? ' Cobertura limitada.' : ''}`);
+  lines.push('', 'Disponibilidade e valores comerciais ainda precisam de confirmação.',
+    'Frete, taxas, descontos e valores finais não confirmados.',
+    'Catálogo consultado por amostra; o cardápio completo não foi comprovado. Nenhum carrinho, pagamento ou compra foi autorizado.');
+  return lines.join('\n');
+}
+
+export interface ItemPropostaPreliminar {
+  key: string;
+  texto: string;
+  itemImageUrl?: string;
+}
+
+/** Uma mensagem por par produto/loja selecionado; compartilha a foto entre suas pessoas. */
+export function textosItensPropostaPreliminar(dados: DadosPropostaPreliminar): ItemPropostaPreliminar[] {
+  const groups = new Map<string, typeof dados.proposal.items>();
+  for (const chosen of dados.proposal.items) {
+    const key = JSON.stringify([chosen.storeId, chosen.menuItemId]);
+    const group = groups.get(key) ?? [];
+    if (!group.some(row => row.participantId === chosen.participantId && row.quantity === chosen.quantity && Boolean(row.isSubstitute) === Boolean(chosen.isSubstitute))) group.push(chosen);
+    groups.set(key, group);
+  }
+  return [...groups.entries()].map(([key, chosen]) => {
+    const first = chosen[0]!;
+    const item = dados.items?.find(i => i.id === first.menuItemId && i.storeId === first.storeId);
+    const store = dados.stores?.find(s => s.id === first.storeId);
+    const name = item?.name ?? dados.nomes?.itens[first.menuItemId];
+    const storeName = dados.nomes?.lojas[first.storeId] ?? store?.name;
+    if (!name || !storeName) throw new Error('Produto ou estabelecimento não confirmado.');
+    const lines = [`🍽️ <b>${escapar(name)}</b>`];
+    for (const row of chosen) {
+      const person = dados.proposal.participants.find(p => p.id === row.participantId);
+      if (!person) throw new Error('Participante não confirmado.');
+      lines.push(`👤 ${escapar(person.displayName)}: ${row.quantity}×${row.isSubstitute ? ' <i>(sugestão parecida)</i>' : ''}`);
+    }
+    lines.push(`🏪 <b>${escapar(storeName)}</b>`);
     const rating = store?.reviewRating;
     if (typeof rating === 'number' && Number.isFinite(rating) && rating >= 0 && rating <= 5) {
       const count = store?.ratingCount;
       const votes = typeof count === 'number' && Number.isSafeInteger(count) && count >= 0 ? ` (${count} ${count === 1 ? 'avaliação' : 'avaliações'})` : '';
       lines.push(`⭐ ${rating.toFixed(1).replace('.', ',')}${votes}`);
     }
-    for (const chosen of proposal.items.filter(i => i.storeId === storeId)) {
-      const name = dados.nomes?.itens[chosen.menuItemId];
-      const person = proposal.participants.find(p => p.id === chosen.participantId);
-      if (!name || !person) throw new Error('Produto ou participante não confirmado.');
-      const item = dados.items?.find(i => i.id === chosen.menuItemId && i.storeId === storeId);
-      const unit = compact ? '/un.' : ' por unidade';
-      const price = item?.priceCents === undefined ? item?.basePriceCents === undefined ? 'preço a confirmar' : `preço base ${formatarBRL(item.basePriceCents)}${unit}; promoção/valor aplicável a confirmar` : `${formatarBRL(item.priceCents)}${unit}`;
-      const availability = item?.available === undefined ? 'disponibilidade não confirmada' : item.available ? compact ? 'disponibilidade no catálogo' : 'disponibilidade informada no catálogo; confirmar no carrinho' : 'indisponível';
-      lines.push(`• ${escapar(person.displayName)}: ${chosen.quantity}× ${escapar(name)} — ${price}; ${availability}${chosen.isSubstitute ? ' <i>(sugestão parecida)</i>' : ''}`);
-    }
-  }
-  for (const person of proposal.participants.filter(p => !proposal.items.some(i => i.participantId === p.id))) lines.push(`🙋 ${escapar(person.displayName)}: sem item compatível nesta amostra.`);
-  for (const person of dados.collection ?? []) if (!person.included) lines.push(`🙋 ${escapar(person.displayName)}: preferência ainda não reconhecida; sem item nesta proposta.`);
-  const people = new Set([...proposal.participants.map(p => p.id), ...(dados.collection ?? []).map(p => p.participantId)]);
-  if (proposal.coverage?.classificationLimited) lines.push(compact ? 'Classificação limitada por pessoa, priorizada por desejo.' : 'Classificação limitada por pessoa aos candidatos da amostra priorizados por desejo.');
-  if (proposal.coverage) lines.push(`${compact ? 'Amostra' : 'Amostra pesquisada'}: ${proposal.coverage.terms} buscas por desejo, ${proposal.coverage.stores} lojas, ${proposal.coverage.items} produtos.${proposal.coverage.limited ? ' Cobertura limitada.' : ''}`);
-  lines.push('', `Cobertura: ${new Set(proposal.items.map(i => i.participantId)).size} de ${people.size} pessoas com item.`,
-    ...(compact ? ['Disponibilidade a confirmar no carrinho.',
-      'Frete, taxas, descontos, total e orçamento final pendentes do carrinho.',
-      'Catálogo por amostra; cardápio completo não comprovado. Nenhum carrinho, pagamento ou compra autorizado.']
-      : ['Frete, taxas, descontos, total e orçamento final estão pendentes do carrinho.',
-        'Catálogo consultado por amostra; o cardápio completo não foi comprovado. Nenhum carrinho, pagamento ou compra foi autorizado.']));
-  return lines.join('\n');
+    const price = item?.priceCents === undefined ? item?.basePriceCents === undefined ? 'preço a confirmar' : `preço base ${formatarBRL(item.basePriceCents)} por unidade; promoção/valor aplicável a confirmar` : `${formatarBRL(item.priceCents)} por unidade`;
+    lines.push(price, item?.available === undefined ? 'disponibilidade não confirmada' : item.available ? 'disponibilidade informada no catálogo; confirmar no carrinho' : 'indisponível');
+    return { key, texto: lines.join('\n'), ...(item?.itemImageUrl === undefined ? {} : { itemImageUrl: item.itemImageUrl }) };
+  });
 }
 
 export function botoesPreliminares(temAlternativa: boolean): Botao[][] {

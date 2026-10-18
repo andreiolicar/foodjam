@@ -1,8 +1,7 @@
-import { InlineKeyboard, InputFile, type Api } from 'grammy';
-import type { Resposta } from '../../core/index.js';
+import { GrammyError, InlineKeyboard, InputFile, type Api } from 'grammy';
 import { validatedItemImageUrl } from '../../ifood/visual-metadata.js';
 
-type MediaApi = Pick<Api, 'sendPhoto' | 'deleteMessage' | 'editMessageReplyMarkup'>;
+type MediaApi = Pick<Api, 'sendPhoto' | 'sendMessage' | 'deleteMessage' | 'editMessageReplyMarkup' | 'editMessageCaption' | 'editMessageText'>;
 // grammY tipa o shim de AbortSignal; Node fornece a mesma API em runtime.
 type TelegramSignal = NonNullable<Parameters<Api['sendPhoto']>[3]>;
 const telegramSignal = (signal: AbortSignal) => signal as unknown as TelegramSignal;
@@ -56,27 +55,60 @@ async function photoBytes(url: string, signal: AbortSignal): Promise<Uint8Array 
   } finally { await reader.cancel().catch(() => undefined); }
 }
 
-/** Uma foto do primeiro produto selecionado que tenha URL válida. */
-export async function enviarFotoProposta(api: MediaApi, sessionId: string, response: Resposta,
-  options: NonNullable<Parameters<Api['sendPhoto']>[2]>, current: () => Promise<boolean>,
-  active: () => boolean): Promise<{ message_id: number } | undefined> {
-  let url: string | undefined;
-  for (const chosen of response.preliminary?.items ?? []) {
-    const item = response.items?.find(i => i.id === chosen.menuItemId && i.storeId === chosen.storeId);
-    url = validatedItemImageUrl(item?.itemImageUrl);
-    if (url) break;
-  }
-  if (!url) return;
+/** Foto apenas do produto renderizado; download e envio dividem o mesmo prazo. */
+export async function enviarFotoItem(api: MediaApi, sessionId: string, itemImageUrl: string | undefined,
+  caption: string, cardId: number, current: () => Promise<boolean>, active: () => boolean): Promise<{ message_id: number } | undefined> {
+  const url = validatedItemImageUrl(itemImageUrl);
+  if (!url || caption.length > 1024) return;
   return bounded(async signal => {
     const bytes = await photoBytes(url, signal);
     if (!bytes || signal.aborted || !await current() || !active()) return;
-    const message = await api.sendPhoto(sessionId, new InputFile(bytes, 'produto.jpg'), options, telegramSignal(signal));
-    // A tentativa pode terminar depois do prazo ou da troca. Nunca registra
-    // essa mensagem como card, mesmo se o texto de fallback já foi entregue.
+    const message = await api.sendPhoto(sessionId, new InputFile(bytes, 'produto.jpg'), { caption, parse_mode: 'HTML', reply_parameters: { message_id: cardId } }, telegramSignal(signal));
     if (signal.aborted || !active()) {
       await removerFoto(api, sessionId, message.message_id);
       return;
     }
     return message;
+  });
+}
+
+/** Texto individual também tem prazo; respostas tardias são removidas. */
+export async function enviarTextoItem(api: MediaApi, sessionId: string, text: string, cardId: number,
+  current: () => Promise<boolean>, active: () => boolean): Promise<{ message_id: number } | undefined> {
+  return bounded(async signal => {
+    if (!await current() || !active() || signal.aborted) return;
+    const message = await api.sendMessage(sessionId, text, { parse_mode: 'HTML', reply_parameters: { message_id: cardId } }, telegramSignal(signal));
+    if (signal.aborted || !active()) {
+      await removerFoto(api, sessionId, message.message_id);
+      return;
+    }
+    return message;
+  });
+}
+
+/** Edição opcional também tem prazo; o ID antigo nunca limpa seu substituto. */
+export async function editarMensagemItem(api: MediaApi, sessionId: string, messageId: number,
+  kind: 'photo' | 'text', text: string, active: () => boolean): Promise<boolean> {
+  return await bounded(async signal => {
+    try {
+      try {
+        if (kind === 'photo') await api.editMessageCaption(sessionId, messageId, { caption: text, parse_mode: 'HTML' }, telegramSignal(signal));
+        else await api.editMessageText(sessionId, messageId, text, { parse_mode: 'HTML' }, telegramSignal(signal));
+      } catch (error) {
+        if (!(error instanceof GrammyError && error.description.includes('message is not modified'))) throw error;
+      }
+      return !signal.aborted && active();
+    } finally {
+      if (signal.aborted || !active()) await removerFoto(api, sessionId, messageId);
+    }
+  }) === true;
+}
+
+/** O resumo já existe: timeout da edição mantém seus botões e libera os itens. */
+export async function editarResumoProposta(api: MediaApi, sessionId: string, messageId: number, text: string,
+  options: NonNullable<Parameters<Api['editMessageText']>[3]>, active: () => boolean): Promise<void> {
+  await bounded(async signal => {
+    try { await api.editMessageText(sessionId, messageId, text, options, telegramSignal(signal)); }
+    finally { if (!active()) await removerFoto(api, sessionId, messageId); }
   });
 }
