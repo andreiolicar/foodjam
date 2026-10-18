@@ -133,6 +133,7 @@ export function textoPedido(dados: DadosPedido): string {
 
 export const DADOS_CARD = {
   confirmar: 'proposta:confirmar',
+  preparar: 'proposta:preparar_carrinho',
   revisar: 'proposta:revisar',
   outra: 'proposta:outra',
   voltar: 'proposta:voltar',
@@ -217,7 +218,8 @@ export function textosItensPropostaPreliminar(dados: DadosPropostaPreliminar): I
   });
 }
 
-export function botoesPreliminares(temAlternativa: boolean): Botao[][] {
+export function botoesPreliminares(temAlternativa: boolean, podePrepararCarrinho = false): Botao[][] {
   return [[{ texto: '🔎 Revisar proposta preliminar', data: DADOS_CARD.revisar }],
+    ...(podePrepararCarrinho ? [[{ texto: '🛒 Preparar carrinho', data: DADOS_CARD.preparar }]] : []),
     ...botoesCard(temAlternativa).slice(1)];
 }

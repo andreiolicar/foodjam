@@ -17,3 +17,11 @@ it('reserva é exclusiva e persistente entre instâncias, inclusive antes de rec
     await expect(one.get('../escape')).rejects.toThrow();
   } finally { await rm(path, { recursive: true, force: true }); }
 });
+it('reserva pendente de qualquer loja bloqueia o mesmo escopo após reinício e mantém vínculo após salvar ID',async()=>{
+ const path=await mkdtemp(join(tmpdir(),'foodjam-journal-'));try{
+ const first=await api.createPrivateCartJournal(path);const key='b'.repeat(64);const scope='c'.repeat(64);
+ await first.reserve(key,scope);const restarted=await api.createPrivateCartJournal(path);
+ expect(await restarted.hasUnresolved!(scope)).toBe(true);expect(await restarted.hasUnresolved!('d'.repeat(64))).toBe(false);
+ await first.saveCart(key,'real-returned-cart-id');expect(await restarted.hasUnresolved!(scope)).toBe(false);
+ }finally{await rm(path,{recursive:true,force:true});}
+});

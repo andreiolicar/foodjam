@@ -7,8 +7,8 @@ const proposal: PreliminaryProposal = { id: 'proposal', sessionId: 'session', or
 const cart = { cartId: 'cart', merchant: { merchantId: 'store' }, items: [{ itemId: 'item', quantity: 1, unitPrice: 10 }], deliveryAddress: { addressId: 'address' }, deliveryMethod: { fee: 2 }, fees: [{ amount: 1 }], summary: { subtotalAmount: 10, deliveryFeeAmount: 2, feeTotalAmount: 1, benefitsTotalAmount: 0, voucherTotalAmount: 0, totalAmount: 13 } };
 const envelope = (d: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(d) }] });
 function setup() {
-  const records = new Map<string, { cartId?: string }>();
-  const journal = { get: vi.fn(async (key: string) => records.get(key)), reserve: vi.fn(async (key: string) => { if (records.has(key)) return false; records.set(key, {}); return true; }), saveCart: vi.fn(async (key: string, cartId: string) => { records.set(key, { cartId }); }) };
+  const records = new Map<string, { cartId?: string; scope?: string }>();
+  const journal = { get: vi.fn(async (key: string) => records.get(key)), reserve: vi.fn(async (key: string, scope?: string) => { if (records.has(key)) return false; records.set(key, scope ? { scope } : {}); return true; }), saveCart: vi.fn(async (key: string, cartId: string) => { records.set(key, { ...records.get(key), cartId }); }), hasUnresolved: async (scope: string) => [...records.values()].some(r => r.scope === scope && !r.cartId) };
   const authority = createPreparationAuthority(); const entry = authority.authorize(proposal, 'organizer', 'user')[0]!;
   const client = { callCartTool: vi.fn(async (name: string) => envelope(name === 'createCart' ? { cartId: 'cart' } : cart)), callReadTool: vi.fn(async (name: string) => envelope(name === 'getMerchant' ? { merchantId: 'store', merchantName: 'Loja', isOpen: true } : name === 'listAddresses' ? { results: [{ addressId: 'address', formattedAddress: 'Endereço fictício', coordinates: { latitude: 0, longitude: 0 } }] } : { itemId: 'item', merchantId: 'store', itemName: 'Prato', unitPrice: 10, optionGroups: [] })) };
   return { entry, authority, client, journal };
@@ -116,4 +116,30 @@ it.each(['address_order', 'changed_quantity'])('reserva ambígua bloqueia recria
   const entry = s.authority.authorize(modified, 'organizer', 'user')[0]!;
   await expect(port.prepare(entry.context, entry.permit)).rejects.toThrow();
   expect(s.client.callCartTool).toHaveBeenCalledTimes(1);
+});
+
+it('revisão usa somente getCart registrado; antes da criação não permite nenhuma mutação', async () => {
+ const s=setup();const port=api.createIfoodCommercialPreparation(s.client,{authority:s.authority,journal:s.journal,authenticatedUserId:'user',moneyUnit:'BRL'});
+ await expect(port.readPrepared(s.entry.context)).rejects.toThrow();expect(s.client.callCartTool).not.toHaveBeenCalled();
+ await port.prepare(s.entry.context,s.entry.permit);await port.readPrepared(s.entry.context);
+ expect(s.client.callCartTool.mock.calls.map(c=>c[0])).toEqual(['createCart','getCart','getCart']);
+});
+it('cancelar durante preflight impede escrita e reserva',async()=>{
+ const s=setup();let current=true;const read=s.client.callReadTool.getMockImplementation()!;
+ s.client.callReadTool.mockImplementation(async name=>{const result=await read(name);if(name==='getItem')current=false;return result;});
+ const port=api.createIfoodCommercialPreparation(s.client,{authority:s.authority,journal:s.journal,authenticatedUserId:'user',isCurrent:async()=>current});
+ await expect(port.prepare(s.entry.context,s.entry.permit)).rejects.toThrow();expect(s.client.callCartTool).not.toHaveBeenCalled();expect(s.journal.reserve).not.toHaveBeenCalled();
+});
+it('journal por sessão não permite contornar escrita incerta trocando ID de proposta após reinício',async()=>{
+ const s=setup();s.client.callCartTool.mockRejectedValueOnce(new Error('timeout'));
+ const options={authority:s.authority,journal:s.journal,authenticatedUserId:'user',scopeBySession:true};
+ await expect(api.createIfoodCommercialPreparation(s.client,options).prepare(s.entry.context,s.entry.permit)).rejects.toThrow();
+ const next=s.authority.authorize({...proposal,id:'new-id'},'organizer','user')[0]!;
+ await expect(api.createIfoodCommercialPreparation(s.client,options).prepare(next.context,next.permit)).rejects.toThrow();expect(s.client.callCartTool).toHaveBeenCalledTimes(1);
+});
+it('nova proposta explicitamente autorizada não reutiliza carrinho antigo conhecido, mas repetição da nova lê o mesmo ID',async()=>{
+ const s=setup();const port=api.createIfoodCommercialPreparation(s.client,{authority:s.authority,journal:s.journal,authenticatedUserId:'user',scopeBySession:true,moneyUnit:'BRL'});
+ await port.prepare(s.entry.context,s.entry.permit);
+ const next=s.authority.authorize({...proposal,id:'new-order'},'organizer','user')[0]!;await port.prepare(next.context,next.permit);await port.prepare(next.context,next.permit);
+ expect(s.client.callCartTool.mock.calls.map(c=>c[0])).toEqual(['createCart','getCart','createCart','getCart','getCart']);
 });

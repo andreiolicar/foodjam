@@ -5,9 +5,14 @@ import { createIfoodMcpClient, createIfoodDiscoveryCatalog, readIfoodMcpConfig }
 import { discoveryLimits } from './core/discovery-search.js';
 import type { DiscoveryCoverage } from './core/contracts.js';
 import type { LlmCallRecord } from './core/llm.js';
+import { createTelegramCartPreparation } from './ifood/telegram-cart.js';
 
 /** Composição da aplicação real; importar não autentica nem inicia polling. */
 export async function criarAplicacaoReal(env: NodeJS.ProcessEnv) {
+  if (env.FOODJAM_CART_PREPARATION_ENABLED !== undefined && !['true', 'false'].includes(env.FOODJAM_CART_PREPARATION_ENABLED)) throw new Error('Habilitação comercial inválida.');
+  const cartEnabled = env.FOODJAM_CART_PREPARATION_ENABLED === 'true';
+  const cartMoneyUnit = env.FOODJAM_CART_MONEY_UNIT;
+  if (cartEnabled && (!env.FOODJAM_CART_JOURNAL_DIR || cartMoneyUnit !== undefined && cartMoneyUnit !== 'BRL' && cartMoneyUnit !== 'cents')) throw new Error('Registro privado/unidade comercial inválidos.');
   const token = env.TELEGRAM_BOT_TOKEN?.trim();
   if (!token) throw new Error('TELEGRAM_BOT_TOKEN obrigatório.');
   let groq = false;
@@ -32,14 +37,15 @@ export async function criarAplicacaoReal(env: NodeJS.ProcessEnv) {
   const reads: { tool: string; ok: boolean }[] = [];
   const calls: Omit<LlmCallRecord, 'error'>[] = [];
   const discovery: { outcome: string; coverage: DiscoveryCoverage }[] = [];
-  const client = createIfoodMcpClient(readIfoodMcpConfig(env), { allowCartMutations: false, allowPaymentConfiguration: false });
+  const client = createIfoodMcpClient(readIfoodMcpConfig(env), { allowCartMutations: cartEnabled, allowPaymentConfiguration: false });
   try {
-    await client.connect(); await client.listTools();
+    await client.connect(); const tools = await client.listTools();
+    const cartPreparation = cartEnabled ? await createTelegramCartPreparation(client, tools, env.FOODJAM_CART_JOURNAL_DIR!, cartMoneyUnit as 'BRL' | 'cents' | undefined) : undefined;
     const catalog = createIfoodDiscoveryCatalog({ async callReadTool(name, args, options) {
       const event = { tool: name, ok: false }; reads.push(event);
       const result = await client.callReadTool(name, args, options); event.ok = true; return result;
     } }, { maxPages, pageSize, allowTruncatedStoreSearch: true, ...(unit ? { moneyUnit: unit } : {}), itemMoneyUnit: itemUnit as 'BRL' | 'cents' | 'unknown' });
-    const iris = criarAgenteDescoberta({ catalog, discoveryLimits: limits, llm: observation.llm, registrarDescoberta(event) {
+    const iris = criarAgenteDescoberta({ catalog, ...(cartPreparation ? { cartPreparation } : {}), discoveryLimits: limits, llm: observation.llm, registrarDescoberta(event) {
       discovery.push(structuredClone(event)); console.info('FoodJam descoberta:', JSON.stringify(event));
     }, registrar(record) {
       const allowed = new Set(['pessoas', 'participantId', 'desejos', 'atende', 'substitutos', 'resultados', 'kind', 'wishes', 'foodPreferences', 'dietaryRestrictions', 'avoids', 'budgetText', 'clarification']);

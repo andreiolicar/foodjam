@@ -5,6 +5,7 @@ import { apresentarActions } from '../services/apresentacao.js';
 import { DADOS_CARD, textoPedido } from '../services/card.js';
 import { exibirProposta, retirarBotoesDoCard, cardAtual, propostaDoCard } from '../services/proposta-tela.js';
 import { cancelarPedido } from './cancelar.js';
+import { exibirRevisaoCarrinho } from '../services/cart-tela.js';
 
 type Acao = (sessionId: string, actorId: string) => Promise<Resposta>;
 
@@ -51,6 +52,24 @@ async function chamar(
 export type ExecutorPedido = (order: AuthorizedOrder) => void | Promise<void>;
 
 export function registrarProposta(bot: Bot, iris: Agente, agrupador: Agrupador, aoAutorizar: ExecutorPedido, preliminaryOnly = false): void {
+  const cartAction = async (ctx: CallbackQueryContext<Context>, readOnly: boolean, origin?: number) => {
+    const id = String(ctx.chat?.id); const messageId = origin ?? ctx.callbackQuery.message?.message_id;
+    const expected = messageId === undefined ? undefined : propostaDoCard(id, messageId);
+    if (!expected) { await ctx.answerCallbackQuery({ text: 'Use a proposta vigente.', show_alert: true }); return; }
+    const session = await iris.obter(id);
+    if (session?.organizerId !== String(ctx.from.id)) { await ctx.answerCallbackQuery({ text: 'Somente quem organizou pode preparar ou revisar carrinhos.', show_alert: true }); return; }
+    const method = readOnly ? iris.revisarCarrinho : iris.prepararCarrinho;
+    if (!method) { await ctx.answerCallbackQuery({ text: 'Preparação comercial não habilitada.', show_alert: true }); return; }
+    // Responde antes das leituras/escritas remotas; não expira o callback no MCP.
+    await ctx.answerCallbackQuery({ text: readOnly ? 'Consultando carrinho registrado…' : 'Preparando carrinho para revisão, sem comprar…' });
+    await agrupador.esvaziar(id);
+    if (propostaDoCard(id, messageId!) !== expected) return;
+    const response = await method(id, String(ctx.from.id), expected);
+    if (['proposal_stale', 'not_authorized', 'cart_preparing'].includes(response.outcome)) return;
+    await exibirRevisaoCarrinho(ctx.api, iris, id, messageId!, expected, response);
+  };
+  bot.callbackQuery(DADOS_CARD.preparar, ctx => cartAction(ctx, false));
+  bot.callbackQuery(/^carrinho:revisar:(\d+)$/, ctx => cartAction(ctx, true, Number(ctx.match[1])));
   // "Outra opção": troca pela alternativa que o core já calculou (e de volta), sem chamar o modelo.
   bot.callbackQuery(DADOS_CARD.outra, async (ctx) => {
     const r = await chamar(ctx, agrupador, (s, a) => iris.outraOpcao(s, a), preliminaryOnly ? { iris, action: 'outra_opcao' } : undefined);

@@ -5,7 +5,7 @@ import { apresentarActions, teclado } from './apresentacao.js';
 import { botoesCard, textoProposta, botoesPreliminares, textoPropostaPreliminar, textosItensPropostaPreliminar, type ItemPropostaPreliminar } from './card.js';
 
 export type ApiCard = Pick<Api, 'sendMessage' | 'editMessageReplyMarkup' | 'editMessageText' | 'sendPhoto' | 'deleteMessage' | 'editMessageCaption'>;
-type IrisCard = Pick<Agente, 'nomes' | 'obter'>;
+type IrisCard = Pick<Agente, 'nomes' | 'obter' | 'prepararCarrinho'>;
 interface ItemEnviado { messageId: number; kind: 'photo' | 'text'; texto: string }
 interface CardEnviado {
   messageId: number; proposalId: string; render: symbol; iris: IrisCard; preliminary: boolean;
@@ -15,6 +15,12 @@ const ultimoCard = new Map<SessionId, CardEnviado>();
 const renderizando = new Map<SessionId, symbol>();
 export const cardAtual = (sessionId: string, messageId: number) => ultimoCard.get(sessionId)?.messageId === messageId;
 export const propostaDoCard = (sessionId: string, messageId: number) => cardAtual(sessionId, messageId) ? ultimoCard.get(sessionId)?.proposalId : undefined;
+/** Mensagens de revisão pertencem ao resumo e são removidas com ele. */
+export function registrarRevisaoCarrinho(sessionId: string, proposalId: string, messageId: number): boolean {
+  const card = ultimoCard.get(sessionId);
+  if (card?.proposalId !== proposalId) return false;
+  card.retired.add(messageId); return true;
+}
 
 export async function retirarBotoesDoCard(api: ApiCard, sessionId: SessionId): Promise<void> {
   renderizando.delete(sessionId);
@@ -42,8 +48,8 @@ async function montarPreliminar(iris: IrisCard, sessionId: string, resposta: Res
   const session = resposta.session ?? await iris.obter(sessionId);
   const nomes = await iris.nomes(sessionId);
   const dados = { proposal: resposta.preliminary!, ...(nomes ? { nomes } : {}), ...(resposta.items ? { items: resposta.items } : {}), ...(resposta.stores ? { stores: resposta.stores } : {}), ...(resposta.collection ? { collection: resposta.collection } : {}) };
-  return { texto: textoPropostaPreliminar(dados), items: textosItensPropostaPreliminar(dados),
-    opcoes: { parse_mode: 'HTML' as const, reply_markup: teclado(botoesPreliminares(Boolean(session?.preliminaryAlternative))) } };
+  return { texto: textoPropostaPreliminar(dados) + (iris.prepararCarrinho ? '\n🛒 Preparar carrinho altera os itens na conta iFood; não autoriza entrega, pagamento ou compra.' : ''), items: textosItensPropostaPreliminar(dados),
+    opcoes: { parse_mode: 'HTML' as const, reply_markup: teclado(botoesPreliminares(Boolean(session?.preliminaryAlternative), Boolean(iris.prepararCarrinho))) } };
 }
 
 export async function exibirProposta(api: ApiCard, iris: IrisCard, sessionId: SessionId, resposta: Resposta, botUsername: string): Promise<boolean> {

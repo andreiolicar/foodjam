@@ -8,6 +8,7 @@ import type {
   DiscoveryItem,
   DiscoveryStore,
   PreliminaryProposal,
+  CommercialReview,
   CoreAction,
   IncomingMessage,
   MenuItemId,
@@ -73,6 +74,8 @@ export const TEXTOS = {
  */
 export interface Resposta {
   outcome: string;
+  cartReview?: CommercialReview;
+  cartProposal?: PreliminaryProposal;
   actions: CoreAction[];
   session?: CoreSession;
   proposal?: Proposal;
@@ -129,6 +132,10 @@ export interface NomesCatalogo {
 export type AcaoPropostaPreliminar = 'outra_opcao' | 'voltar_coleta' | 'cancelar' | 'revisar';
 
 export interface Agente {
+  /** Preparar exige callback autenticado do organizador e revisão vigente. Não compra. */
+  prepararCarrinho?(sessionId: SessionId, actorId: ParticipantId, proposalId: string): Promise<Resposta>;
+  /** Apenas relê carrinhos registrados; jamais cria ou adiciona itens. */
+  revisarCarrinho?(sessionId: SessionId, actorId: ParticipantId, proposalId: string): Promise<Resposta>;
   /** Ação vinculada ao card exibido; verifica identidade dentro da fila da sessão. */
   agirNaPropostaPreliminar?(sessionId: SessionId, actorId: ParticipantId, proposalId: string, action: AcaoPropostaPreliminar): Promise<Resposta>;
   /** Alguém mencionou o bot: abre a sessão do chat (ou devolve a que já está ativa). */

@@ -11,6 +11,7 @@ import { selecionarEnderecoSalvo, proporDescoberta } from './discovery-flow.js';
 import type { DiscoveryLimits } from './discovery-search.js';
 import type { LlmCallRecord } from './llm.js';
 import { LlmSaidaInvalidaError } from './llm.js';
+import { createCartController, type CartPreparationService } from './cart-controller.js';
 
 export interface RespostaDescoberta extends Resposta {
   preliminary?: PreliminaryProposal;
@@ -20,7 +21,7 @@ export interface RespostaDescoberta extends Resposta {
 }
 
 /** Mesma API do Core para exploração; operações cotadas continuam bloqueadas. */
-export function criarAgenteDescoberta(deps: { catalog: DiscoveryCatalogPort; llm: LlmPort; sessions?: SessionStore; registrar?: (record: LlmCallRecord) => void; discoveryLimits?: Partial<DiscoveryLimits>; registrarDescoberta?: (event: { outcome: string; coverage: DiscoveryCoverage }) => void }) {
+export function criarAgenteDescoberta(deps: { catalog: DiscoveryCatalogPort; llm: LlmPort; sessions?: SessionStore; cartPreparation?: CartPreparationService; registrar?: (record: LlmCallRecord) => void; discoveryLimits?: Partial<DiscoveryLimits>; registrarDescoberta?: (event: { outcome: string; coverage: DiscoveryCoverage }) => void }) {
   const sessions = deps.sessions ?? new SessoesEmMemoria();
   const queues = new Map<string, Promise<unknown>>();
   const choices = new Map<string, number>();
@@ -123,6 +124,7 @@ export function criarAgenteDescoberta(deps: { catalog: DiscoveryCatalogPort; llm
     return { outcome: action === 'cancelar' ? 'cancelled' : 'collecting', session, actions: [] };
   }
   return {
+    ...(deps.cartPreparation ? createCartController(sessions, deps.cartPreparation) : {}),
     agirNaPropostaPreliminar(id: string, actor: string, proposalId: string, action: AcaoPropostaPreliminar) { return serial(id, async () => {
       if (typeof proposalId !== 'string' || !proposalId) return { outcome: 'proposal_stale', actions: [] };
       return proposalAction(id, actor, action, proposalId);
