@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Íris — Protótipo Interativo do Agente iFood</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    code, pre, .mono { font-family: 'JetBrains Mono', monospace; }
+    .scrollbar-thin::-webkit-scrollbar { width: 5px; height: 5px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+    .ifood-red { background-color: #EA1D2C; }
+    .ifood-red-text { color: #EA1D2C; }
+    .ifood-red-border { border-color: #EA1D2C; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50 px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl ifood-red flex items-center justify-center font-black text-xl text-white shadow-lg shadow-red-950/50">
+        Í
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="font-bold text-lg leading-tight">Íris — Agente de Pedidos Coletivos</h1>
+          <span class="text-xs px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 font-semibold border border-red-500/30">iFood MCP</span>
+        </div>
+        <p class="text-xs text-slate-400">Hackathon SEMCOMP × iFood 2026 · Desafio "Vendendo com Agentes"</p>
+      </div>
+    </div>
+
+    <!-- Stepper de Demonstração -->
+    <div class="hidden lg:flex items-center gap-2 bg-slate-950/70 p-1.5 rounded-xl border border-slate-800">
+      <button onclick="irParaPasso(1)" id="btn-step-1" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all bg-red-600 text-white shadow">1. Endereço</button>
+      <button onclick="irParaPasso(2)" id="btn-step-2" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">2. Coleta em Lote</button>
+      <button onclick="irParaPasso(3)" id="btn-step-3" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">3. DM Orçamento</button>
+      <button onclick="irParaPasso(4)" id="btn-step-4" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">4. Proposta & Rateio</button>
+      <button onclick="irParaPasso(5)" id="btn-step-5" class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">5. Fechamento</button>
+    </div>
+
+    <div class="flex items-center gap-2 text-xs">
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+      <span class="text-slate-300 font-medium">Core Ativo</span>
+    </div>
+  </header>
+
+  <!-- Main Body -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- Coluna da Esquerda: Interface do Telegram (7 cols) -->
+    <div class="lg:col-span-7 flex flex-col bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden shadow-2xl">
+      
+      <!-- Chat Header -->
+      <div class="bg-slate-850 px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div id="chat-avatar" class="w-10 h-10 rounded-full bg-gradient-to-tr from-amber-600 to-red-600 flex items-center justify-center font-bold text-white shadow">
+            🍕
+          </div>
+          <div>
+            <h2 id="chat-title" class="font-bold text-sm text-slate-100 flex items-center gap-1.5">
+              <span>Almoço da Firma - Squad Inovação</span>
+              <span class="text-xs text-slate-400 font-normal">(4 membros)</span>
+            </h2>
+            <p id="chat-subtitle" class="text-xs text-emerald-400 flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              Íris bot está online
+            </p>
+          </div>
+        </div>
+
+        <!-- Seletor de Chat (Grupo vs DM Privada) -->
+        <div class="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
+          <button onclick="trocarChat('grupo')" id="tab-grupo" class="px-2.5 py-1 rounded font-medium bg-slate-800 text-white transition">Grupo</button>
+          <button onclick="trocarChat('privado')" id="tab-privado" class="px-2.5 py-1 rounded font-medium text-slate-400 hover:text-white transition flex items-center gap-1">
+            <span>DM com Bia</span>
+            <span id="badge-dm" class="hidden w-2 h-2 rounded-full bg-red-500"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Área de Mensagens do Chat -->
+      <div id="chat-container" class="flex-1 p-5 overflow-y-auto space-y-4 scrollbar-thin bg-slate-950/60 min-h-[460px] max-h-[520px]">
+        <!-- Conteúdo preenchido via JavaScript -->
+      </div>
+
+      <!-- Barra de Input Fake do Telegram -->
+      <div class="p-3 bg-slate-900 border-t border-slate-800 flex items-center gap-2">
+        <div class="text-slate-500 px-2 cursor-not-allowed">📎</div>
+        <input type="text" disabled placeholder="Digite uma mensagem ou comando..." class="flex-1 bg-slate-950/70 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-400 cursor-not-allowed">
+        <button class="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center text-slate-400 hover:text-white transition">
+          ➤
+        </button>
+      </div>
+    </div>
+
+    <!-- Coluna da Direita: Telemetria & Decisões do Core (5 cols) -->
+    <div class="lg:col-span-5 flex flex-col gap-4">
+
+      <!-- Card do Estado da Máquina (FSM) -->
+      <div class="bg-slate-900 rounded-2xl border border-slate-800 p-5 shadow-xl">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+          <h3 class="font-bold text-sm flex items-center gap-2">
+            <span class="text-base">⚙️</span>
+            <span>Estado da Sessão (FSM)</span>
+          </h3>
+          <span id="fsm-status-badge" class="px-2.5 py-1 rounded-md text-xs font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">
+            collecting
+          </span>
+        </div>
+
+        <div class="mt-4 grid grid-cols-2 gap-3 text-xs">
+          <div class="bg-slate-950/70 p-3 rounded-xl border border-slate-800/80">
+            <div class="text-slate-400 mb-1">Organizador</div>
+            <div class="font-semibold text-slate-200 flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-blue-400"></span>
+              Ana Paula (@Ana)
+            </div>
+          </div>
+          <div class="bg-slate-950/70 p-3 rounded-xl border border-slate-800/80">
+            <div class="text-slate-400 mb-1">Participantes Ativos</div>
+            <div id="fsm-participants" class="font-semibold text-slate-200">
+              3 pessoas
+            </div>
+          </div>
+          <div class="bg-slate-950/70 p-3 rounded-xl border border-slate-800/80 col-span-2">
+            <div class="text-slate-400 mb-1">Endereço Confirmado</div>
+            <div id="fsm-address" class="font-mono text-slate-300 truncate">
+              Av. Paulista, 1000 - Bela Vista, SP
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card de Telemetria do Provedor de IA (Groq) & MCP iFood -->
+      <div class="bg-slate-900 rounded-2xl border border-slate-800 p-5 shadow-xl flex-1 flex flex-col">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+          <h3 class="font-bold text-sm flex items-center gap-2">
+            <span class="text-base">⚡</span>
+            <span>Telemetria em Tempo Real</span>
+          </h3>
+          <span class="text-xs text-slate-400 font-mono">Groq + iFood MCP</span>
+        </div>
+
+        <!-- Métricas Rápidas -->
+        <div class="grid grid-cols-3 gap-2 mt-4">
+          <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 text-center">
+            <div class="text-[10px] text-slate-400 uppercase font-bold">Latência P95</div>
+            <div id="telemetry-latency" class="text-sm font-bold text-emerald-400 mt-0.5">441 ms</div>
+          </div>
+          <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 text-center">
+            <div class="text-[10px] text-slate-400 uppercase font-bold">Tokens Gastos</div>
+            <div id="telemetry-tokens" class="text-sm font-bold text-amber-400 mt-0.5">1.530 tok</div>
+          </div>
+          <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 text-center">
+            <div class="text-[10px] text-slate-400 uppercase font-bold">Economia Batch</div>
+            <div class="text-sm font-bold text-sky-400 mt-0.5">-70%</div>
+          </div>
+        </div>
+
+        <!-- Terminal de Logs do MCP e LLM -->
+        <div class="mt-4 flex-1 flex flex-col">
+          <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center justify-between">
+            <span>Terminal de Eventos</span>
+            <span class="text-[10px] text-slate-400 font-mono">stdout</span>
+          </div>
+          <div id="telemetry-logs" class="flex-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono text-slate-400 overflow-y-auto max-h-[190px] scrollbar-thin space-y-1.5 leading-relaxed">
+            <!-- Preenchido via JS -->
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+  </main>
+
+  <script>
+    let passoAtual = 1;
+    let chatAtivo = 'grupo'; // 'grupo' ou 'privado'
+
+    const dados = {
+      1: {
+        fsm: 'collecting (address)',
+        fsmBadgeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+        latency: '310 ms',
+        tokens: '425 tok',
+        logs: [
+          '<span class="text-slate-400">12:00:01</span> [core] Sessão iniciada pelo organizador @Ana',
+          '<span class="text-blue-400">12:00:02</span> [mcp] ifood_validateAddress("Av. Paulista, 1000")',
+          '<span class="text-emerald-400">12:00:02</span> [mcp] Resposta: { ok: true, formatted: "Av. Paulista, 1000 - Bela Vista" }',
+          '<span class="text-amber-400">12:00:03</span> [fsm] Aguardando confirmação do endereço pelo organizador'
+        ],
+        chatGrupo: `
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold text-white shrink-0">A</div>
+            <div class="bg-slate-800/80 rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] text-xs border border-slate-700/50">
+              <span class="font-bold text-blue-400 block text-[11px] mb-1">Ana Paula (Organizador)</span>
+              /iniciar
+            </div>
+          </div>
+
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
+            <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[90%] text-xs border border-slate-700 shadow-md space-y-2">
+              <span class="font-bold ifood-red-text block text-[11px]">Íris (Agente iFood)</span>
+              <p>Olá, pessoal! Sessão de pedido coletivo aberta por @Ana. 🍕</p>
+              <div class="bg-slate-900 p-2.5 rounded-xl border border-slate-800 text-[11px] text-slate-300">
+                📍 <strong>Endereço de entrega:</strong><br>
+                Av. Paulista, 1000 - Bela Vista, São Paulo - SP
+              </div>
+              <div class="pt-1 flex gap-2">
+                <button onclick="irParaPasso(2)" class="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 font-bold text-white text-[11px] shadow transition">
+                  ✓ Confirmar Endereço
+                </button>
+                <button class="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white text-[11px] transition">
+                  Digitar Outro
+                </button>
+              </div>
+            </div>
+          </div>
+        `,
+        chatPrivado: `
+          <div class="text-center py-8 text-slate-500 text-xs">
+            Nenhuma mensagem privada no momento.<br>A Íris só entra em contato no privado para tratar limites de orçamento e dados sensíveis.
+          </div>
+        `
+      },
+      2: {
+        fsm: 'collecting (batch wishes)',
+        fsmBadgeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+        latency: '441 ms',
+        tokens: '1.530 tok',
+        logs: [
+          '<span class="text-emerald-400">12:00:15</span> [core] Endereço confirmado por @Ana',
+          '<span class="text-purple-400">12:00:18</span> [debounce] Agrupador acumulou 3 mensagens (Andrei, Caio, Bia)',
+          '<span class="text-sky-400">12:00:19</span> [llm:fast] Qwen 27B extraiu 3 perfis estruturados via JSON Schema',
+          '<span class="text-slate-400">12:00:20</span> [core] Restrição detectada: Bia = [vegetariano] (Rígida)',
+          '<span class="text-slate-400">12:00:20</span> [core] Orçamentos privados salvos em centavos: Caio=3500, Bia=3000'
+        ],
+        chatGrupo: `
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white shrink-0">AN</div>
+            <div class="bg-slate-800/80 rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] text-xs border border-slate-700/50">
+              <span class="font-bold text-slate-300 block text-[11px] mb-0.5">Andrei</span>
+              Pra mim pode ser um hambúrguer tradicional caprichado! 🍔
+            </div>
+          </div>
+
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white shrink-0">C</div>
+            <div class="bg-slate-800/80 rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] text-xs border border-slate-700/50">
+              <span class="font-bold text-slate-300 block text-[11px] mb-0.5">Caio</span>
+              Quero porção de nuggets de frango crocante, até uns 35 conto!
+            </div>
+          </div>
+
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white shrink-0">B</div>
+            <div class="bg-slate-800/80 rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] text-xs border border-slate-700/50">
+              <span class="font-bold text-slate-300 block text-[11px] mb-0.5">Bia</span>
+              Gente, sou vegetariana! Quero um burger sem carne até 30 reais por favor 🌱
+            </div>
+          </div>
+
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
+            <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[90%] text-xs border border-slate-700 shadow-md space-y-2">
+              <span class="font-bold ifood-red-text block text-[11px]">Íris (Agente iFood)</span>
+              <p>Entendido! Desejos e restrições coletados:</p>
+              <ul class="space-y-1 text-slate-300 text-[11px]">
+                <li>• <strong>Andrei:</strong> Hambúrguer tradicional</li>
+                <li>• <strong>Caio:</strong> Nuggets / Frango crocante</li>
+                <li>• <strong>Bia:</strong> Burger vegetariano (restrição rigorosa)</li>
+              </ul>
+              <div class="pt-1">
+                <button onclick="irParaPasso(3)" class="w-full px-3 py-2 rounded-lg bg-red-600 hover:bg-red-500 font-bold text-white text-[11px] shadow transition">
+                  🔍 Otimizar e Buscar Melhores Lojas no iFood
+                </button>
+              </div>
+            </div>
+          </div>
+        `,
+        chatPrivado: `
+          <div class="text-center py-8 text-slate-500 text-xs">
+            Nenhuma notificação privada por enquanto.
+          </div>
+        `
+      },
+      3: {
+        fsm: 'reviewing (budget question)',
+        fsmBadgeColor: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+        latency: '380 ms',
+        tokens: '2.100 tok',
+        logs: [
+          '<span class="text-blue-400">12:00:30</span> [mcp] ifood_searchOffers + ifood_browseOffers (hamburgueria, vegetariano)',
+          '<span class="text-emerald-400">12:00:32</span> [core] Loja selecionada: Corta Pra Mim Hamburgueria Artesanal',
+          '<span class="text-sky-400">12:00:33</span> [mcp] quoteOrder: Itens=108,70 | Frete=0,00 | TaxaServiço=2,17',
+          '<span class="text-red-400">12:00:34</span> [budget] Bia: Burger Veggie (39,90) + Taxa (0,73) = R$ 40,63 (Estourou R$ 30,00)',
+          '<span class="text-amber-400">12:00:34</span> [privacy] Disparada notificação privada para @Bia via DM no Telegram'
+        ],
+        chatGrupo: `
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
+            <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[90%] text-xs border border-slate-700 shadow-md space-y-2">
+              <span class="font-bold ifood-red-text block text-[11px]">Íris (Agente iFood)</span>
+              <p>Encontrei uma excelente opção que atende a todos no mesmo restaurante! 🎯</p>
+              <div class="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px] flex items-center gap-2">
+                <span class="animate-spin">⏳</span>
+                <span>Aguardando confirmação privada de valores de: <strong>@Bia</strong></span>
+              </div>
+              <p class="text-slate-400 text-[10px]">
+                💡 <em>A Íris trata limites financeiros em sigilo para evitar constrangimentos no grupo.</em>
+              </p>
+            </div>
+          </div>
+        `,
+        chatPrivado: `
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
+            <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[92%] text-xs border border-slate-700 shadow-md space-y-2.5">
+              <span class="font-bold ifood-red-text block text-[11px]">Íris (Mensagem Privada)</span>
+              <p class="text-slate-200">Oi, Bia! Tudo bem? 👋</p>
+              <p class="text-slate-300">
+                A melhor hamburgueria que atende ao grupo tem o <strong>"Vegetariano Burger"</strong> por R$ 39,90. 
+                Com o rateio da taxa de serviço do iFood, sua parte ficaria em <strong>R$ 40,63</strong> (você havia citado até R$ 30,00).
+              </p>
+              <p class="text-slate-400 text-[11px]">Como você prefere proceder?</p>
+              <div class="space-y-1.5 pt-1">
+                <button onclick="irParaPasso(4)" class="w-full px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-bold text-white text-[11px] shadow transition text-left flex items-center justify-between">
+                  <span>✓ Aceito pagar R$ 40,63</span>
+                  <span class="text-[10px] opacity-80">Avançar</span>
+                </button>
+                <button class="w-full px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-[11px] transition text-left">
+                  🔄 Quero outro item mais barato
+                </button>
+                <button class="w-full px-3 py-2 rounded-lg bg-slate-900 text-slate-500 hover:text-red-400 text-[11px] transition text-left">
+                  ✕ Ficar sem item neste pedido
+                </button>
+              </div>
+            </div>
+          </div>
+        `
+      },
+      4: {
+        fsm: 'reviewing (proposal ready)',
+        fsmBadgeColor: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+        latency: '340 ms',
+        tokens: '3.238 tok',
+        logs: [
+          '<span class="text-emerald-400">12:00:45</span> [budget] Bia autorizou o valor de R$ 40,63 na DM',
+          '<span class="text-blue-400">12:00:46</span> [core] Rateio recalculado: 8.087 centavos conferidos',
+          '<span class="text-emerald-400">12:00:46</span> [core] Distribuição de taxas por maiores resíduos: Andrei 72¢, Bia 73¢, Caio 72¢',
+          '<span class="text-sky-400">12:00:47</span> [fsm] Proposta pronta. Bloqueada aguardando autorização do organizador'
+        ],
+        chatGrupo: `
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
+            <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-3.5 max-w-[95%] text-xs border border-slate-700 shadow-xl space-y-3">
+              <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+                <span class="font-bold ifood-red-text text-xs">🎉 Proposta Selecionada</span>
+                <span class="text-[10px] bg-red-950 text-red-400 px-2 py-0.5 rounded font-mono">1 Loja Parceira</span>
+              </div>
+
+              <div>
+                <h4 class="font-bold text-slate-100 text-sm flex items-center gap-1.5">
+                  <span>🏪 Corta Pra Mim Hamburgueria Artesanal</span>
+                </h4>
+                <div class="mt-2 space-y-1 text-slate-300 text-[11px]">
+                  <div class="flex justify-between">
+                    <span>• Andrei: 1× Tradicional One</span>
+                    <span class="font-mono text-slate-400">R$ 35,90</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span>• Bia: 1× Vegetariano Burger 🌱</span>
+                    <span class="font-mono text-slate-400">R$ 39,90</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span>• Caio: 1× Nuggets Frango (12 un)</span>
+                    <span class="font-mono text-slate-400">R$ 32,90</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="p-2.5 bg-slate-900 rounded-xl text-[11px] space-y-1 border border-slate-800">
+                <div class="flex justify-between text-slate-400">
+                  <span>Subtotal Itens:</span>
+                  <span class="font-mono">R$ 108,70</span>
+                </div>
+                <div class="flex justify-between text-emerald-400">
+                  <span>Taxa de Entrega:</span>
+                  <span class="font-mono">R$ 0,00 (Grátis)</span>
+                </div>
+                <div class="flex justify-between text-slate-400">
+                  <span>Taxa de Serviço iFood:</span>
+                  <span class="font-mono">R$ 2,17</span>
+                </div>
+                <div class="flex justify-between font-bold text-slate-100 pt-1 border-t border-slate-800">
+                  <span>Total Geral:</span>
+                  <span class="font-mono text-emerald-400">R$ 110,87</span>
+                </div>
+              </div>
+
+              <!-- Rateio -->
+              <div class="p-2.5 bg-slate-900/60 rounded-xl text-[11px] border border-slate-800/80">
+                <span class="font-bold text-slate-300 block mb-1">💰 Divisão Transparente por Pessoa:</span>
+                <div class="space-y-0.5 text-slate-400 font-mono text-[10px]">
+                  <div class="flex justify-between"><span>Andrei: R$ 35,90 + 0,72</span><strong class="text-slate-200">R$ 36,62</strong></div>
+                  <div class="flex justify-between"><span>Bia: R$ 39,90 + 0,73</span><strong class="text-slate-200">R$ 40,63</strong></div>
+                  <div class="flex justify-between"><span>Caio: R$ 32,90 + 0,72</span><strong class="text-slate-200">R$ 33,62</strong></div>
+                </div>
+              </div>
+
+              <div class="space-y-2 pt-1">
+                <button onclick="irParaPasso(5)" class="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-500 font-bold text-white text-xs shadow-lg shadow-red-950/40 transition flex items-center justify-center gap-2">
+                  <span>🔒 Autorizar e Fechar Pedido</span>
+                  <span class="text-[10px] bg-red-800 px-1.5 py-0.5 rounded">Só @Ana</span>
+                </button>
+                <div class="grid grid-cols-2 gap-2">
+                  <button onclick="irParaPasso(4)" class="py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-[11px] transition">
+                    🔄 Outra Opção
+                  </button>
+                  <button onclick="irParaPasso(2)" class="py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-[11px] transition">
+                    ↩️ Voltar Coleta
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        `,
+        chatPrivado: `
+          <div class="text-center py-8 text-slate-400 text-xs">
+            ✓ Seu orçamento foi atualizado com sucesso. O grupo já está vendo a proposta pronta!
+          </div>
+        `
+      },
+      5: {
+        fsm: 'closed (AuthorizedOrder)',
+        fsmBadgeColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+        latency: '290 ms',
+        tokens: '0 tok (Código Puro)',
+        logs: [
+          '<span class="text-emerald-400">12:01:05</span> [core] Autorização confirmada pelo organizador @Ana',
+          '<span class="text-blue-400">12:01:05</span> [core] Revalidação relâmpago de catálogo (< 60s): Preços mantidos',
+          '<span class="text-emerald-400">12:01:06</span> [mcp] ifood_createCart & ifood_submitOrder efetuados com sucesso',
+          '<span class="text-sky-400">12:01:06</span> [core] AuthorizedOrder gerado: #84920. Idempotência salva'
+        ],
+        chatGrupo: `
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold text-white shrink-0">A</div>
+            <div class="bg-slate-800/80 rounded-2xl rounded-tl-sm px-4 py-2.5 max-w-[85%] text-xs border border-slate-700/50">
+              <span class="font-bold text-blue-400 block text-[11px] mb-1">Ana Paula (Organizador)</span>
+              [Autorizou o fechamento do pedido]
+            </div>
+          </div>
+
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
+            <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-4 max-w-[95%] text-xs border border-emerald-500/50 shadow-2xl space-y-3">
+              <div class="flex items-center gap-2 text-emerald-400 font-bold text-xs">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+                <span>🚀 PEDIDO CONFIRMADO NO IFOOD!</span>
+              </div>
+
+              <p class="text-slate-300 text-xs">
+                O pedido da <strong>Corta Pra Mim Hamburgueria</strong> foi submetido. Previsão de entrega: <strong>39 a 49 minutos</strong>.
+              </p>
+
+              <div class="p-3 bg-slate-900 rounded-xl border border-slate-800 text-[11px] space-y-1.5">
+                <div class="flex items-center justify-between text-slate-200">
+                  <span>Código de Rastreio iFood:</span>
+                  <a href="#" class="text-red-400 font-mono font-bold hover:underline">#84920 ↗</a>
+                </div>
+                <div class="text-slate-400 text-[10px]">
+                  Endereço: Av. Paulista, 1000 - Bela Vista
+                </div>
+              </div>
+
+              <!-- Cobrança Pix dos Membros -->
+              <div class="p-3 bg-red-950/20 border border-red-900/30 rounded-xl text-[11px] space-y-2">
+                <div class="font-bold text-red-300">📲 Acerto de Contas com @Ana (Chave Pix: ana@firma.com.br):</div>
+                <div class="grid grid-cols-3 gap-2 text-center">
+                  <div class="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <div class="text-[10px] text-slate-400">Andrei</div>
+                    <div class="font-mono font-bold text-slate-100 text-xs mt-0.5">R$ 36,62</div>
+                  </div>
+                  <div class="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <div class="text-[10px] text-slate-400">Bia</div>
+                    <div class="font-mono font-bold text-slate-100 text-xs mt-0.5">R$ 40,63</div>
+                  </div>
+                  <div class="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <div class="text-[10px] text-slate-400">Caio</div>
+                    <div class="font-mono font-bold text-slate-100 text-xs mt-0.5">R$ 33,62</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="text-center text-slate-400 text-[11px] pt-1">
+                Bom apetite a todos! 🍔🍟🥤
+              </div>
+
+            </div>
+          </div>
+        `,
+        chatPrivado: `
+          <div class="text-center py-8 text-slate-400 text-xs">
+            ✓ Pedido autorizado! O link de rastreio e valores finais já estão no grupo.
+          </div>
+        `
+      }
+    };
+
+    function renderizar() {
+      const stepData = dados[passoAtual];
+
+      // Atualiza botões do stepper
+      for (let i = 1; i <= 5; i++) {
+        const btn = document.getElementById(`btn-step-${i}`);
+        if (i === passoAtual) {
+          btn.className = "px-3 py-1.5 text-xs font-semibold rounded-lg transition-all bg-red-600 text-white shadow";
+        } else {
+          btn.className = "px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white";
+        }
+      }
+
+      // Atualiza FSM
+      const badge = document.getElementById('fsm-status-badge');
+      badge.textContent = stepData.fsm;
+      badge.className = `px-2.5 py-1 rounded-md text-xs font-mono font-bold ${stepData.fsmBadgeColor}`;
+
+      // Atualiza Telemetria
+      document.getElementById('telemetry-latency').textContent = stepData.latency;
+      document.getElementById('telemetry-tokens').textContent = stepData.tokens;
+
+      // Atualiza logs
+      const logsEl = document.getElementById('telemetry-logs');
+      logsEl.innerHTML = stepData.logs.map(l => `<div>${l}</div>`).join('');
+      logsEl.scrollTop = logsEl.scrollHeight;
+
+      // Badge DM
+      const badgeDm = document.getElementById('badge-dm');
+      if (passoAtual === 3) {
+        badgeDm.classList.remove('hidden');
+      } else {
+        badgeDm.classList.add('hidden');
+      }
+
+      // Chat Render
+      atualizarChat();
+    }
+
+    function atualizarChat() {
+      const stepData = dados[passoAtual];
+      const chatContainer = document.getElementById('chat-container');
+      const chatTitle = document.getElementById('chat-title');
+      const chatAvatar = document.getElementById('chat-avatar');
+
+      if (chatAtivo === 'grupo') {
+        chatTitle.innerHTML = `<span>Almoço da Firma - Squad Inovação</span> <span class="text-xs text-slate-400 font-normal">(4 membros)</span>`;
+        chatAvatar.innerHTML = '🍕';
+        chatAvatar.className = 'w-10 h-10 rounded-full bg-gradient-to-tr from-amber-600 to-red-600 flex items-center justify-center font-bold text-white shadow';
+        chatContainer.innerHTML = stepData.chatGrupo;
+      } else {
+        chatTitle.innerHTML = `<span>Bia (Mensagem Privada)</span> <span class="text-xs text-slate-400 font-normal">🔒 Sigiloso</span>`;
+        chatAvatar.innerHTML = 'B';
+        chatAvatar.className = 'w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center font-bold text-white shadow';
+        chatContainer.innerHTML = stepData.chatPrivado;
+      }
+
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    function irParaPasso(passo) {
+      passoAtual = passo;
+      // Se for passo 3, sugere a DM
+      if (passo === 3 && chatAtivo === 'grupo') {
+        chatAtivo = 'privado';
+        document.getElementById('tab-privado').className = 'px-2.5 py-1 rounded font-medium bg-slate-800 text-white transition flex items-center gap-1';
+        document.getElementById('tab-grupo').className = 'px-2.5 py-1 rounded font-medium text-slate-400 hover:text-white transition';
+      } else if (passo !== 3 && chatAtivo === 'privado') {
+        chatAtivo = 'grupo';
+        document.getElementById('tab-grupo').className = 'px-2.5 py-1 rounded font-medium bg-slate-800 text-white transition';
+        document.getElementById('tab-privado').className = 'px-2.5 py-1 rounded font-medium text-slate-400 hover:text-white transition flex items-center gap-1';
+      }
+      renderizar();
+    }
+
+    function trocarChat(tipo) {
+      chatAtivo = tipo;
+      if (tipo === 'grupo') {
+        document.getElementById('tab-grupo').className = 'px-2.5 py-1 rounded font-medium bg-slate-800 text-white transition';
+        document.getElementById('tab-privado').className = 'px-2.5 py-1 rounded font-medium text-slate-400 hover:text-white transition flex items-center gap-1';
+      } else {
+        document.getElementById('tab-privado').className = 'px-2.5 py-1 rounded font-medium bg-slate-800 text-white transition flex items-center gap-1';
+        document.getElementById('tab-grupo').className = 'px-2.5 py-1 rounded font-medium text-slate-400 hover:text-white transition';
+      }
+      atualizarChat();
+    }
+
+    // Inicialização
+    renderizar();
+  </script>
+</body>
+</html>
+

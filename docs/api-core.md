@@ -90,6 +90,171 @@ Não precisa checar se quem clicou é o organizador: o core recusa com `outcome:
 
 `mensagem` decide sozinha o que fazer pela fase: na coleta registra preferências; com proposta na mesa interpreta pedidos de troca ("troca o meu por um café").
 
+## Árvore de Processos e Fluxo dos Botões
+
+O ciclo de vida de um pedido coletivo na Íris é governado por uma máquina de estados finita (FSM) estrita. Cada botão apresentado na interface corresponde a um método da fachada, com regras claras de **quem pode clicar**, **o que acontece com o estado**, **o que é mantido ou descartado** e **quais ramificações são abertas**.
+
+### 1. Diagrama Geral da Árvore de Decisão e Botões
+
+```mermaid
+flowchart TD
+    %% Setup Inicial
+    START([1. Mencionar Bot no Grupo]):::setup --> INICIAR["iris.iniciar()"]:::action
+    INICIAR --> CHECK_ADDR{Endereço Padrão no .env?}:::decision
+
+    %% Ramo de Endereço (Privado do Organizador)
+    CHECK_ADDR -- Sim, válido --> ADDR_DEF["DM Organizador:\n[Sim] [Outro endereço]"]:::dm
+    CHECK_ADDR -- Não ou inválido --> ADDR_TYP["DM Organizador:\nDigite o endereço"]:::dm
+
+    ADDR_DEF -- "[Sim]" --> ADDR_OK["Endereço Confirmado"]:::success
+    ADDR_DEF -- "[Outro endereço]" --> ADDR_TYP
+    ADDR_TYP -- "Organizador digita texto" --> ADDR_VAL["MCP: validateAddress()"]:::action
+    ADDR_VAL -- Válido --> ADDR_CONF["DM Organizador:\n[Confirmar] [Corrigir]"]:::dm
+    ADDR_VAL -- Inválido --> ADDR_TYP
+    ADDR_CONF -- "[Confirmar]" --> ADDR_OK
+    ADDR_CONF -- "[Corrigir]" --> ADDR_TYP
+
+    %% Ramo de Coleta (Grupo)
+    INICIAR --> COLETANDO["FASE: collecting (Coleta Livre)"]:::state
+    COLETANDO --> MSG_GRUPO["Membros falam no chat livre:\ndesejos, restrições, limite R$"]:::chat
+    MSG_GRUPO --> AGRLOTE["Agrupador (Debounce lote até 10 pessoas)"]:::action
+    AGRLOTE --> COLETANDO
+
+    %% Ação: Montar Pedido
+    COLETANDO --> BTN_PROPOR{"Organizador clica:\n[Montar Pedido]"}:::decision
+    BTN_PROPOR -- Endereço não confirmado --> ERR_ADDR["outcome: address_required\n(Repete pedido de endereço)"]:::warning
+    ERR_ADDR --> COLETANDO
+    BTN_PROPOR -- Endereço OK --> EXEC_PROPOR["iris.propor()\n(Busca MCP + LLM + Combinações 1-2 lojas)"]:::action
+
+    %% Ramo de Proposta / Revisão
+    EXEC_PROPOR --> REVIEWING["FASE: reviewing (Proposta no Grupo)"]:::state
+    REVIEWING --> CHECK_BUDGET{Alguém passou do limite?}:::decision
+
+    %% Sub-ramo: Orçamento Privado
+    CHECK_BUDGET -- Sim --> DM_BUDGET["DM do Participante:\n[Aceito] [Quero outro]"]:::dm
+    DM_BUDGET -- "[Aceito]" --> BUD_ACC["Orçamento Liberado"]:::success
+    DM_BUDGET -- "[Quero outro]" --> BUD_SUG["DM: Sugestão de Item\n[Aceito a sugestão] [Fico sem]"]:::dm
+    BUD_SUG -- "[Aceito a sugestão]" --> BUD_SWAP["Troca pelo item sugerido mais barato\n+ Recota taxas no iFood"]:::action
+    BUD_SUG -- "[Fico sem]" --> BUD_OUT["Pessoa removida do pedido (uncovered)\n+ Recota taxas no iFood"]:::action
+    BUD_SWAP --> REVIEWING
+    BUD_OUT --> REVIEWING
+    CHECK_BUDGET -- Não ou Todos Respondidos --> PROPOSTA_LIBERADA["Proposta Pronta para Decisão"]:::state
+
+    %% Ações e Botões no Card da Proposta
+    PROPOSTA_LIBERADA --> BTN_OPCAO{"Botões no Card da Proposta"}:::decision
+
+    %% Botão Outra Opção
+    BTN_OPCAO -- "[🔄 Outra Opção]\n(Disponível se alternative existir)" --> BTN_OUTRA["iris.outraOpcao()"]:::action
+    BTN_OUTRA --> SWITCH_ALT["Inverte proposta atual com alternativa\n(Zero LLM, Instantâneo)"]:::action
+    SWITCH_ALT --> REVIEWING
+
+    %% Ajuste por Texto no Grupo
+    BTN_OPCAO -- "Membro fala no chat:\n'troca o meu por...'" --> MSG_AJUSTE["iris.mensagem() -> interpretarAjuste()"]:::action
+    MSG_AJUSTE --> APLICA_AJUSTE["Troca o item + Recota taxas\n+ Descarta alternativa"]:::action
+    APLICA_AJUSTE --> REVIEWING
+
+    %% Botão Voltar para a Coleta
+    BTN_OPCAO -- "[↩️ Voltar para a Coleta]" --> BTN_VOLTAR["iris.reabrirColeta()"]:::action
+    BTN_VOLTAR --> REABRE["Descarta proposta, alternativa e orçamentos\nVolta para collecting"]:::action
+    REABRE --> COLETANDO
+
+    %% Botão Cancelar
+    BTN_OPCAO -- "[❌ Cancelar Pedido]" --> BTN_CANC["iris.cancelar()"]:::action
+    BTN_CANC --> CANCELLED["FASE: cancelled (Encerrada)"]:::finish
+
+    %% Botão Confirmar Pedido
+    BTN_OPCAO -- "[✅ Confirmar Pedido]" --> BTN_FECHAR["iris.fechar()"]:::action
+    BTN_FECHAR --> VAL_FECHAR{Validações de Fechamento}:::decision
+    VAL_FECHAR -- Orçamento pendente na DM --> ERR_BUD["outcome: budget_pending\n(Avisa no grupo quem falta responder)"]:::warning
+    ERR_BUD --> REVIEWING
+    VAL_FECHAR -- Catálogo > 60s ou Taxa mudou --> ERR_TAXA["outcome: close_rejected\n(Recota e atualiza a proposta)"]:::warning
+    ERR_TAXA --> REVIEWING
+    VAL_FECHAR -- Tudo Íntegro & Aprovado --> CLOSED["FASE: closed\n(AuthorizedOrder emitido para o iFood MCP)"]:::finish
+
+    classDef setup fill:#1e293b,stroke:#64748b,color:#f8fafc
+    classDef state fill:#0f172a,stroke:#3b82f6,stroke-width:2px,color:#f8fafc
+    classDef action fill:#1e1b4b,stroke:#818cf8,color:#f8fafc
+    classDef decision fill:#312e81,stroke:#a5b4fc,color:#f8fafc
+    classDef dm fill:#451a03,stroke:#f59e0b,color:#f8fafc
+    classDef success fill:#064e3b,stroke:#10b981,color:#f8fafc
+    classDef warning fill:#701a75,stroke:#f472b6,color:#f8fafc
+    classDef finish fill:#7f1d1d,stroke:#ef4444,stroke-width:2px,color:#f8fafc
+    classDef chat fill:#134e4a,stroke:#14b8a6,color:#f8fafc
+```
+
+---
+
+### 2. Matriz Completa de Botões e Processos
+
+| Fase Atual | Canal / Onde Aparece | Botão / Ação | Quem Pode Clicar | Método da API Core | Efeito no Estado e no Fluxo | O que é Mantido vs. Descartado |
+|---|---|---|---|---|---|---|
+| Início / Coleta | DM Privada (Organizador) | **[Sim]** (endereço padrão) ou **[Confirmar]** (digitado) | Só Organizador | `iris.confirmarEndereco` | Confirma o endereço da sessão. Se já havia proposta na mesa, ela é descartada. | Valida e salva `address.confirmed`. |
+| Início / Coleta | DM Privada (Organizador) | **[Outro endereço]** ou **[Corrigir]** | Só Organizador | `iris.pedirOutroEndereco` | Pede que o organizador digite o novo endereço na DM. | Transita status do endereço para `awaiting_text`. |
+| `collecting` | Chat do Grupo | Mensagem de texto livre | Qualquer membro | `agrupador.adicionar` ou `iris.mensagem` | Extrai preferências, restrições e orçamentos via LLM `fast`. | Atualiza as preferências do participante no Core. |
+| `collecting` | Chat do Grupo | **[Montar Pedido]** | Só Organizador | `iris.propor` | Busca lojas no MCP, combina 1-2 lojas, cota taxas de serviço e apresenta a proposta. Transita para `reviewing`. | **Cria** `proposal` e `alternative`. Inicia checagem de orçamento. |
+| `reviewing` | Chat do Grupo | **[🔄 Outra Opção]** *(condicional)* | Só Organizador | `iris.outraOpcao` | **Troca instantânea:** a alternativa vira a proposta principal e a principal vira alternativa. | **Mantém** ambas as opções trocadas de lugar. **Reinicia** perguntas de orçamento para os novos itens. |
+| `reviewing` | Chat do Grupo | **[↩️ Voltar para a Coleta]** | Só Organizador | `iris.reabrirColeta` | **Reabre a coleta livre:** cancela a proposta e permite que novas pessoas entrem ou alterem seus pedidos. | **Descarta** `proposal`, `alternative` e `budget`. **Mantém** lista de participantes e preferências já colhidas. |
+| `reviewing` | Chat do Grupo | **[❌ Cancelar Pedido]** | Só Organizador | `iris.cancelar` | Encerra a sessão imediatamente com status `cancelled`. | Sessão finalizada. Não aceita mais ações. |
+| `reviewing` | Chat do Grupo | Mensagem de texto (ex: *"troca por X"*) | Qualquer participante | `iris.mensagem` / agrupador | Interpreta o ajuste (`interpretarAjuste`) e troca o item daquela pessoa no cardápio da loja. | **Atualiza** `proposal` (nova revisão `-r1`). **Descarta** `alternative`. Recota taxas e reavalia orçamento. |
+| `reviewing` | DM Privada (Participante) | **[Aceito]** (estouro de valor) | Próprio participante | `iris.responderOrcamento(..., 'aceito')` | Confirma que aceita pagar a quantia real com frete e taxa. | Registra aceite em `budget.aceitos`. Desbloqueia o participante. |
+| `reviewing` | DM Privada (Participante) | **[Quero outro]** (estouro de valor) | Próprio participante | `iris.responderOrcamento(..., 'quero_outro')` | O Core sugere o item mais barato daquela loja que caiba no orçamento. | Envia `item_suggestion` na DM com novos botões. |
+| `reviewing` | DM Privada (Participante) | **[Aceito a sugestão]** | Próprio participante | `iris.responderOrcamento(..., 'aceito_sugestao')` | Substitui o item caro pelo sugerido mais em conta. | **Troca o item** na proposta. Recota taxas no iFood. Reavalia orçamento em cascata. |
+| `reviewing` | DM Privada (Participante) | **[Fico sem]** | Próprio participante | `iris.responderOrcamento(..., 'fico_sem')` | Remove a pessoa do pedido coletivo. | Move a pessoa para `uncoveredParticipantIds`. Recota taxas para os que ficaram. |
+| `reviewing` | Chat do Grupo | **[✅ Confirmar Pedido]** | Só Organizador | `iris.fechar` | Revalida catálogo (< 60s), recota taxas no iFood e emite o `AuthorizedOrder`. Transita para `closed`. | **Gera fechamento idempotente.** Pronto para submissão no iFood. |
+
+---
+
+### 3. Detalhamento dos Processos-Chave
+
+#### Processo A: "Voltar para a Coleta" (`reabrirColeta`)
+* **Oportunidade no Fluxo:** Fica disponível como botão no rodapé do card da proposta durante toda a fase `reviewing`.
+* **Quem pode acionar:** Apenas o organizador (`actorId === session.organizerId`). Se outro membro clicar, o Core responde `outcome: 'not_authorized'` com aviso privado.
+* **Por que foi criado?** Em cenários reais, enquanto o grupo olha a proposta, pode acontecer de:
+  1. Entrar um colega novo no grupo que também quer pedir;
+  2. Alguém desistir completamente e querer pedir algo de outra culinária;
+  3. O grupo perceber que ninguém quer as lojas sugeridas.
+* **Comportamento do Core:**
+  - A sessão transita de `reviewing` para `collecting`.
+  - A proposta (`proposal`), a alternativa (`alternative`) e as perguntas de orçamento (`budget`) são **completamente descartadas**.
+  - **Atenção:** Os participantes que já mandaram mensagens e suas preferências anteriores continuam salvos! Assim, quem já escolheu não precisa digitar tudo de novo; apenas os ajustes necessários são feitos no chat antes do organizador tocar em `[Montar Pedido]` novamente.
+
+#### Processo B: "Outra Opção" (`outraOpcao`)
+* **Oportunidade no Fluxo:** Aparece como botão no card da proposta **se, e somente se**, `resposta.alternative` estiver presente.
+* **Quem pode acionar:** Apenas o organizador.
+* **Como funciona o algoritmo?** Quando o organizador chama `iris.propor`, o motor combinatório do Core calcula as duas melhores combinações de lojas e itens: a 1ª colocada (`proposal`) e a 2ª colocada (`alternative`), já com as justificativas geradas pelo modelo.
+* **Efeito "Gangorra" (Toggle):** Ao clicar em `[Outra Opção]`, o Core executa `trocarPorAlternativa`:
+  $$\text{proposal} \longleftrightarrow \text{alternative}$$
+  Essa troca é **100% em código puro**, levando **0 milissegundos e 0 tokens de IA**. Se o grupo não gostar da segunda opção e o organizador clicar de novo, o sistema volta instantaneamente para a primeira!
+* **Quando o botão desaparece?** Se alguém no grupo fizer um ajuste manual de itens por texto (ex.: *"troca meu refri por suco"*), a proposta ganha uma nova revisão (`-r1`) e a `alternative` anterior é descartada (o botão "Outra Opção" deixa de aparecer).
+
+#### Processo C: Ajustes de Itens pelo Chat Livre (`interpretarAjuste`)
+* **Oportunidade no Fluxo:** Durante a fase `reviewing`, a qualquer momento antes do fechamento.
+* **Quem pode falar:** Qualquer participante do grupo.
+* **Como funciona:**
+  - Quando a sessão está em `reviewing`, qualquer mensagem enviada no grupo não vai para a coleta geral, mas é direcionada para a função `interpretarAjuste`.
+  - Apenas o participante dono da mensagem pode alterar os seus próprios itens (ninguém altera o prato do colega).
+  - O Core valida se o item solicitado existe no cardápio da loja já selecionada e se é elegível.
+  - Ao aplicar o ajuste: a taxa de serviço é recotada no iFood, o rateio é recalculado deterministamente e as perguntas de orçamento são reavaliadas.
+
+#### Processo D: Resolução Privada de Orçamento e Efeito em Cascata
+* **Oportunidade no Fluxo:** Disparado automaticamente assim que uma proposta é montada ou ajustada.
+* **A Trava de Fechamento:** Se qualquer membro do grupo tiver seu total (itens + frete rateado + taxa rateada) maior que o orçamento informado na coleta, a Íris **bloqueia o fechamento do pedido**.
+* **Comunicação Segura:**
+  - O participante recebe uma mensagem privada (DM) com botões inline.
+  - No grupo, o bot apenas emite: *"⏳ Aguardando confirmação individual de valores de: @Nome"*. Valores em reais nunca são expostos publicamente.
+* **Efeito em Cascata (Efeito Dominó):** Se o participante responder `[Quero outro]` e trocar por um item mais barato, ou responder `[Fico sem]` e sair do pedido, a taxa de entrega e de serviço das outras pessoas é redistribuída. Se essa redistribuição fizer um segundo participante estourar seu orçamento, a Íris envia uma nova pergunta privada para essa segunda pessoa automaticamente!
+
+#### Processo E: Fechamento com Autorização Sagrada e Idempotência (`fechar`)
+* **Oportunidade no Fluxo:** Botão `[Confirmar Pedido]` no card da proposta.
+* **Quem pode acionar:** Exclusivamente o organizador.
+* **Validações Pré-Fechamento:**
+  1. *Orçamentos pendentes:* Se houver pendências em `pendingBudget`, recusa com `outcome: 'budget_pending'`.
+  2. *Revalidação temporal:* Se o catálogo foi consultado há mais de 60 segundos, o Core faz uma reconsulta relâmpago no iFood para garantir que nenhum prato esgotou.
+  3. *Recotação de taxa de serviço:* O Core cota novamente a taxa no MCP. Se o iFood tiver alterado a taxa, o fechamento é suspenso com `outcome: 'close_rejected'`, a proposta é atualizada com a nova taxa e o grupo é avisado.
+* **Idempotência:** Após a emissão do `AuthorizedOrder`, a sessão vai para `status: 'closed'`. Se o organizador tocar duas vezes no botão por instabilidade de rede, o Core devolve `outcome: 'already_closed'` com o mesmo pedido, impedindo cobranças duplicadas.
+
+---
+
 ## Mensagens em lote (use isto no grupo)
 
 O provedor gratuito limita tokens por minuto. Se 10 pessoas mandarem mensagem quase juntas, `iris.mensagem` faria 10 chamadas ao modelo. Com o **agrupador**, elas viram **uma** chamada (até 10 pessoas por chamada):
