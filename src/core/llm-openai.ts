@@ -197,7 +197,14 @@ export class OpenAiCompatLlm implements LlmPort {
     for (;;) {
       const response = await this.post(request, model);
       if (response.ok) {
-        const data = (await response.json()) as unknown;
+        const texto = await response.text();
+        let data: unknown;
+        try {
+          data = JSON.parse(texto);
+        } catch {
+          // 200 com corpo que não é JSON (ex.: "OK" de um proxy): falha do provedor, não do modelo.
+          throw new LlmHttpError(response.status, `resposta não é JSON: ${texto}`);
+        }
         this.registrarUso(request.tier, model, data);
         return extrairJson(data);
       }

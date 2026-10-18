@@ -200,6 +200,19 @@ describe('LlmEmCascata', () => {
     ]);
   });
 
+  it('provedor que responde 200 sem JSON ("OK" de proxy) é pausado e o próximo assume', async () => {
+    const proxy = new OpenAiCompatLlm({
+      baseUrl: 'https://proxy.test',
+      models: { fast: 'x', capable: 'x' },
+      fetch: (async () => new Response('OK\n', { status: 200 })) as typeof fetch,
+    });
+    const b = provedor({ ok: 2 });
+    const { llm, trocas } = cascata([proxy, b]);
+
+    await expect(llm.generate(request)).resolves.toEqual({ ok: 2 });
+    expect(trocas[0]).toMatchObject({ de: 'p1', motivo: 'other', pausaMs: 60_000 });
+  });
+
   it('exige pelo menos um provedor', () => {
     expect(() => new LlmEmCascata({ provedores: [] })).toThrow(/pelo menos um/);
   });
