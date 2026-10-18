@@ -43,7 +43,7 @@ async function setup() {
   let sequence = 100;
   runtime.bot.api.config.use(async (_prev, method, payload) => {
     const p = payload as Record<string, unknown>;
-    if (method === 'sendMessage') { const id = ++sequence; sent.push({ chat: Number(p.chat_id), text: String(p.text), id, buttons: (p.reply_markup as {inline_keyboard?: {text:string;callback_data?:string}[][]})?.inline_keyboard?.flat() ?? [] }); return { ok: true, result: { message_id: id, date: 0, chat: { id: Number(p.chat_id) }, text: p.text } } as never; }
+    if (method === 'sendMessage' || method === 'sendPhoto') { const id = ++sequence; sent.push({ chat: Number(p.chat_id), text: String(method === 'sendPhoto' ? p.caption : p.text), id, buttons: (p.reply_markup as {inline_keyboard?: {text:string;callback_data?:string}[][]})?.inline_keyboard?.flat() ?? [] }); return { ok: true, result: { message_id: id, date: 0, chat: { id: Number(p.chat_id) }, text: p.text } } as never; }
     return { ok: true, result: true } as never;
   });
   const from = (id: number) => ({ id, is_bot: false, first_name: `Pessoa ${id}` });
@@ -163,7 +163,7 @@ it('composição real prioriza lojas abertas por desejo mesmo com ITEM fechado, 
   } finally { await h.runtime.close(); }
 });
 
-it.each([false, true])('composição real apresenta avaliação getMerchant e fotos escolhidas; falha de envio=%s preserva fluxo', async failPhoto => {
+it.each([false, true])('composição real apresenta avaliação getMerchant e card único com foto escolhida; falha de envio=%s preserva fluxo', async failPhoto => {
   const originalRead = transport.read.getMockImplementation()!;
   transport.read.mockImplementation(async (name: string, args: Record<string, unknown>) => {
     const result = await originalRead(name, args);
@@ -183,11 +183,14 @@ it.each([false, true])('composição real apresenta avaliação getMerchant e fo
   h.runtime.bot.api.config.use(async (prev, method, payload) => {
     const p = payload as Record<string, unknown>;
     if (method === 'sendPhoto') {
-      const card = (p.reply_parameters as { message_id: number }).message_id;
-      expect(h.sent.some(m => m.id === card && m.text.includes('Sugestão preliminar'))).toBe(true);
+      expect(p.reply_parameters).toBeUndefined();
+      expect(p.parse_mode).toBe('HTML');
+      expect(String(p.caption)).toContain('Sugestão preliminar');
+      expect(p.reply_markup).toBeDefined();
       if (failPhoto) return { ok: false, error_code: 400, description: 'Controlled media failure' } as never;
-      media.push({ card, caption: String(p.caption), buttons: p.reply_markup });
-      return { ok: true, result: { message_id: 900 + media.length, date: 0, chat: { id: group }, photo: [] } } as never;
+      const result = await prev(method, payload);
+      media.push({ card: (result as {result:{message_id:number}}).result.message_id, caption: String(p.caption), buttons: p.reply_markup });
+      return result;
     }
     if (method === 'deleteMessage') removed.push(Number(p.message_id));
     if (method === 'answerCallbackQuery' && p.show_alert) alerts.push(String(p.text));
@@ -199,8 +202,9 @@ it.each([false, true])('composição real apresenta avaliação getMerchant e fo
     expect(old.m.text).toContain('⭐ 4,7 (850 avaliações)'); expect(old.m.text).not.toContain('⭐ 1,2');
     const chosen = (await h.runtime.iris.obter(String(group)))!.preliminary!.items.map(i => i.menuItemId);
     if (!failPhoto) {
-      expect(media.length).toBeGreaterThan(0); expect(media.length).toBeLessThanOrEqual(2);
-      expect(media.every(m => chosen.some(id => m.caption === `Hambúrguer MCP ${products.indexOf(id) + 1}`) && !m.buttons)).toBe(true);
+      expect(media).toHaveLength(1); expect(media[0]!.card).toBe(old.m.id);
+      expect(media[0]!.caption).toContain('Pessoa 71'); expect(media[0]!.caption).toContain('Pessoa 72');
+      expect(media.every(m => chosen.some(id => m.caption.includes(`Hambúrguer MCP ${products.indexOf(id) + 1}`)) && m.buttons)).toBe(true);
     }
     const before = media.length;
     await h.click(71, old.data, group, old.m.id);
@@ -209,8 +213,8 @@ it.each([false, true])('composição real apresenta avaliação getMerchant e fo
     if (!failPhoto) expect(removed.length).toBe(before);
     const snapshot = await h.runtime.iris.obter(String(group));
     await h.click(71, old.data, group, old.m.id);
-    // Callbacks em fotos também não têm identidade de card.
-    await h.click(71, 'proposta:cancelar', group, 901);
+    // O card com foto anterior também perde sua identidade após a troca.
+    await h.click(71, 'proposta:cancelar', group, old.m.id);
     expect(await h.runtime.iris.obter(String(group))).toEqual(snapshot);
     expect(alerts.filter(text => text.includes('substituída')).length).toBeGreaterThanOrEqual(2);
     await h.click(71, 'proposta:confirmar', group, alternative.m.id);

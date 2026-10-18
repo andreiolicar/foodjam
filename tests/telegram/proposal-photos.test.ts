@@ -16,20 +16,20 @@ function setup(chosen = ['a', 'b', 'c']) {
   const sendPhoto = vi.fn(async () => { events.push('photo'); return { message_id: ++messageId }; });
   const deleteMessage = vi.fn(async () => true);
   const editMessageReplyMarkup = vi.fn(async () => true);
-  const api = { sendMessage, sendPhoto, deleteMessage, editMessageReplyMarkup, editMessageText: vi.fn(async () => true) } as unknown as ApiCard;
+  const api = { sendMessage, sendPhoto, deleteMessage, editMessageReplyMarkup, editMessageText: vi.fn(async () => true), editMessageCaption: vi.fn(async () => true) } as unknown as ApiCard;
   const fetchImage = vi.fn(async (_url: string, _init?: RequestInit) => { void _url; void _init; return new Response(new Uint8Array([255, 216, 255]), { headers: { 'content-type': 'image/jpeg' } }); });
   vi.stubGlobal('fetch', fetchImage);
   return { group, response, iris, api, sendMessage, sendPhoto, deleteMessage, events, fetchImage, replace() { current = { ...preliminary, id: 'p2' }; return { ...response, preliminary: current }; } };
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
-it('envia primeiro card e até duas fotos distintas apenas dos produtos escolhidos, vinculadas ao card sem callbacks', async () => {
+it('envia somente foto principal dos escolhidos com card e callbacks na legenda', async () => {
   const f = setup(['b', 'a', 'c']);
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
-  expect(f.events).toEqual(['card', 'photo', 'photo']);
-  expect(f.fetchImage.mock.calls.map(args => String(args[0]))).toEqual([image('b'), image('a')]);
+  expect(f.events).toEqual(['photo']);
+  expect(f.fetchImage.mock.calls.map(args => String(args[0]))).toEqual([image('b')]);
   const options = (f.sendPhoto.mock.calls as unknown[][]).map(args => args[2]) as Record<string, unknown>[];
-  expect(options[0]).toMatchObject({ caption: 'Produto <b>', reply_parameters: { message_id: 11 } });
-  expect(options.every(o => !o.reply_markup && !o.parse_mode)).toBe(true);
+  expect(options[0]).toMatchObject({ caption: expect.stringContaining('Produto &lt;b&gt;'), parse_mode: 'HTML', reply_markup: expect.anything() });
+  expect(options[0]).not.toHaveProperty('reply_parameters');
   expect(propostaDoCard(f.group, 11)).toBe('p1');
 });
 it('deduplica fotos e não reenvia na atualização ou reapresentação da mesma proposta', async () => {
@@ -37,7 +37,7 @@ it('deduplica fotos e não reenvia na atualização ou reapresentação da mesma
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
   await atualizarCard(f.api, f.iris, f.group, f.response);
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
-  expect(f.sendPhoto).toHaveBeenCalledTimes(1); expect(f.sendMessage).toHaveBeenCalledTimes(1);
+  expect(f.sendPhoto).toHaveBeenCalledTimes(1); expect(f.sendMessage).not.toHaveBeenCalled();
 });
 it.each(['missing', 'unsafe', 'foreign'])('sem imagem utilizável (%s) entrega card sem download', async mode => {
   const f = setup(['a']);
@@ -61,12 +61,12 @@ it.each(['telegram', 'download', 'redirect', 'size', 'type'])('falha de mídia %
   expect(f.fetchImage).toHaveBeenCalledWith(image('a'), expect.objectContaining({ redirect: 'error', signal: expect.any(AbortSignal) }));
   expect(errorLog).not.toHaveBeenCalled(); errorLog.mockRestore();
 });
-it.each(['download', 'telegram'])('mídia pendurada em %s tem prazo finito e card já foi entregue', async phase => {
+it.each(['download', 'telegram'])('mídia pendurada em %s tem prazo finito e então entrega card textual', async phase => {
   vi.useFakeTimers(); const f = setup(['a']);
   if (phase === 'download') f.fetchImage.mockImplementationOnce(() => new Promise(() => {}));
   else f.sendPhoto.mockImplementationOnce(() => new Promise(() => {}));
   const pending = exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
-  await vi.advanceTimersByTimeAsync(0); expect(f.sendMessage).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(0); expect(f.sendMessage).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(2500); await expect(pending).resolves.toBe(true);
   expect(propostaDoCard(f.group, 11)).toBe('p1');
 });
@@ -83,13 +83,13 @@ it('resposta tardia de foto substituída é removida e não envia fotos restante
   resolve({ message_id: 90 }); await pending;
   expect(f.sendPhoto).toHaveBeenCalledTimes(1);
   expect(f.deleteMessage).toHaveBeenCalledWith(f.group, 90, expect.any(AbortSignal));
-  expect(propostaDoCard(f.group, 11)).toBeUndefined(); expect(propostaDoCard(f.group, 12)).toBe('p2');
+  expect(propostaDoCard(f.group, 90)).toBeUndefined(); expect(propostaDoCard(f.group, 11)).toBe('p2');
 });
 it('retirar card remove mídia anterior e invalida callbacks', async () => {
   const f = setup(['a']); await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
   await retirarBotoesDoCard(f.api, f.group);
   expect(propostaDoCard(f.group, 11)).toBeUndefined();
-  expect(f.deleteMessage).toHaveBeenCalledWith(f.group, 12, expect.any(AbortSignal));
+  expect(f.deleteMessage).toHaveBeenCalledWith(f.group, 11, expect.any(AbortSignal));
 });
 it('uma atualização de outra revisão não reaproveita callbacks do card antigo', async () => {
   const f = setup(['a']); await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
@@ -101,7 +101,7 @@ it('quando a proposta muda durante download, não envia foto nem a próxima cand
   const f = setup(['a', 'b']);
   f.fetchImage.mockImplementationOnce(async () => { f.replace(); return new Response(new Uint8Array([255,216,255]), { headers: { 'content-type': 'image/jpeg' } }); });
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
-  expect(f.sendMessage).toHaveBeenCalledTimes(1); expect(f.sendPhoto).not.toHaveBeenCalled(); expect(f.fetchImage).toHaveBeenCalledTimes(1);
+  expect(f.sendMessage).not.toHaveBeenCalled(); expect(f.sendPhoto).not.toHaveBeenCalled(); expect(f.fetchImage).toHaveBeenCalledTimes(1);
 });
 it('resposta depois do timeout é removida mesmo quando o transporte ignora aborto', async () => {
   vi.useFakeTimers(); const f = setup(['a']);
@@ -118,7 +118,7 @@ it('falha na limpeza da foto velha não bloqueia entrega de um novo card', async
   f.deleteMessage.mockRejectedValueOnce(new Error('PRIVATE_DELETE'));
   const next = f.replace(); next.items = [];
   await expect(exibirProposta(f.api, f.iris, f.group, next, 'bot')).resolves.toBe(true);
-  expect(f.sendMessage).toHaveBeenCalledTimes(2); expect(propostaDoCard(f.group, 13)).toBe('p2');
+  expect(f.sendMessage).toHaveBeenCalledTimes(1); expect(propostaDoCard(f.group, 12)).toBe('p2');
 });
 it('verificação de sessão atrasada não permite que apresentação antiga retire botões da revisão nova', async () => {
   const f = setup(['a']); await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
@@ -136,11 +136,11 @@ it('verificação de sessão atrasada não permite que apresentação antiga ret
   await started;
   await exibirProposta(f.api, f.iris, f.group, response3, 'bot');
   release(); await older;
-  expect(f.sendMessage).toHaveBeenCalledTimes(2);
-  expect(propostaDoCard(f.group, 13)).toBe('p3');
+  expect(f.sendMessage).toHaveBeenCalledTimes(1);
+  expect(propostaDoCard(f.group, 12)).toBe('p3');
 });
-it('cancelamento entre conferência e registro do card não ressuscita sua identidade nem botões', async () => {
-  const f = setup(['a']); const session = await f.iris.obter();
+it('cancelamento entre conferência e registro do card textual não ressuscita sua identidade nem botões', async () => {
+  const f = setup(['a']); delete f.response.items![0]!.itemImageUrl; const session = await f.iris.obter();
   let cancelled = false;
   f.iris.obter.mockImplementation(async () => {
     if (f.sendMessage.mock.calls.length && !cancelled) {
@@ -166,5 +166,5 @@ it('cancelamento entre conferência e registro de foto ainda remove a foto envia
   });
   await exibirProposta(f.api, f.iris, f.group, f.response, 'bot');
   expect(cancelled).toBe(true); expect(propostaDoCard(f.group, 11)).toBeUndefined();
-  expect(f.deleteMessage).toHaveBeenCalledWith(f.group, 12, expect.any(AbortSignal));
+  expect(f.deleteMessage).toHaveBeenCalledWith(f.group, 11, expect.any(AbortSignal));
 });
