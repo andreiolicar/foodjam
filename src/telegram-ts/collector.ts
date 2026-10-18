@@ -38,6 +38,12 @@ export function add(
   return true;
 }
 
+export function getMessages(
+  chatId: number,
+): CollectedMessage[] {
+  return [...(sessions.get(chatId) ?? [])];
+}
+
 export function finish(
   chatId: number,
 ): CollectedMessage[] | undefined {

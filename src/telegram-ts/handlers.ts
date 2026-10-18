@@ -3,6 +3,7 @@ import {
   Telegraf,
   type Context,
 } from "telegraf";
+import { iris } from "./iris.js";
 
 import * as collector from "./collector.js";
 
@@ -23,6 +24,7 @@ export function registerHandlers(bot: Telegraf<Context>): void {
   bot.command("finalizar", async (ctx) => {
     const chatId = ctx.chat.id;
     const messages = collector.finish(chatId);
+    console.log(messages)
 
     if (messages === undefined) {
       await ctx.reply("Não existe coleta ativa.");
@@ -35,10 +37,37 @@ export function registerHandlers(bot: Telegraf<Context>): void {
     }
 
     try {
-      // Futuramente, os dados podem ser enviados ao core/API.
-      console.log("Chat:", chatId);
-      console.log("Mensagens:", messages);
+        // Futuramente, os dados podem ser enviados ao core/API.
+        console.log("Chat:", chatId);
+        console.log("Mensagens:", messages);
 
+        console.log("Chat ID:", chatId);
+        console.log("Coletor ativo:", collector.isActive(chatId));
+
+        console.log("Mensagens recuperadas:", messages.length);
+        console.log("Conteúdo:", messages);
+        var user_teste = 0
+
+        for (const item of messages) {
+            console.log("Entrou no laço:", item);
+
+            if (!item.text || item.user_id == null) continue;
+
+            const resposta = await iris.mensagem(
+                {
+                sessionId: String(chatId),
+                participantId: String(item.user_id),
+                text: item.text,
+                },
+                item.username ?? "Participante",
+            );
+            user_teste = item.user_id
+
+            console.log("Resultado:", resposta.outcome);
+        }
+
+      const resposta = iris.propor(String(chatId), String(user_teste));
+      console.log("resposta montar:", resposta)
       await ctx.reply("Mensagens enviadas para processamento!");
     } catch (error) {
       collector.restore(chatId, messages);
