@@ -3,7 +3,7 @@ import type { Agente, Resposta } from '../../src/core/agente.js';
 import { criarAgente } from '../../src/core/agente.js';
 import { criarAgrupador } from '../../src/core/agrupador.js';
 import type { ItemLote } from '../../src/core/coleta.js';
-import { CatalogoFake } from '../../src/core/fakes/catalogo-fake.js';
+import { CatalogoFake, ENDERECO_FAKE } from '../../src/core/fakes/catalogo-fake.js';
 import { FakeLlm, responderHeuristico } from '../../src/core/fakes/llm-fake.js';
 import { AGORA } from './fixtures.js';
 
@@ -111,8 +111,9 @@ describe('criarAgrupador', () => {
 describe('agente.mensagens (lote)', () => {
   it('na coleta, 10 pessoas = 1 chamada ao modelo; na proposta, cada mensagem é um ajuste', async () => {
     const llm = new FakeLlm(responderHeuristico);
-    const agente = criarAgente({ catalog: new CatalogoFake(), llm, now: () => AGORA });
+    const agente = criarAgente({ catalog: new CatalogoFake(), llm, now: () => AGORA, enderecoPadrao: ENDERECO_FAKE });
     await agente.iniciar('chat', { id: 'ana', displayName: 'Ana' });
+    await agente.confirmarEndereco('chat', 'ana');
 
     const itens = Array.from({ length: 10 }, (_, i) => ({ participantId: `p${i}`, text: i % 2 ? 'quero um lanche' : 'bolo de cenoura' }));
     const lote = await agente.mensagens('chat', itens);
@@ -136,7 +137,7 @@ describe('agente.mensagens (lote)', () => {
 
   it('lote vazio e sessão inexistente não chamam o modelo', async () => {
     const llm = new FakeLlm([]);
-    const agente = criarAgente({ catalog: new CatalogoFake(), llm, now: () => AGORA });
+    const agente = criarAgente({ catalog: new CatalogoFake(), llm, now: () => AGORA, enderecoPadrao: ENDERECO_FAKE });
     expect((await agente.mensagens('chat', [])).outcome).toBe('empty');
     expect((await agente.mensagens('chat', [{ participantId: 'a', text: 'pizza' }])).outcome).toBe('no_session');
     expect(llm.requests).toHaveLength(0);

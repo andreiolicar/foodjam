@@ -55,11 +55,12 @@ Sem HTTP: o Telegram importa o core e chama a fachada `criarAgente` (`agente.ts`
 | Caminho | Conteúdo |
 |---|---|
 | `index.ts` | API pública: `criarAgente`, `SessoesEmMemoria`, tipos, fakes e `criarLlmDoAmbiente`. |
-| `agente.ts` | Fachada para a interface: iniciar, mensagem, mensagens (lote), propor, outraOpcao, reabrirColeta, fechar, cancelar, obter. |
+| `agente.ts` | Fachada para a interface: iniciar, mensagem, mensagens (lote), confirmarEndereco, pedirOutroEndereco, propor, outraOpcao, reabrirColeta, fechar, cancelar, obter. |
+| `endereco.ts` | Fluxo do endereço de entrega: padrão ou digitado, validado pela porta do iFood, confirmado só pelo organizador. |
 | `agrupador.ts` | `criarAgrupador`: debounce por chat; mensagens quase simultâneas viram um lote (uma chamada ao modelo para até 10 pessoas). |
 | `sessoes.ts` | `SessoesEmMemoria` (implementação da `SessionStore`). |
 | `contracts.ts` | Tipos compartilhados com o time (ver abaixo). |
-| `ports.ts` | `CatalogPort` (só leitura), `LlmPort` (níveis `fast`/`capable`) e `SessionStore`. |
+| `ports.ts` | `CatalogPort` (só leitura: `validateAddress`, `searchStores` e `getMenu` com endereço), `LlmPort` (níveis `fast`/`capable`) e `SessionStore`. |
 | `schemas.ts` | Schemas Zod do domínio e das saídas do modelo (coleta, proposta, ajuste). |
 | `sessao.ts` | Máquina de estados, confirmação idempotente, `CoreSession` (proposta, fechamento, perguntas). |
 | `llm.ts` | `gerarEstruturado`: chamada + Zod + nova tentativa + timeout + registro. |
@@ -77,7 +78,8 @@ Sem HTTP: o Telegram importa o core e chama a fachada `criarAgente` (`agente.ts`
 - `SessionStatus`: `collecting`, `reviewing`, `awaiting_confirmation`, `closed`, `cancelled`.
 - `IncomingMessage`, `CoreAction`.
 - Catálogo e proposta: `Store`, `MenuItem` (com `category?`: comida ou bebida), `ProposedItem` (com `isSubstitute?`), `StoreOrder`, `ParticipantShare`, `Split`, `Proposal`.
-- Fechamento: `OrderAuthorization` e **`AuthorizedOrder`** — fronteira com quem executa o pedido.
+- Endereço: `DeliveryAddress` (texto normalizado pelo iFood e id opcional); ações `request_address` e `confirm_address` em `CoreAction`.
+- Fechamento: `OrderAuthorization` e **`AuthorizedOrder`** (com `deliveryAddress`) — fronteira com quem executa o pedido. Guia do módulo iFood: [`docs/integracao-ifood.md`](../../docs/integracao-ifood.md).
 
 Alterações aqui são mínimas e combinadas com o time; consuma com `import type`.
 

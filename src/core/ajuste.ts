@@ -142,6 +142,7 @@ const MOTIVOS: Record<ProblemaProposta['code'], string> = {
   split_mismatch: 'o rateio não fechou',
   over_budget: 'passaria do seu orçamento',
   stale_catalog: 'o catálogo precisa ser consultado de novo',
+  address_not_confirmed: 'o endereço de entrega ainda não foi confirmado',
   which_item: 'não ficou claro qual dos seus itens trocar',
 };
 

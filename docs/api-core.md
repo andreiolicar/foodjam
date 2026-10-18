@@ -11,6 +11,7 @@ const iris = criarAgente({
   catalog: new CatalogoFake(),           // trocar pela CatalogPort real do módulo iFood
   llm: criarLlmDoAmbiente(process.env),  // sem AI_PROVIDER: modelo fake, sem rede
   onError: (e) => console.error(e),
+  enderecoPadrao: process.env.ENDERECO_PADRAO, // opcional: texto livre; o organizador confirma
 });
 ```
 
@@ -76,6 +77,7 @@ Todas devolvem `Promise<Resposta>` e **não lançam exceção** para casos esper
 |---|---|
 | Alguém menciona o bot | `iris.iniciar(sessionId, { id, displayName })` — quem mencionou vira organizador |
 | Mensagem no grupo durante o pedido | `agrupador.adicionar(...)` (recomendado, ver "Mensagens em lote") ou `iris.mensagem({ sessionId, participantId, text }, displayName)` |
+| Botões do endereço ([Sim], [Confirmar], [Outro endereço], [Corrigir]) | `iris.confirmarEndereco` ou `iris.pedirOutroEndereco` (ver "Endereço de entrega") |
 | Botão "Montar pedido" | `iris.propor(sessionId, actorId)` |
 | Botão "Outra opção" | `iris.outraOpcao(sessionId, actorId)` |
 | Botão "Confirmar pedido" | `iris.fechar(sessionId, actorId)` |
@@ -123,6 +125,35 @@ await iris.propor(sessionId, actorId);
 - Sem o agrupador, dá para chamar direto `iris.mensagens(sessionId, [{ participantId, text, displayName }, ...])`.
 - Ao desligar o bot: `await agrupador.esvaziarTudo()`.
 
+## Endereço de entrega
+
+O iFood só busca lojas e cardápios para um endereço, então todo pedido precisa de um **endereço confirmado pelo organizador**. O fluxo corre em paralelo à coleta (as pessoas podem mandar preferências enquanto o endereço é definido) e **o modelo não participa**.
+
+```text
+iniciar ──▶ com enderecoPadrao válido: confirm_address (kind "default") → [Sim] [Outro endereço]
+        └─▶ sem padrão (ou inválido):   request_address → organizador digita no privado
+
+[Outro endereço] / [Corrigir] ──▶ request_address → organizador digita no privado
+texto digitado ──▶ porta do iFood valida ──▶ válido:   confirm_address (kind "typed") → [Confirmar] [Corrigir]
+                                          └─▶ inválido: mensagem privada com o motivo; ele digita de novo
+[Sim] / [Confirmar] ──▶ endereço confirmado (se mudou com proposta na mesa, a proposta é descartada)
+```
+
+| Botão (no privado do organizador) | Chamada |
+|---|---|
+| **[Sim]** (padrão) ou **[Confirmar]** (digitado) | `iris.confirmarEndereco(sessionId, actorId)` |
+| **[Outro endereço]** (padrão) ou **[Corrigir]** (digitado) | `iris.pedirOutroEndereco(sessionId, actorId)` |
+
+Regras:
+
+- **Só o organizador** confirma ou troca o endereço (os outros recebem `not_authorized`).
+- **O texto do endereço chega pelo caminho normal das mensagens** (`agrupador.adicionar` ou `iris.mensagem`): enquanto a sessão espera o endereço, a mensagem **do organizador** vai para a validação, **nunca para a coleta**. As mensagens dos outros seguem para a coleta normalmente. O bot não precisa de nenhum tratamento especial; basta encaminhar também as mensagens do privado do organizador com o `sessionId` do grupo (veja abaixo).
+- **A coleta não espera** o endereço. **Propor e fechar exigem** endereço confirmado: sem ele, o core responde `address_required` e repete o pedido de endereço (ou de confirmação) nas actions.
+- **Trocar o endereço depois da proposta descarta a proposta** (a sessão volta para a coleta) e avisa o grupo: lojas, preços e entrega dependem do endereço. Confirmar o mesmo endereço de novo não descarta nada.
+- Endereço padrão: passe em `criarAgente({ ..., enderecoPadrao })` (texto livre, por exemplo vindo do `.env`). O core valida pela porta do iFood antes de oferecer.
+
+**Mensagem privada do organizador → sessão do grupo.** Quando o organizador digita o endereço no privado, `ctx.chat.id` é o chat privado, não o grupo. O bot precisa lembrar de qual grupo veio o `request_address` (ex.: um mapa `organizador → sessionId do grupo`, preenchido ao enviar o `request_address`) e encaminhar a mensagem com o `sessionId` **do grupo**.
+
 ## `Resposta`
 
 ```ts
@@ -144,12 +175,19 @@ interface Resposta {
 - `send_message` **com** `participantId`: mensagem só para aquela pessoa (pergunta de esclarecimento, recusa, aviso). Bots só conseguem mandar DM para quem já iniciou conversa com eles; se falhar, responda no grupo em reply à mensagem da pessoa.
 - `send_message` **sem** `participantId`: mensagem para o grupo.
 - `session_updated`: a sessão mudou; use para atualizar o que estiver na tela, se quiser.
+- `request_address`: peça ao organizador, **no privado**, que digite o endereço (`text` já traz a pergunta).
+- `confirm_address`: mostre ao organizador, **no privado**, o `text` e os botões: `kind: "default"` → [Sim] [Outro endereço]; `kind: "typed"` → [Confirmar] [Corrigir]. O endereço normalizado está em `address.formatted`.
 
 ### `outcome`
 
 | outcome | O que o bot faz |
 |---|---|
 | `started` / `already_active` | Avisar que o pedido começou / já está em andamento |
+| `address_default_proposed` / `address_typed_proposed` / `address_requested` | Enviar a ação de endereço (`confirm_address` ou `request_address`) no privado do organizador |
+| `address_invalid` | O motivo já está na mensagem privada; o organizador digita de novo |
+| `address_confirmed` | Endereço definido; se a proposta foi descartada, o aviso ao grupo já está nas actions |
+| `address_required` | Tentou propor ou fechar sem endereço confirmado; o lembrete já está nas actions |
+| `address_nothing_to_confirm` | Botão de confirmar sem endereço pendente (ex.: clique repetido); aviso privado nas actions |
 | `batch` | Lote processado: envie as actions; o outcome de cada pessoa está em `resultados` |
 | `empty` | Lote vazio; nada a fazer |
 | `preference_updated` | Opcional: reagir à mensagem (ex.: 👍) |
@@ -195,7 +233,7 @@ const r = await iris.outraOpcao(sessionId, actorId); // só o organizador
 
 ## Fechamento
 
-`order` (`AuthorizedOrder`) é a fronteira com quem executa a compra no iFood: pedidos por loja, rateio e a autorização (quem, quando, qual proposta). O core não compra nada.
+`order` (`AuthorizedOrder`) é a fronteira com quem executa a compra no iFood: pedidos por loja, rateio, a autorização (quem, quando, qual proposta) e o **endereço de entrega confirmado** (`order.deliveryAddress`). O core não compra nada.
 
 - Com `already_closed`, o `order` é o mesmo da primeira vez: **não execute de novo**.
 - Chave de idempotência para o executor: `order.proposalId`. Ele não se repete entre pedidos do mesmo grupo enquanto o processo estiver no ar. Como as sessões ficam em memória e o contador recomeça se o processo reiniciar, use `${order.proposalId}:${order.authorization.authorizedAt}` se o executor guardar histórico entre reinícios.

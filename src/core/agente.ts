@@ -20,6 +20,16 @@ import {
   voltarParaColeta,
 } from './sessao.js';
 import { SessoesEmMemoria } from './sessoes.js';
+import {
+  TEXTOS_ENDERECO,
+  confirmarEndereco as confirmarEnderecoDaSessao,
+  enderecoConfirmado,
+  esperandoEnderecoDe,
+  iniciarEndereco,
+  lembrarEndereco,
+  pedirOutroEndereco as pedirOutroEnderecoDaSessao,
+  receberTextoEndereco,
+} from './endereco.js';
 
 export const TEXTOS = {
   soOrganizador: 'Só quem organizou o pedido pode fazer isso.',
@@ -64,6 +74,12 @@ export interface AgenteDeps {
   onError?: (error: unknown) => void;
   timeoutMs?: number;
   maxCatalogAgeMs?: number;
+  /**
+   * Endereço de entrega padrão (texto livre, ex.: do .env). Ao iniciar, o core
+   * valida pela porta e pergunta ao organizador [Sim] [Outro endereço]. Sem ele,
+   * o core pede que o organizador digite o endereço.
+   */
+  enderecoPadrao?: string;
 }
 
 export interface Organizador {
@@ -82,7 +98,11 @@ export interface Agente {
    * na proposta, cada mensagem é interpretada como ajuste, em ordem.
    */
   mensagens(sessionId: SessionId, itens: readonly ItemLote[]): Promise<Resposta>;
-  /** Monta (ou refaz) a proposta. Só o organizador. */
+  /** Botões [Sim] / [Confirmar] do endereço. Só o organizador. Trocar o endereço descarta a proposta. */
+  confirmarEndereco(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
+  /** Botões [Outro endereço] / [Corrigir]: o organizador vai digitar o endereço no privado. Só o organizador. */
+  pedirOutroEndereco(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
+  /** Monta (ou refaz) a proposta. Só o organizador; exige endereço confirmado. */
   propor(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
   /** Botão "Outra opção": troca a proposta pela alternativa (e de volta). Só o organizador. */
   outraOpcao(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
@@ -156,8 +176,29 @@ export function criarAgente(deps: AgenteDeps): Agente {
     if (session.organizerId !== actorId) throw new NaoAutorizadoError(actorId, acao);
   }
 
-  async function salvar(record: SessionRecord, session: CoreSession, extra: Partial<SessionRecord> = {}): Promise<void> {
-    await sessions.set({ ...record, ...extra, session });
+  async function salvar(
+    record: SessionRecord,
+    session: CoreSession,
+    extra: { catalog?: SessionRecord['catalog'] | undefined; proposalCount?: number } = {},
+  ): Promise<void> {
+    const next: SessionRecord = { ...record, session, proposalCount: extra.proposalCount ?? record.proposalCount };
+    if ('catalog' in extra) {
+      if (extra.catalog) next.catalog = extra.catalog;
+      else delete next.catalog;
+    }
+    await sessions.set(next);
+  }
+
+  /** Propor/fechar sem endereço confirmado: avisa e lembra o passo pendente do endereço. */
+  function enderecoExigido(session: CoreSession, actorId: ParticipantId): Resposta {
+    return {
+      outcome: 'address_required',
+      session,
+      actions: [
+        { type: 'send_message', sessionId: session.id, participantId: actorId, text: TEXTOS_ENDERECO.exigido },
+        ...lembrarEndereco(session),
+      ],
+    };
   }
 
   return {
@@ -175,8 +216,14 @@ export function criarAgente(deps: AgenteDeps): Agente {
           });
           // O contador de propostas continua entre sessões do mesmo chat: o segundo pedido
           // do grupo gera "chat-p2", não "chat-p1" de novo (proposalId é a chave de idempotência).
-          await sessions.set({ session, proposalCount: existente?.proposalCount ?? 0 });
-          return { outcome: 'started', session, actions: [{ type: 'session_updated', session }] };
+          // Endereço: propõe o padrão (se válido) ou pede para digitar. A coleta começa já, sem esperar.
+          const endereco = await iniciarEndereco(session, deps.catalog, deps.enderecoPadrao);
+          await sessions.set({ session: endereco.session, proposalCount: existente?.proposalCount ?? 0 });
+          return {
+            outcome: 'started',
+            session: endereco.session,
+            actions: [...endereco.actions, { type: 'session_updated', session: endereco.session }],
+          };
         }),
       ),
 
@@ -185,6 +232,13 @@ export function criarAgente(deps: AgenteDeps): Agente {
         protegido(message.participantId, message.sessionId, async () => {
           const record = await ativa(message.sessionId);
           if (ehResposta(record)) return record;
+
+          // Esperando o endereço do organizador: a mensagem dele vai para a validação, nunca para a coleta.
+          if (esperandoEnderecoDe(record.session, message.participantId)) {
+            const endereco = await receberTextoEndereco(record.session, message.text, deps.catalog);
+            await salvar(record, endereco.session);
+            return { outcome: endereco.outcome, session: endereco.session, actions: endereco.actions };
+          }
 
           if (record.session.status === 'collecting') {
             const result = await coletar(record.session, message, llmDeps, displayName);
@@ -211,23 +265,41 @@ export function criarAgente(deps: AgenteDeps): Agente {
           const record = await ativa(sessionId);
           if (ehResposta(record)) return record;
 
-          if (record.session.status === 'collecting') {
-            const result = await coletarLote(record.session, itens, llmDeps);
-            await salvar(record, result.session);
-            return { outcome: 'batch', session: result.session, actions: result.actions, resultados: result.resultados };
-          }
-
-          // Na proposta, cada mensagem é um possível ajuste, em ordem.
-          const catalogo = record.catalog;
-          if (!catalogo) throw new Error(`sessão ${sessionId} em revisão sem catálogo da proposta`);
           let session = record.session;
           const actions: CoreAction[] = [];
           const resultados: { participantId: ParticipantId; outcome: string }[] = [];
-          for (const item of itens) {
-            const r = await interpretarAjuste(session, { sessionId, participantId: item.participantId, text: item.text }, catalogo, llmDeps);
-            session = r.session;
-            resultados.push({ participantId: item.participantId, outcome: r.outcome });
-            actions.push(...r.actions.filter((a) => a.type !== 'session_updated'));
+          let restantes = itens;
+
+          // Esperando o endereço do organizador: as mensagens dele no lote vão para a
+          // validação (vale a última), nunca para a coleta. As dos outros seguem normalmente.
+          const doOrganizador = itens.filter((i) => esperandoEnderecoDe(session, i.participantId));
+          const ultima = doOrganizador.at(-1);
+          if (ultima) {
+            const endereco = await receberTextoEndereco(session, ultima.text, deps.catalog);
+            session = endereco.session;
+            actions.push(...endereco.actions.filter((a) => a.type !== 'session_updated'));
+            resultados.push({ participantId: ultima.participantId, outcome: endereco.outcome });
+            restantes = itens.filter((i) => i.participantId !== ultima.participantId);
+          }
+
+          if (restantes.length > 0 && session.status === 'collecting') {
+            const result = await coletarLote(session, restantes, llmDeps);
+            session = result.session;
+            actions.push(...result.actions.filter((a) => a.type !== 'session_updated'));
+            resultados.push(...result.resultados);
+            restantes = [];
+          }
+
+          // Na proposta, cada mensagem é um possível ajuste, em ordem.
+          if (restantes.length > 0) {
+            const catalogo = record.catalog;
+            if (!catalogo) throw new Error(`sessão ${sessionId} em revisão sem catálogo da proposta`);
+            for (const item of restantes) {
+              const r = await interpretarAjuste(session, { sessionId, participantId: item.participantId, text: item.text }, catalogo, llmDeps);
+              session = r.session;
+              resultados.push({ participantId: item.participantId, outcome: r.outcome });
+              actions.push(...r.actions.filter((a) => a.type !== 'session_updated'));
+            }
           }
           if (session !== record.session) actions.push({ type: 'session_updated', session });
           await salvar(record, session);
@@ -247,12 +319,15 @@ export function criarAgente(deps: AgenteDeps): Agente {
           const record = await ativa(sessionId, actorId);
           if (ehResposta(record)) return record;
           exigirOrganizador(record.session, actorId, 'montar a proposta');
+          const endereco = enderecoConfirmado(record.session);
+          if (!endereco) return enderecoExigido(record.session, actorId);
 
           const proposalCount = record.proposalCount + 1;
           const result = await propor(record.session, {
             ...llmDeps,
             catalog: deps.catalog,
             now: now(),
+            address: endereco,
             proposalId: `${sessionId}-p${proposalCount}`,
           });
           if (!result.ok) {
@@ -273,6 +348,29 @@ export function criarAgente(deps: AgenteDeps): Agente {
             discarded: result.discarded,
             uncertain: result.uncertain,
           };
+        }),
+      ),
+
+    confirmarEndereco: (sessionId, actorId) =>
+      enfileirar(sessionId, () =>
+        protegido(actorId, sessionId, async () => {
+          const record = await ativa(sessionId, actorId);
+          if (ehResposta(record)) return record;
+          const r = confirmarEnderecoDaSessao(record.session, actorId);
+          // Endereço mudou com proposta na mesa: a proposta (e o catálogo dela) deixam de valer.
+          await salvar(record, r.session, r.proposalDiscarded ? { catalog: undefined } : {});
+          return { outcome: r.outcome, session: r.session, actions: r.actions };
+        }),
+      ),
+
+    pedirOutroEndereco: (sessionId, actorId) =>
+      enfileirar(sessionId, () =>
+        protegido(actorId, sessionId, async () => {
+          const record = await ativa(sessionId, actorId);
+          if (ehResposta(record)) return record;
+          const r = pedirOutroEnderecoDaSessao(record.session, actorId);
+          await salvar(record, r.session);
+          return { outcome: r.outcome, session: r.session, actions: r.actions };
         }),
       ),
 
@@ -326,10 +424,12 @@ export function criarAgente(deps: AgenteDeps): Agente {
           if (!proposal || !record.catalog) throw new TransicaoInvalidaError(session.status, 'closed');
 
           const momento = now();
+          const endereco = enderecoConfirmado(session);
+          if (session.status !== 'closed' && !endereco) return enderecoExigido(session, actorId);
           const catalogo =
-            session.status === 'closed'
+            session.status === 'closed' || !endereco
               ? record.catalog
-              : await atualizarCatalogo(deps.catalog, record.catalog, proposal.orders.map((o) => o.storeId), momento);
+              : await atualizarCatalogo(deps.catalog, record.catalog, proposal.orders.map((o) => o.storeId), momento, endereco);
           const result = fechar(session, actorId, momento, catalogo, {
             ...(deps.maxCatalogAgeMs !== undefined && { maxCatalogAgeMs: deps.maxCatalogAgeMs }),
           });

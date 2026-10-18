@@ -1,5 +1,5 @@
-import type { MenuItem, Store, StoreId } from '../contracts.js';
-import type { CatalogPort } from '../ports.js';
+import type { DeliveryAddress, MenuItem, Store, StoreId } from '../contracts.js';
+import type { AddressValidation, CatalogPort } from '../ports.js';
 import { StoreNotFoundError } from '../ports.js';
 
 export const LOJAS = {
@@ -56,14 +56,27 @@ const normalize = (text: string) =>
     .toLowerCase();
 
 export interface CatalogCall {
-  operation: 'searchStores' | 'getMenu';
+  operation: 'validateAddress' | 'searchStores' | 'getMenu';
   input: string;
+  /** Endereço recebido nas buscas (formatted), quando houver. */
+  address?: string;
 }
+
+/** Endereço que o fake aceita sem digitar nada (útil para testes e para o simulador). */
+export const ENDERECO_FAKE = 'Rua das Flores, 123 - Centro, São Paulo - SP';
+
+const PREPOSICOES = new Set(['da', 'das', 'de', 'do', 'dos', 'e']);
 
 /**
  * Catálogo em memória para testes e simulação. Cenários: hamburgueria com item
  * indisponível, doceria com pedido mínimo alto, padaria com lanche e bolo de
  * cenoura, restaurante vegetariano com entrega grátis e japonês fechado.
+ *
+ * validateAddress (regras previsíveis, para testes):
+ * - sem número ou com menos de 10 letras → "incomplete";
+ * - cita "inexistente" → "not_found";
+ * - cita uma cidade fora de SP (Manaus, Recife, Porto Alegre) → "out_of_area";
+ * - senão, aceita e normaliza (espaços e capitalização).
  */
 export class CatalogoFake implements CatalogPort {
   /** Chamadas recebidas, na ordem, para os testes conferirem o uso da porta. */
@@ -73,8 +86,22 @@ export class CatalogoFake implements CatalogPort {
     private readonly data: { stores: readonly Store[]; menuItems: readonly MenuItem[] } = { stores, menuItems },
   ) {}
 
-  async searchStores(query: string): Promise<Store[]> {
-    this.calls.push({ operation: 'searchStores', input: query });
+  async validateAddress(text: string): Promise<AddressValidation> {
+    this.calls.push({ operation: 'validateAddress', input: text });
+    const limpo = text.trim().replace(/\s+/g, ' ');
+    const n = normalize(limpo);
+    if (!/\d/.test(limpo) || limpo.replace(/[^\p{L}]/gu, '').length < 10) return { ok: false, reason: 'incomplete' };
+    if (n.includes('inexistente')) return { ok: false, reason: 'not_found' };
+    if (/manaus|recife|porto alegre/.test(n)) return { ok: false, reason: 'out_of_area' };
+    // Maiúscula no começo de cada palavra, menos preposições ("Rua das Flores").
+    const formatted = limpo.replace(/\p{L}+/gu, (palavra, posicao: number) =>
+      posicao > 0 && PREPOSICOES.has(palavra.toLowerCase()) ? palavra.toLowerCase() : palavra[0]?.toUpperCase() + palavra.slice(1),
+    );
+    return { ok: true, address: { formatted, id: `addr-${n.replace(/[^a-z0-9]+/g, '-').slice(0, 40)}` } };
+  }
+
+  async searchStores(query: string, address?: DeliveryAddress): Promise<Store[]> {
+    this.calls.push({ operation: 'searchStores', input: query, ...(address && { address: address.formatted }) });
     const terms = normalize(query).split(/\s+/).filter(Boolean);
 
     return this.data.stores
@@ -87,8 +114,8 @@ export class CatalogoFake implements CatalogPort {
       .map((store) => structuredClone(store));
   }
 
-  async getMenu(storeId: StoreId): Promise<MenuItem[]> {
-    this.calls.push({ operation: 'getMenu', input: storeId });
+  async getMenu(storeId: StoreId, address?: DeliveryAddress): Promise<MenuItem[]> {
+    this.calls.push({ operation: 'getMenu', input: storeId, ...(address && { address: address.formatted }) });
     if (!this.data.stores.some((s) => s.id === storeId)) {
       throw new StoreNotFoundError(storeId);
     }

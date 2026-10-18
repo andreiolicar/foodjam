@@ -1,6 +1,6 @@
 import { buscarCandidatas } from './catalogo.js';
 import { MAX_ITENS_POR_PESSOA } from './coleta.js';
-import type { CoreAction, MenuItem, MenuItemId, Participant, ParticipantId, Proposal, ProposedItem, StoreId } from './contracts.js';
+import type { CoreAction, DeliveryAddress, MenuItem, MenuItemId, Participant, ParticipantId, Proposal, ProposedItem, StoreId } from './contracts.js';
 import type { LlmCallRecord } from './llm.js';
 import { LlmSaidaInvalidaError, gerarEstruturado } from './llm.js';
 import type { CatalogPort, LlmPort } from './ports.js';
@@ -33,6 +33,8 @@ export interface PropostaDeps {
   llm: LlmPort;
   /** ISO 8601 da consulta ao catálogo. */
   now: string;
+  /** Endereço confirmado: as buscas de lojas e cardápios dependem dele. */
+  address: DeliveryAddress;
   /** Id da nova proposta, gerado por quem chama. A alternativa recebe o sufixo "-b". */
   proposalId: string;
   registrar?: (record: LlmCallRecord) => void;
@@ -109,7 +111,7 @@ export async function propor(session: CoreSession, deps: PropostaDeps): Promise<
   }
   if (session.participants.length === 0) return { ok: false, reason: 'no_participants' };
 
-  const catalog = await buscarCandidatas(deps.catalog, session.participants, deps.now);
+  const catalog = await buscarCandidatas(deps.catalog, session.participants, deps.now, deps.address);
   const pessoas: PessoaPrompt[] = session.participants
     .map((participant) => ({ participant, desejos: desejosDe(participant), itensPermitidos: itensElegiveis(participant, catalog) }))
     .filter((p) => p.itensPermitidos.length > 0);

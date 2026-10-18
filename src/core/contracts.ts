@@ -63,7 +63,34 @@ export type CoreAction =
   | {
       type: 'session_updated';
       session: SessionState;
+    }
+  | {
+      /** Pedir ao organizador, no privado, que digite o endereço de entrega. */
+      type: 'request_address';
+      sessionId: SessionId;
+      participantId: ParticipantId;
+      text: string;
+    }
+  | {
+      /**
+       * Pedir ao organizador, no privado, que confirme o endereço, com botões:
+       * kind "default" → [Sim] [Outro endereço]; kind "typed" → [Confirmar] [Corrigir].
+       */
+      type: 'confirm_address';
+      sessionId: SessionId;
+      participantId: ParticipantId;
+      address: DeliveryAddress;
+      kind: 'default' | 'typed';
+      text: string;
     };
+
+/** Endereço de entrega já validado e normalizado pelo iFood. */
+export interface DeliveryAddress {
+  /** Texto normalizado devolvido pelo iFood (para mostrar e para as buscas). */
+  formatted: string;
+  /** Identificador opaco do endereço no iFood, se houver. */
+  id?: string;
+}
 
 /** Identificadores opacos de catálogo; o módulo iFood faz o mapeamento. */
 export type StoreId = string;
@@ -154,6 +181,8 @@ export interface AuthorizedOrder {
   sessionId: SessionId;
   proposalId: string;
   authorization: OrderAuthorization;
+  /** Endereço confirmado pelo organizador; é para onde todos os pedidos vão. */
+  deliveryAddress: DeliveryAddress;
   orders: StoreOrder[];
   split: Split;
 }

@@ -1,4 +1,4 @@
-import type { MenuItem, Participant, Store, StoreId } from './contracts.js';
+import type { DeliveryAddress, MenuItem, Participant, Store, StoreId } from './contracts.js';
 import type { CatalogPort } from './ports.js';
 import { normalizar } from './regras/elegibilidade.js';
 import type { CatalogSnapshot, TimedCatalogSnapshot } from './regras/validar-escolhas.js';
@@ -37,6 +37,7 @@ export async function buscarCandidatas(
   port: CatalogPort,
   participants: readonly Participant[],
   now: string,
+  address: DeliveryAddress,
 ): Promise<TimedCatalogSnapshot> {
   const hits = new Map<StoreId, { store: Store; count: number }>();
   const registrar = (stores: Store[], conta: number) => {
@@ -48,17 +49,17 @@ export async function buscarCandidatas(
   };
 
   for (const termo of termosDeBusca(participants)) {
-    registrar(await port.searchStores(termo), 1);
+    registrar(await port.searchStores(termo, address), 1);
   }
   if (hits.size === 0) {
-    registrar(await port.searchStores(''), 0);
+    registrar(await port.searchStores('', address), 0);
   }
 
   const stores = [...hits.values()]
     .sort((a, b) => b.count - a.count)
     .slice(0, MAX_CANDIDATE_STORES)
     .map((h) => h.store);
-  const menuItems: MenuItem[] = (await Promise.all(stores.map((s) => port.getMenu(s.id)))).flat();
+  const menuItems: MenuItem[] = (await Promise.all(stores.map((s) => port.getMenu(s.id, address)))).flat();
   return { stores, menuItems, fetchedAt: now };
 }
 
@@ -72,14 +73,15 @@ export async function atualizarCatalogo(
   snapshot: CatalogSnapshot,
   storeIds: readonly StoreId[],
   now: string,
+  address: DeliveryAddress,
 ): Promise<TimedCatalogSnapshot> {
   const stores: Store[] = [];
   for (const id of new Set(storeIds)) {
     const antiga = snapshot.stores.find((s) => s.id === id);
     if (!antiga) continue;
-    const atual = (await port.searchStores(antiga.name)).find((s) => s.id === id);
+    const atual = (await port.searchStores(antiga.name, address)).find((s) => s.id === id);
     if (atual) stores.push(atual);
   }
-  const menuItems = (await Promise.all(stores.map((s) => port.getMenu(s.id)))).flat();
+  const menuItems = (await Promise.all(stores.map((s) => port.getMenu(s.id, address)))).flat();
   return { stores, menuItems, fetchedAt: now };
 }

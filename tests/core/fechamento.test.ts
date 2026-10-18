@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fechar } from '../../src/core/fechamento.js';
 import { NaoAutorizadoError, TransicaoInvalidaError } from '../../src/core/sessao.js';
-import { AGORA, LOJAS, ORG, alterarCatalogo, cenarioPadaria } from './fixtures.js';
+import { AGORA, ENDERECO, LOJAS, ORG, alterarCatalogo, cenarioPadaria } from './fixtures.js';
 
 describe('fechar', () => {
   it('organizador fecha e recebe pedidos por loja, rateio e a autorização', async () => {
@@ -15,6 +15,7 @@ describe('fechar', () => {
       sessionId: 's1',
       proposalId: 'p1',
       authorization: { proposalId: 'p1', authorizedBy: ORG, authorizedAt: AGORA },
+      deliveryAddress: ENDERECO,
       orders: confirmacao.proposal?.orders,
       split: confirmacao.proposal?.split,
     });

@@ -17,6 +17,8 @@ export type ProblemaProposta =
   | { code: 'split_mismatch' }
   | { code: 'over_budget'; participantId: ParticipantId }
   | { code: 'stale_catalog'; fetchedAt: string; maxAgeMs: number }
+  /** Fechamento sem endereço de entrega confirmado pelo organizador. */
+  | { code: 'address_not_confirmed' }
   /** Ajuste: a pessoa tem vários itens e não ficou claro qual trocar. */
   | { code: 'which_item'; participantId: ParticipantId; menuItemIds: MenuItemId[] };
 

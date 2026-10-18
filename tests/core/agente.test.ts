@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgenteDeps } from '../../src/core/agente.js';
 import { TEXTOS, criarAgente } from '../../src/core/agente.js';
 import type { IncomingMessage } from '../../src/core/contracts.js';
-import { CatalogoFake } from '../../src/core/fakes/catalogo-fake.js';
+import { CatalogoFake, ENDERECO_FAKE } from '../../src/core/fakes/catalogo-fake.js';
 import { FakeLlm, responderHeuristico } from '../../src/core/fakes/llm-fake.js';
 import * as publico from '../../src/core/index.js';
 import type { CatalogPort, LlmPort } from '../../src/core/ports.js';
@@ -13,6 +13,12 @@ const CHAT = 'chat-1';
 const ORG = { id: 'ana', displayName: 'Ana' };
 const msg = (participantId: string, text: string): IncomingMessage => ({ sessionId: CHAT, participantId, text });
 
+/** Inicia a sessão do CHAT e confirma o endereço padrão (propor e fechar exigem). */
+async function abrir(iris: ReturnType<typeof criarAgente>) {
+  await iris.iniciar(CHAT, ORG);
+  await iris.confirmarEndereco(CHAT, ORG.id);
+}
+
 function agente(extra: Partial<AgenteDeps> = {}) {
   const sessions = new SessoesEmMemoria();
   const iris = criarAgente({
@@ -20,6 +26,7 @@ function agente(extra: Partial<AgenteDeps> = {}) {
     llm: new FakeLlm(responderHeuristico),
     sessions,
     now: () => AGORA,
+    enderecoPadrao: ENDERECO_FAKE,
     ...extra,
   });
   return { iris, sessions };
@@ -28,7 +35,7 @@ function agente(extra: Partial<AgenteDeps> = {}) {
 /** Grupo com preferências e uma proposta pronta. */
 async function comProposta() {
   const ctx = agente();
-  await ctx.iris.iniciar(CHAT, ORG);
+  await abrir(ctx.iris);
   await ctx.iris.mensagem(msg('ana', 'quero um lanche'));
   await ctx.iris.mensagem(msg('bia', 'bolo de cenoura'), 'Bia');
   const proposta = await ctx.iris.propor(CHAT, 'ana');
@@ -65,7 +72,7 @@ describe('agente: iniciar', () => {
 
   it('não reabre por cima de uma sessão ativa', async () => {
     const { iris } = agente();
-    await iris.iniciar(CHAT, ORG);
+    await abrir(iris);
     const r = await iris.iniciar(CHAT, { id: 'bia', displayName: 'Bia' });
     expect(r.outcome).toBe('already_active');
     expect(r.session?.organizerId).toBe('ana');
@@ -73,7 +80,7 @@ describe('agente: iniciar', () => {
 
   it('depois de encerrada, uma nova menção começa outra sessão', async () => {
     const { iris } = agente();
-    await iris.iniciar(CHAT, ORG);
+    await abrir(iris);
     await iris.cancelar(CHAT, 'ana');
     const r = await iris.iniciar(CHAT, { id: 'bia', displayName: 'Bia' });
     expect(r.outcome).toBe('started');
@@ -84,7 +91,7 @@ describe('agente: iniciar', () => {
 describe('agente: mensagens', () => {
   it('na coleta, registra preferência de quem chegou depois', async () => {
     const { iris } = agente();
-    await iris.iniciar(CHAT, ORG);
+    await abrir(iris);
     const r = await iris.mensagem(msg('pedro', 'bora de hambúrguer'), 'Pedro');
     expect(r.outcome).toBe('preference_updated');
     expect(r.session?.participants.map((p) => p.displayName)).toEqual(['Ana', 'Pedro']);
@@ -100,7 +107,7 @@ describe('agente: mensagens', () => {
 
   it('sessão encerrada não aceita mensagens', async () => {
     const { iris } = agente();
-    await iris.iniciar(CHAT, ORG);
+    await abrir(iris);
     await iris.cancelar(CHAT, 'ana');
     expect((await iris.mensagem(msg('bia', 'quero pizza'))).outcome).toBe('session_finished');
   });
@@ -113,7 +120,7 @@ describe('agente: mensagens', () => {
       },
     };
     const { iris } = agente({ llm: lento });
-    await iris.iniciar(CHAT, ORG);
+    await abrir(iris);
 
     await Promise.all([
       iris.mensagem(msg('bia', 'quero pizza'), 'Bia'),
@@ -177,7 +184,7 @@ describe('agente: proposta e fechamento', () => {
 
   it('fechar sem proposta → invalid_state', async () => {
     const { iris } = agente();
-    await iris.iniciar(CHAT, ORG);
+    await abrir(iris);
     expect((await iris.fechar(CHAT, 'ana')).outcome).toBe('invalid_state');
   });
 
@@ -189,6 +196,7 @@ describe('agente: proposta e fechamento', () => {
     // ...e, na hora de fechar, as lojas aparecem fechadas.
     const port = new CatalogoFake();
     const lojasFechadas: CatalogPort = {
+      validateAddress: (t) => port.validateAddress(t),
       searchStores: async (q) => (await port.searchStores(q)).map((s) => ({ ...s, isOpen: false })),
       getMenu: (id) => port.getMenu(id),
     };
@@ -204,13 +212,14 @@ describe('agente: proposta e fechamento', () => {
   it('erro inesperado (rede do catálogo) vira outcome "error" e é reportado', async () => {
     const erros: unknown[] = [];
     const quebrado: CatalogPort = {
+      validateAddress: (t) => new CatalogoFake().validateAddress(t),
       searchStores: async () => {
         throw new Error('ECONNRESET');
       },
       getMenu: async () => [],
     };
     const { iris } = agente({ catalog: quebrado, onError: (e) => erros.push(e) });
-    await iris.iniciar(CHAT, ORG);
+    await abrir(iris);
     await iris.mensagem(msg('ana', 'quero lanche'));
 
     const r = await iris.propor(CHAT, 'ana');
@@ -232,7 +241,7 @@ describe('API pública (src/core/index.ts)', () => {
 describe('agente: outra opção', () => {
   it('propor devolve a alternativa; outraOpcao troca e troca de volta; só o organizador', async () => {
     const { iris } = agente();
-    await iris.iniciar(CHAT, ORG);
+    await abrir(iris);
     await iris.mensagens(CHAT, [
       { participantId: 'ana', text: 'bora de hambúrguer' },
       { participantId: 'caio', text: 'algo leve, sou vegetariano' },
@@ -251,7 +260,7 @@ describe('agente: outra opção', () => {
 
   it('sem alternativa: no_alternative com aviso privado', async () => {
     const { iris } = agente();
-    await iris.iniciar(CHAT, ORG);
+    await abrir(iris);
     expect((await iris.outraOpcao(CHAT, 'ana')).outcome).toBe('no_alternative');
   });
 });
@@ -259,17 +268,174 @@ describe('agente: outra opção', () => {
 describe('agente: ids de proposta únicos por chat', () => {
   it('o segundo pedido do mesmo grupo não repete o proposalId do primeiro', async () => {
     const { iris } = agente();
-    await iris.iniciar(CHAT, ORG);
+    await abrir(iris);
     await iris.mensagem(msg('ana', 'quero um lanche'));
     const primeiro = await iris.propor(CHAT, 'ana');
     await iris.fechar(CHAT, 'ana');
 
-    await iris.iniciar(CHAT, ORG);
+    await abrir(iris);
     await iris.mensagem(msg('ana', 'quero um lanche'));
     const segundo = await iris.propor(CHAT, 'ana');
 
     expect(primeiro.proposal?.id).toBe(`${CHAT}-p1`);
     expect(segundo.proposal?.id).toBe(`${CHAT}-p2`);
     expect((await iris.fechar(CHAT, 'ana')).order?.proposalId).toBe(`${CHAT}-p2`);
+  });
+});
+
+describe('agente: endereço de entrega', () => {
+  const tiposDe = (r: { actions: { type: string }[] }) => r.actions.map((a) => a.type);
+  const confirmacaoDe = (r: { actions: { type: string }[] }) =>
+    r.actions.find((a) => a.type === 'confirm_address') as { kind: string; address: { formatted: string }; participantId: string } | undefined;
+
+  it('endereço padrão: ao iniciar pergunta [Sim] [Outro endereço]; o organizador confirma; o pedido leva o endereço', async () => {
+    const { iris } = agente();
+    const inicio = await iris.iniciar(CHAT, ORG);
+    expect(confirmacaoDe(inicio)).toMatchObject({ kind: 'default', participantId: 'ana', address: { formatted: ENDERECO_FAKE } });
+
+    const confirmado = await iris.confirmarEndereco(CHAT, 'ana');
+    expect(confirmado.outcome).toBe('address_confirmed');
+    expect(confirmado.session?.address).toMatchObject({ status: 'confirmed', confirmed: { formatted: ENDERECO_FAKE } });
+
+    await iris.mensagem(msg('ana', 'quero um lanche'));
+    expect((await iris.propor(CHAT, 'ana')).outcome).toBe('proposed');
+    expect((await iris.fechar(CHAT, 'ana')).order?.deliveryAddress.formatted).toBe(ENDERECO_FAKE);
+  });
+
+  it('sem endereço padrão, pede para o organizador digitar (no privado)', async () => {
+    const sessions = new SessoesEmMemoria();
+    const iris = criarAgente({ catalog: new CatalogoFake(), llm: new FakeLlm([]), sessions, now: () => AGORA });
+    const inicio = await iris.iniciar(CHAT, ORG);
+    expect(inicio.actions[0]).toMatchObject({ type: 'request_address', participantId: 'ana' });
+    expect(inicio.session?.address?.status).toBe('awaiting_text');
+  });
+
+  it('endereço digitado: [Outro endereço] → organizador digita → validado → [Confirmar] → confirmado', async () => {
+    const llm = new FakeLlm([]);
+    const { iris } = agente({ llm });
+    await iris.iniciar(CHAT, ORG);
+
+    const pedido = await iris.pedirOutroEndereco(CHAT, 'ana');
+    expect(tiposDe(pedido)).toEqual(['request_address']);
+
+    const digitado = await iris.mensagem(msg('ana', 'av   paulista, 1000 - bela vista, são paulo'));
+    expect(digitado.outcome).toBe('address_typed_proposed');
+    expect(confirmacaoDe(digitado)).toMatchObject({ kind: 'typed', address: { formatted: 'Av Paulista, 1000 - Bela Vista, São Paulo' } });
+
+    const confirmado = await iris.confirmarEndereco(CHAT, 'ana');
+    expect(confirmado.session?.address?.confirmed?.formatted).toBe('Av Paulista, 1000 - Bela Vista, São Paulo');
+    expect(llm.requests).toHaveLength(0); // o modelo não participa
+  });
+
+  it('erro de validação: avisa o motivo no privado e aceita nova tentativa', async () => {
+    const { iris } = agente();
+    await iris.iniciar(CHAT, ORG);
+    await iris.pedirOutroEndereco(CHAT, 'ana');
+
+    const incompleto = await iris.mensagem(msg('ana', 'rua das flores'));
+    expect(incompleto.outcome).toBe('address_invalid');
+    expect(incompleto.actions).toEqual([
+      {
+        type: 'send_message',
+        sessionId: CHAT,
+        participantId: 'ana',
+        text: 'O endereço está incompleto: informe rua, número, bairro e cidade. Pode digitar de novo?',
+      },
+    ]);
+    expect((await iris.mensagem(msg('ana', 'Rua A, 10 - Centro, Manaus'))).outcome).toBe('address_invalid');
+    expect((await iris.mensagem(msg('ana', 'Rua Inexistente, 1 - Lugar Nenhum'))).outcome).toBe('address_invalid');
+
+    const valido = await iris.mensagem(msg('ana', 'Rua das Flores, 123 - Centro, São Paulo'));
+    expect(valido.outcome).toBe('address_typed_proposed');
+  });
+
+  it('mensagem de endereço do organizador não entra na coleta; a dos outros entra', async () => {
+    const { iris } = agente();
+    await iris.iniciar(CHAT, ORG);
+    await iris.pedirOutroEndereco(CHAT, 'ana');
+
+    const endereco = await iris.mensagem(msg('ana', 'Rua das Flores, 123 - Centro, São Paulo'));
+    expect(endereco.outcome).toBe('address_typed_proposed');
+    expect(endereco.session?.participants.find((p) => p.id === 'ana')?.preferences).toEqual({});
+
+    expect((await iris.mensagem(msg('bia', 'quero pizza'), 'Bia')).outcome).toBe('preference_updated');
+  });
+
+  it('no lote, a mensagem do organizador vai para o endereço e as dos outros para a coleta (1 chamada ao modelo)', async () => {
+    const llm = new FakeLlm(responderHeuristico);
+    const { iris } = agente({ llm });
+    await iris.iniciar(CHAT, ORG);
+    await iris.pedirOutroEndereco(CHAT, 'ana');
+
+    const r = await iris.mensagens(CHAT, [
+      { participantId: 'bia', text: 'quero pizza' },
+      { participantId: 'ana', text: 'Rua das Flores, 123 - Centro, São Paulo' },
+      { participantId: 'caio', text: 'sou vegetariano' },
+    ]);
+    expect(r.resultados).toEqual(
+      expect.arrayContaining([
+        { participantId: 'ana', outcome: 'address_typed_proposed' },
+        { participantId: 'bia', outcome: 'preference_updated' },
+        { participantId: 'caio', outcome: 'preference_updated' },
+      ]),
+    );
+    expect(llm.requests).toHaveLength(1);
+    expect(r.session?.participants.find((p) => p.id === 'ana')?.preferences).toEqual({});
+  });
+
+  it('propor exige endereço confirmado; o core lembra o passo pendente', async () => {
+    const { iris } = agente();
+    await iris.iniciar(CHAT, ORG);
+    await iris.mensagem(msg('ana', 'quero um lanche'));
+
+    const semEndereco = await iris.propor(CHAT, 'ana');
+    expect(semEndereco.outcome).toBe('address_required');
+    expect(tiposDe(semEndereco)).toEqual(['send_message', 'confirm_address']);
+  });
+
+  it('só o organizador confirma ou troca o endereço', async () => {
+    const { iris } = agente();
+    await iris.iniciar(CHAT, ORG);
+    expect((await iris.confirmarEndereco(CHAT, 'bia')).outcome).toBe('not_authorized');
+    expect((await iris.pedirOutroEndereco(CHAT, 'bia')).outcome).toBe('not_authorized');
+    expect((await iris.obter(CHAT))?.address?.status).toBe('pending_confirmation');
+  });
+
+  it('trocar o endereço depois da proposta descarta a proposta; a nova busca usa o endereço novo', async () => {
+    const catalog = new CatalogoFake();
+    const { iris } = agente({ catalog });
+    await abrir(iris);
+    await iris.mensagem(msg('ana', 'quero um lanche'));
+    expect((await iris.propor(CHAT, 'ana')).outcome).toBe('proposed');
+
+    await iris.pedirOutroEndereco(CHAT, 'ana');
+    // Durante a troca, não dá para fechar com o endereço antigo.
+    expect((await iris.fechar(CHAT, 'ana')).outcome).toBe('address_required');
+
+    await iris.mensagem(msg('ana', 'Av Paulista, 1000 - Bela Vista, São Paulo'));
+    const confirmado = await iris.confirmarEndereco(CHAT, 'ana');
+    expect(confirmado.session?.status).toBe('collecting');
+    expect(confirmado.session?.proposal).toBeUndefined();
+    expect(confirmado.actions).toContainEqual({
+      type: 'send_message',
+      sessionId: CHAT,
+      text: 'O endereço de entrega mudou; a proposta anterior foi descartada. Monte uma nova quando quiser.',
+    });
+
+    catalog.calls.length = 0;
+    expect((await iris.propor(CHAT, 'ana')).outcome).toBe('proposed');
+    expect(catalog.calls.every((c) => c.address === 'Av Paulista, 1000 - Bela Vista, São Paulo')).toBe(true);
+  });
+
+  it('confirmar o mesmo endereço de novo não descarta a proposta', async () => {
+    const { iris } = agente();
+    await abrir(iris);
+    await iris.mensagem(msg('ana', 'quero um lanche'));
+    await iris.propor(CHAT, 'ana');
+    await iris.pedirOutroEndereco(CHAT, 'ana');
+    await iris.mensagem(msg('ana', ENDERECO_FAKE));
+    const r = await iris.confirmarEndereco(CHAT, 'ana');
+    expect(r.session?.proposal).toBeDefined();
+    expect(r.session?.status).toBe('reviewing');
   });
 });

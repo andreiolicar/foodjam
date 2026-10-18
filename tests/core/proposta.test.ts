@@ -8,7 +8,7 @@ import type { PropostaDeps } from '../../src/core/proposta.js';
 import { desejosDe, propor } from '../../src/core/proposta.js';
 import type { CoreSession } from '../../src/core/sessao.js';
 import { TransicaoInvalidaError, cancelar, criarSessao } from '../../src/core/sessao.js';
-import { AGORA } from './fixtures.js';
+import { AGORA, ENDERECO } from './fixtures.js';
 
 const pessoa = (id: string, preferences: ParticipantPreferences = {}): Participant => ({ id, displayName: id, preferences });
 const sessao = (...participants: Participant[]): CoreSession =>
@@ -37,7 +37,7 @@ function llmCom(classes: Classes | (() => unknown), justificativa: string | Erro
 }
 
 function deps(llm: FakeLlm, extra: Partial<PropostaDeps> = {}): PropostaDeps {
-  return { catalog: new CatalogoFake(), llm, now: AGORA, proposalId: 'p1', ...extra };
+  return { catalog: new CatalogoFake(), llm, now: AGORA, address: ENDERECO, proposalId: 'p1', ...extra };
 }
 
 async function proporOk(session: CoreSession, llm: FakeLlm) {

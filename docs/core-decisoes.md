@@ -19,6 +19,7 @@ Registro do que foi decidido no core, por quê, e o que foi medido. Base para o 
 
 - **Critério de escolha da proposta:** mais pessoas atendidas com o que pediram > menos desejos sem item > menos substitutos > menos lojas > substituto da mesma categoria do desejo > mais pessoas com o total (itens + entrega) dentro do orçamento > menor total. O critério "menos desejos sem item" impede que deixar alguém sem nada vença dar um substituto.
 - **Orçamento vale para a soma dos itens:** "até 30 reais" limita a soma dos itens da pessoa (é como o iFood mostra os preços): o filtro de itens e a validação usam essa soma. A parte da entrega aparece no rateio, mas não tira ninguém do pedido; ela só entra no desempate. Exemplo: X-Salada (R$ 25,90) sozinho na hamburgueria com "até 30 reais" fica no pedido, mesmo pagando R$ 33,89 com a entrega; um item de R$ 31 continua barrado.
+- **Endereço de entrega:** o iFood busca lojas e cardápios por endereço, então todo pedido exige endereço **confirmado pelo organizador**. Ao iniciar, o core oferece o endereço padrão ([Sim] [Outro endereço]) ou pede que o organizador digite no privado; o texto é validado pela porta do iFood (`validateAddress`: normalizado ou motivo do erro) e confirmado com [Confirmar] [Corrigir]. Enquanto espera o endereço, a mensagem do organizador vai para a validação, nunca para a coleta. A coleta não espera; propor e fechar exigem endereço; trocar o endereço descarta a proposta. O modelo não participa. Guia do módulo iFood: `docs/integracao-ifood.md`.
 
 ## Guardrails
 

@@ -11,8 +11,8 @@ import { stdin, stdout } from 'node:process';
 import { interpretarAjuste } from '../src/core/ajuste.js';
 import { atualizarCatalogo } from '../src/core/catalogo.js';
 import { coletar } from '../src/core/coleta.js';
-import type { CoreAction, MoneyCents, Proposal } from '../src/core/contracts.js';
-import { CatalogoFake } from '../src/core/fakes/catalogo-fake.js';
+import type { CoreAction, DeliveryAddress, MoneyCents, Proposal } from '../src/core/contracts.js';
+import { CatalogoFake, ENDERECO_FAKE } from '../src/core/fakes/catalogo-fake.js';
 import { FakeLlm, responderHeuristico } from '../src/core/fakes/llm-fake.js';
 import { fechar } from '../src/core/fechamento.js';
 import type { LlmCallRecord } from '../src/core/llm.js';
@@ -30,6 +30,7 @@ const AJUDA = `Comandos:
   /propor             monta a proposta com o catálogo fake
   /ajustar Nome: msg  pede ajuste em texto (ex.: /ajustar Caio: troca o meu por um café)
   /fechar [Nome]      organizador autoriza e fecha (informe outro nome para testar a recusa)
+  /endereco texto     valida e troca o endereço de entrega (descarta a proposta)
   /outra              troca pela outra opção (e de volta)
   /voltar             volta da proposta para a coleta
   /sessao             mostra a sessão
@@ -62,6 +63,10 @@ let sessao: CoreSession = criarSessao({
   organizerId: idDe(organizador),
   participants: [{ id: idDe(organizador), displayName: organizador, preferences: {} }],
 });
+// Endereço de entrega: começa com o endereço aceito pelo fake.
+const validacaoInicial = await catalogo.validateAddress(ENDERECO_FAKE);
+if (!validacaoInicial.ok) throw new Error('endereço padrão do fake inválido');
+let endereco: DeliveryAddress = validacaoInicial.address;
 let catalogoProposta: TimedCatalogSnapshot | undefined;
 let numeroProposta = 0;
 
@@ -128,6 +133,8 @@ function mostrarAcoes(actions: CoreAction[]): void {
   for (const action of actions) {
     if (action.type === 'send_message') {
       console.log(`  [Íris → ${action.participantId ? nomeDe(action.participantId) : 'grupo'}] ${action.text}`);
+    } else if (action.type === 'request_address' || action.type === 'confirm_address') {
+      console.log(`  [Íris → ${nomeDe(action.participantId)}, privado] ${action.text}`);
     } else {
       console.log('  [sessão atualizada]');
     }
@@ -190,6 +197,18 @@ async function executar(linha: string): Promise<boolean> {
       sessao = cancelar(sessao, sessao.organizerId);
       console.log('  sessão cancelada');
       return true;
+    case '/endereco': {
+      // Valida pela porta (fake) e já considera confirmado; no bot, o organizador confirma por botão.
+      const validacao = await catalogo.validateAddress(argumento);
+      if (!validacao.ok) {
+        console.log(`  endereço recusado: ${validacao.reason}`);
+        return true;
+      }
+      endereco = validacao.address;
+      console.log(`  endereço: ${endereco.formatted}${sessao.proposal ? ' (proposta atual descartada; use /propor)' : ''}`);
+      if (sessao.proposal && (sessao.status === 'reviewing' || sessao.status === 'awaiting_confirmation')) sessao = voltarParaColeta(sessao);
+      return true;
+    }
     case '/outra':
       if (!sessao.alternative) {
         console.log('  não há outra opção');
@@ -205,7 +224,7 @@ async function executar(linha: string): Promise<boolean> {
     case '/propor': {
       const usosAntes = usos().length;
       const inicio = performance.now();
-      const result = await propor(sessao, { catalog: catalogo, llm, now: agora(), proposalId: `p${++numeroProposta}`, registrar });
+      const result = await propor(sessao, { catalog: catalogo, llm, now: agora(), address: endereco, proposalId: `p${++numeroProposta}`, registrar });
       console.log(`  (proposta em ${Math.round(performance.now() - inicio)} ms)`);
       mostrarTokens(usosAntes);
       if (result.catalog) catalogoProposta = result.catalog;
@@ -245,7 +264,7 @@ async function executar(linha: string): Promise<boolean> {
       if (sessao.status === 'reviewing') sessao = pedirConfirmacao(sessao);
       const now = agora();
       const storeIds = proposta.orders.map((o) => o.storeId);
-      const atualizado = await atualizarCatalogo(catalogo, catalogoProposta, storeIds, now);
+      const atualizado = await atualizarCatalogo(catalogo, catalogoProposta, storeIds, now, endereco);
       const result = fechar(sessao, ator, now, atualizado);
       if (!result.ok) {
         console.log('  não foi possível fechar:');
@@ -288,7 +307,10 @@ async function executar(linha: string): Promise<boolean> {
 }
 
 const modo = usaModeloReal ? `modelo real (${process.env.AI_MODEL ?? '?'})` : 'modelo fake heurístico (sem AI_API_KEY)';
-console.log(`FoodJam · simulador · catálogo fake · ${modo}. Organizador: ${organizador}.\n${AJUDA}\n`);
+console.log(`FoodJam · simulador · catálogo fake · ${modo}. Organizador: ${organizador}.
+Endereço de entrega: ${endereco.formatted} (troque com /endereco).
+${AJUDA}
+`);
 const rl = createInterface({ input: stdin, output: stdout, prompt: '> ' });
 // Fila própria: as linhas são lidas assim que chegam (colar várias ou usar pipe
 // funciona) e processadas em ordem, mesmo depois de a entrada fechar.

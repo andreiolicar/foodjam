@@ -2,6 +2,7 @@ import type { AuthorizedOrder, CoreAction, ParticipantId } from './contracts.js'
 import type { TimedCatalogSnapshot } from './regras/validar-escolhas.js';
 import type { ProblemaProposta } from './regras/verificar-proposta.js';
 import { verificarProposta } from './regras/verificar-proposta.js';
+import { enderecoConfirmado } from './endereco.js';
 import type { Closure, CoreSession } from './sessao.js';
 import { NaoAutorizadoError, TransicaoInvalidaError, confirmar } from './sessao.js';
 
@@ -47,6 +48,9 @@ export function fechar(
     throw new TransicaoInvalidaError(session.status, 'closed');
   }
 
+  // O pedido precisa de endereço confirmado pelo organizador (é para onde tudo vai).
+  if (!enderecoConfirmado(session)) return { ok: false, problems: [{ code: 'address_not_confirmed' }] };
+
   const maxAgeMs = options.maxCatalogAgeMs ?? MAX_CATALOG_AGE_MS;
   const ageMs = Date.parse(now) - Date.parse(catalog.fetchedAt);
   // NaN (data inválida) ou idade negativa (consulta "no futuro") também são recusados.
@@ -70,13 +74,15 @@ export function fechar(
 /** Cópia dos dados, para o backend não alterar o estado da sessão por acidente. */
 function pedidoAutorizado(session: CoreSession, closure: Closure): AuthorizedOrder {
   const proposal = session.proposal;
-  if (!proposal || proposal.id !== closure.proposalId) {
+  const deliveryAddress = session.address?.confirmed;
+  if (!proposal || proposal.id !== closure.proposalId || !deliveryAddress) {
     throw new Error(`fechamento aponta para a proposta ${closure.proposalId}, que não é a atual`);
   }
   return structuredClone({
     sessionId: session.id,
     proposalId: proposal.id,
     authorization: closure,
+    deliveryAddress,
     orders: proposal.orders,
     split: proposal.split,
   });

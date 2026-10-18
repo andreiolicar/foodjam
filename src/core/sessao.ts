@@ -1,4 +1,4 @@
-import type { OrderAuthorization, ParticipantId, Proposal, SessionState, SessionStatus } from './contracts.js';
+import type { DeliveryAddress, OrderAuthorization, ParticipantId, Proposal, SessionState, SessionStatus } from './contracts.js';
 
 /** Autorização de compra registrada uma única vez, no fechamento. O horário vem de quem chama. */
 export type Closure = OrderAuthorization;
@@ -9,8 +9,25 @@ export interface PendingQuestion {
   text: string;
 }
 
+/**
+ * Endereço de entrega da sessão, que corre em paralelo à coleta:
+ * - awaiting_text: esperando o organizador digitar (no privado);
+ * - pending_confirmation: há um candidato (padrão ou digitado) esperando [Sim]/[Confirmar];
+ * - confirmed: vale para as buscas, a proposta e o pedido.
+ */
+export interface EnderecoSessao {
+  status: 'awaiting_text' | 'pending_confirmation' | 'confirmed';
+  /** Endereço validado esperando a confirmação do organizador. */
+  candidate?: DeliveryAddress;
+  /** De onde veio o candidato. */
+  origin?: 'default' | 'typed';
+  /** Último endereço confirmado. Durante uma troca, continua guardado, mas não vale até a nova confirmação. */
+  confirmed?: DeliveryAddress;
+}
+
 /** Estado interno do core; compatível com SessionState para a interface. */
 export interface CoreSession extends SessionState {
+  address?: EnderecoSessao;
   proposal?: Proposal;
   /** Segunda melhor combinação, para o botão "Outra opção". Some quando a proposta muda. */
   alternative?: Proposal;
