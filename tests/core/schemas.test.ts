@@ -5,7 +5,6 @@ import { calcularRateio } from '../../src/core/regras/rateio.js';
 import {
   MAX_JUSTIFICATION_LENGTH,
   MenuItemSchema,
-  ModelProposalSchema,
   ParticipantShareSchema,
   ProposalSchema,
   ProposedItemSchema,
@@ -35,18 +34,6 @@ function proposal(): Proposal {
     justification: 'Uma loja só cobre as duas pessoas e fica dentro do limite.',
   };
 }
-
-const modelOutput = () => ({
-  options: [
-    {
-      picks: [
-        { participantId: 'ana', storeId: 'burger', menuItemId: 'x-salada', quantity: 1 },
-        { participantId: 'bia', storeId: 'burger', menuItemId: 'veggie', quantity: 2, isSubstitute: true },
-      ],
-      justification: 'Hamburgueria com opção vegetariana.',
-    },
-  ],
-});
 
 describe('tipos dos schemas de domínio são iguais aos do contrato', () => {
   it('compila', () => {
@@ -160,37 +147,3 @@ describe('ProposalSchema', () => {
   });
 });
 
-describe('ModelProposalSchema (saída do modelo)', () => {
-  it('aceita saída só com IDs, quantidade, isSubstitute e justificativa', () => {
-    expect(ModelProposalSchema.safeParse(modelOutput()).success).toBe(true);
-  });
-
-  it('rejeita preço ou qualquer campo extra vindo do modelo', () => {
-    const withPrice = modelOutput();
-    const [option] = withPrice.options;
-    if (!option) throw new Error('fixture sem opção');
-    expect(
-      ModelProposalSchema.safeParse({
-        options: [{ ...option, picks: [{ ...option.picks[0], unitPriceCents: 1 }] }],
-      }).success,
-    ).toBe(false);
-    expect(ModelProposalSchema.safeParse({ options: [{ ...option, totalCents: 100 }] }).success).toBe(false);
-    expect(ModelProposalSchema.safeParse({ ...withPrice, split: {} }).success).toBe(false);
-  });
-
-  it('rejeita mais de 2 lojas numa opção', () => {
-    const picks = ['a', 'b', 'c'].map((storeId) => ({ participantId: 'ana', storeId, menuItemId: 'x', quantity: 1 }));
-    expect(ModelProposalSchema.safeParse({ options: [{ picks, justification: 'ok' }] }).success).toBe(false);
-  });
-
-  it('rejeita quantity fora de 1 a 10, isSubstitute não booleano e opções vazias ou demais', () => {
-    const pick = { participantId: 'ana', storeId: 'a', menuItemId: 'x', quantity: 1 };
-    const option = (p: object) => ({ options: [{ picks: [{ ...pick, ...p }], justification: 'ok' }] });
-    expect(ModelProposalSchema.safeParse(option({ quantity: 11 })).success).toBe(false);
-    expect(ModelProposalSchema.safeParse(option({ quantity: 0 })).success).toBe(false);
-    expect(ModelProposalSchema.safeParse(option({ isSubstitute: 'sim' })).success).toBe(false);
-    expect(ModelProposalSchema.safeParse({ options: [] }).success).toBe(false);
-    const one = { picks: [pick], justification: 'ok' };
-    expect(ModelProposalSchema.safeParse({ options: [one, one, one, one] }).success).toBe(false);
-  });
-});

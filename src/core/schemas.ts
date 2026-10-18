@@ -2,7 +2,6 @@ import { z } from 'zod';
 
 export const MAX_QUANTITY = 10;
 export const MAX_STORES_PER_PROPOSAL = 2;
-export const MAX_OPTIONS_PER_MODEL_PROPOSAL = 3;
 export const MAX_JUSTIFICATION_LENGTH = 280;
 
 /** No Zod 4, z.int() já exige inteiro seguro. */
@@ -110,9 +109,9 @@ export const ProposalSchema = z
   });
 
 // ---------------------------------------------------------------------------
-// Saída do modelo: só IDs, quantidade e justificativa. Estrito: qualquer campo
-// extra (por exemplo, um preço inventado) reprova a saída. Preços, totais e
-// rateio são preenchidos pelo código a partir do catálogo.
+// Escolha de item (pessoa, loja, item, quantidade): usada por validarEscolhas
+// e pelo ajuste. Estrito: qualquer campo extra (ex.: um preço) reprova.
+// Preços, totais e rateio vêm sempre do catálogo e do código.
 // ---------------------------------------------------------------------------
 
 export const ModelPickSchema = z.strictObject({
@@ -123,23 +122,7 @@ export const ModelPickSchema = z.strictObject({
   isSubstitute: z.boolean().exactOptional(),
 });
 
-export const ModelOptionSchema = z
-  .strictObject({
-    picks: z.array(ModelPickSchema).min(1),
-    justification: JustificationSchema,
-  })
-  .refine((option) => distinctStores(option.picks) <= MAX_STORES_PER_PROPOSAL, {
-    message: `no máximo ${MAX_STORES_PER_PROPOSAL} lojas por opção`,
-    path: ['picks'],
-  });
-
-export const ModelProposalSchema = z.strictObject({
-  options: z.array(ModelOptionSchema).min(1).max(MAX_OPTIONS_PER_MODEL_PROPOSAL),
-});
-
 export type ModelPick = z.infer<typeof ModelPickSchema>;
-export type ModelOption = z.infer<typeof ModelOptionSchema>;
-export type ModelProposal = z.infer<typeof ModelProposalSchema>;
 
 // ---------------------------------------------------------------------------
 // Saída do modelo na coleta. Todos os campos são obrigatórios (nullable em vez
