@@ -255,3 +255,21 @@ describe('agente: outra opção', () => {
     expect((await iris.outraOpcao(CHAT, 'ana')).outcome).toBe('no_alternative');
   });
 });
+
+describe('agente: ids de proposta únicos por chat', () => {
+  it('o segundo pedido do mesmo grupo não repete o proposalId do primeiro', async () => {
+    const { iris } = agente();
+    await iris.iniciar(CHAT, ORG);
+    await iris.mensagem(msg('ana', 'quero um lanche'));
+    const primeiro = await iris.propor(CHAT, 'ana');
+    await iris.fechar(CHAT, 'ana');
+
+    await iris.iniciar(CHAT, ORG);
+    await iris.mensagem(msg('ana', 'quero um lanche'));
+    const segundo = await iris.propor(CHAT, 'ana');
+
+    expect(primeiro.proposal?.id).toBe(`${CHAT}-p1`);
+    expect(segundo.proposal?.id).toBe(`${CHAT}-p2`);
+    expect((await iris.fechar(CHAT, 'ana')).order?.proposalId).toBe(`${CHAT}-p2`);
+  });
+});

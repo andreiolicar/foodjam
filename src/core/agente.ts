@@ -173,7 +173,9 @@ export function criarAgente(deps: AgenteDeps): Agente {
             organizerId: organizador.id,
             participants: [{ id: organizador.id, displayName: organizador.displayName, preferences: {} }],
           });
-          await sessions.set({ session, proposalCount: 0 });
+          // O contador de propostas continua entre sessões do mesmo chat: o segundo pedido
+          // do grupo gera "chat-p2", não "chat-p1" de novo (proposalId é a chave de idempotência).
+          await sessions.set({ session, proposalCount: existente?.proposalCount ?? 0 });
           return { outcome: 'started', session, actions: [{ type: 'session_updated', session }] };
         }),
       ),

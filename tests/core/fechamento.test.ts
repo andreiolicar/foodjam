@@ -114,12 +114,19 @@ describe('fechar', () => {
     expect(fechar(adulterado, ORG, AGORA, catalog)).toEqual({ ok: false, problems: [{ code: 'split_mismatch' }] });
   });
 
-  it('não fecha se alguém passou do orçamento', async () => {
-    const { catalog, confirmacao } = await cenarioPadaria(1000);
+  it('não fecha se a soma dos itens de alguém passou do orçamento', async () => {
+    // Bolo do Caio (R$ 8,90) passa de R$ 8.
+    const { catalog, confirmacao } = await cenarioPadaria(800);
     expect(fechar(confirmacao, ORG, AGORA, catalog)).toEqual({
       ok: false,
       problems: [{ code: 'over_budget', participantId: 'caio' }],
     });
+  });
+
+  it('fecha se os itens cabem no orçamento, mesmo com o total (com entrega) acima', async () => {
+    // Bolo R$ 8,90 ≤ R$ 10; com R$ 1,63 de entrega, R$ 10,53.
+    const { catalog, confirmacao } = await cenarioPadaria(1000);
+    expect(fechar(confirmacao, ORG, AGORA, catalog).ok).toBe(true);
   });
 
   it.each([

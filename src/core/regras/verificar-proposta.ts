@@ -76,9 +76,11 @@ export function verificarProposta(
     return problems;
   }
 
+  // "Até X reais" vale para a soma dos itens da pessoa (como o iFood mostra os
+  // preços). A parte da entrega aparece no rateio, mas não tira ninguém do pedido.
   for (const share of proposal.split.shares) {
     const budget = session.participants.find((p) => p.id === share.participantId)?.preferences.budgetCents;
-    if (budget !== undefined && share.totalCents > budget) {
+    if (budget !== undefined && share.itemsCents > budget) {
       problems.push({ code: 'over_budget', participantId: share.participantId });
     }
   }

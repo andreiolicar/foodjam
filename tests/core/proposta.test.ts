@@ -340,3 +340,56 @@ describe('propor: bebida não substitui comida', () => {
     expect(SISTEMA_CLASSIFICACAO).toMatch(/Bebida NUNCA é substituto de desejo de comida/);
   });
 });
+
+describe('propor: orçamento vale para a soma dos itens', () => {
+  it('X-Salada sozinho na hamburgueria com "até 30 reais" fica no pedido (entrega não tira ninguém)', async () => {
+    const session = sessao(pessoa('ana', { wishes: ['hambúrguer'], budgetCents: 3000 }));
+    const result = await proporOk(session, llmCom({ ana: [{ atende: ['burger-x-salada'] }] }));
+    expect(itensDe(result)).toEqual([['ana', 'burger-x-salada', false]]);
+    // R$ 25,90 + entrega inteira R$ 7,99 = R$ 33,89: acima de R$ 30, mas os itens cabem.
+    expect(result.proposal.split.shares[0]).toMatchObject({ itemsCents: 2590, totalCents: 3389 });
+    expect(result.metricas.acimaDoOrcamentoComEntrega).toBe(1);
+  });
+
+  it('item de R$ 31 continua barrado para "até 30 reais"', async () => {
+    const catalog = new CatalogoFake({
+      stores: [{ id: 'l1', name: 'Hamburgueria', isOpen: true, deliveryFeeCents: 500 }],
+      menuItems: [
+        { id: 'caro', storeId: 'l1', name: 'Hambúrguer Duplo', priceCents: 3100, available: true },
+        { id: 'ok', storeId: 'l1', name: 'Hambúrguer Simples', priceCents: 2500, available: true },
+      ],
+    });
+    const llm = llmCom({ ana: [{ atende: ['caro', 'ok'] }] });
+    const result = await propor(sessao(pessoa('ana', { wishes: ['hambúrguer'], budgetCents: 3000 })), deps(llm, { catalog }));
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.proposal.orders[0]?.items.map((i) => i.menuItemId)).toEqual(['ok']);
+    expect(llm.requests[0]?.prompt).not.toContain('"caro"');
+    expect(result.discarded).toContainEqual({ participantId: 'ana', menuItemId: 'caro', reason: 'not_eligible' });
+  });
+
+  it('desempate: entre combinações equivalentes, vence a que deixa o total de mais gente no orçamento', async () => {
+    // Loja A: mais barata no total, mas a entrega alta faz a Ana passar de R$ 20.
+    // Loja B: total maior, mas sem entrega: a Ana fica dentro.
+    const catalog = new CatalogoFake({
+      stores: [
+        { id: 'A', name: 'Lanchonete A', isOpen: true, deliveryFeeCents: 2000 },
+        { id: 'B', name: 'Lanchonete B', isOpen: true, deliveryFeeCents: 0 },
+      ],
+      menuItems: [
+        { id: 'a1', storeId: 'A', name: 'Lanche A1', priceCents: 1500, available: true },
+        { id: 'a2', storeId: 'A', name: 'Lanche A2', priceCents: 100, available: true },
+        { id: 'b1', storeId: 'B', name: 'Lanche B1', priceCents: 1900, available: true },
+        { id: 'b2', storeId: 'B', name: 'Lanche B2', priceCents: 1900, available: true },
+      ],
+    });
+    const session = sessao(pessoa('ana', { wishes: ['lanche'], budgetCents: 2000 }), pessoa('bia', { wishes: ['lanche'] }));
+    const llm = llmCom({ ana: [{ atende: ['a1', 'b1'] }], bia: [{ atende: ['a2', 'b2'] }] });
+    const result = await propor(session, deps(llm, { catalog }));
+    if (!result.ok) throw new Error(result.reason);
+
+    // A: total R$ 36,00, Ana paga 15,00 + 10,00 = 25,00 (> 20). B: total R$ 38,00, Ana paga 19,00.
+    expect(result.proposal.orders.map((o) => o.storeId)).toEqual(['B']);
+    expect(result.metricas.acimaDoOrcamentoComEntrega).toBe(0);
+    expect(result.alternative?.orders.map((o) => o.storeId)).toEqual(['A']);
+  });
+});

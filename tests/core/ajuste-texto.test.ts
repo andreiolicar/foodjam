@@ -65,17 +65,23 @@ describe('interpretarAjuste', () => {
     expect(result.outcome).toBe('rejected');
   });
 
-  it('ajuste que estoura o orçamento é recusado com motivo, sem citar valores', async () => {
-    // Lanche Natural R$ 13,90 cabe em R$ 15, mas com R$ 1,63 de entrega vai a R$ 15,53.
-    const { catalog, revisao } = await cenarioPadaria(1500);
+  it('item acima do orçamento nem é opção: recusado com motivo, sem citar valores', async () => {
+    // Lanche Natural (R$ 13,90) passa de R$ 10: não está entre as opções da pessoa.
+    const { catalog, revisao } = await cenarioPadaria(1000);
     const llm = new FakeLlm([saida({ menuItemId: 'pad-lanche-natural' })]);
     const result = await interpretarAjuste(revisao, msg('troca pelo lanche natural'), catalog, { llm });
 
     expect(result.outcome).toBe('rejected');
-    expect(result.problems).toEqual([{ code: 'over_budget', participantId: 'caio' }]);
-    const texto = (result.actions[0] as { text: string }).text;
-    expect(texto).toContain('orçamento');
-    expect(texto).not.toMatch(/\d/);
+    expect(result.problems).toEqual([{ code: 'item_rejected', participantId: 'caio', menuItemId: 'pad-lanche-natural', reason: 'not_eligible' }]);
+    expect(llm.requests[0]?.prompt).not.toContain('"pad-lanche-natural"');
+    expect((result.actions[0] as { text: string }).text).not.toMatch(/\d/);
+  });
+
+  it('item dentro do orçamento é aceito mesmo com o total (com entrega) acima', async () => {
+    const { catalog, revisao } = await cenarioPadaria(1500);
+    const llm = new FakeLlm([saida({ menuItemId: 'pad-lanche-natural' })]);
+    const result = await interpretarAjuste(revisao, msg('troca pelo lanche natural'), catalog, { llm });
+    expect(result.outcome).toBe('adjusted');
   });
 
   it('mensagem ambígua gera pergunta privada', async () => {

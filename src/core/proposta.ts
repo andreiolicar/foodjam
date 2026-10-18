@@ -311,7 +311,12 @@ function avaliarCombinacao(
     const problems = verificarProposta(proposal, session, catalog);
     if (problems.length === 0) {
       return {
-        opcao: { proposal, metricas: medir(escolhas, classificadas, orders.length, proposal.split.totalCents, mesmaCategoria), escolhas, descartes },
+        opcao: {
+          proposal,
+          metricas: medir(escolhas, classificadas, orders.length, proposal.split.totalCents, mesmaCategoria, acimaComEntrega(proposal, session)),
+          escolhas,
+          descartes,
+        },
         problems,
       };
     }
@@ -360,4 +365,12 @@ function unicos(problemas: readonly ProblemaProposta[]): ProblemaProposta[] {
     vistos.add(chave);
     return true;
   });
+}
+
+/** Quantas pessoas com orçamento pagam, com a parte da entrega, mais que ele (só para o desempate). */
+function acimaComEntrega(proposal: Proposal, session: CoreSession): number {
+  return proposal.split.shares.filter((share) => {
+    const budget = session.participants.find((p) => p.id === share.participantId)?.preferences.budgetCents;
+    return budget !== undefined && share.totalCents > budget;
+  }).length;
 }

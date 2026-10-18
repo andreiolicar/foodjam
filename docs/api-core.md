@@ -16,28 +16,72 @@ const iris = criarAgente({
 
 Para desenvolver o bot sem chave nem iFood, use exatamente isso: o catálogo fake tem 5 lojas e o modelo fake responde por palavras-chave. A ligação final fica em `src/index.ts`, combinada entre o time.
 
-## Identificadores
+## Conceitos: chat, sessão, pessoa e organizador
 
-| Core | Telegram |
-|---|---|
-| `sessionId` | `String(ctx.chat.id)` — uma sessão por grupo |
-| `participantId` | `String(ctx.from.id)` |
-| `displayName` | `ctx.from.first_name` (só usado quando a pessoa aparece pela primeira vez) |
+| Conceito | No Telegram | No core | Por quê |
+|---|---|---|---|
+| **Chat** | O grupo onde as pessoas conversam (`ctx.chat.id`) | — | É onde o pedido coletivo acontece. |
+| **Sessão** | — | Um pedido coletivo em andamento naquele chat (`CoreSession`), com fase, participantes, proposta e fechamento | O core precisa guardar o estado do pedido entre mensagens. |
+| **`sessionId`** | `String(ctx.chat.id)` | Identifica a sessão | Ver abaixo. |
+| **`participantId`** | `String(ctx.from.id)` | Identifica a pessoa dentro da sessão | O id do usuário é estável: não muda se a pessoa trocar o nome, e é o mesmo em qualquer grupo. |
+| **`displayName`** | `ctx.from.first_name` | Nome para mostrar (proposta, justificativa) | Só aparência: nunca use como identidade. É gravado quando a pessoa aparece pela primeira vez. |
+| **Organizador** | Quem mencionou o bot | `session.organizerId` | A compra só sai com autorização explícita de uma pessoa: só ela monta a proposta, troca de opção, fecha, cancela e reabre. |
+
+### Por que `sessionId` é o id do chat
+
+- **Um pedido por grupo de cada vez.** Enquanto há uma sessão ativa no grupo, uma nova menção ao bot não abre outra (`already_active`); assim ninguém cria dois pedidos paralelos no mesmo chat.
+- **O bot não precisa de tabela de mapeamento.** Toda mensagem do Telegram já traz `ctx.chat.id`; usar esse valor como `sessionId` dispensa guardar "qual sessão é deste chat". Em todo o core e nesta documentação o nome é sempre `sessionId`: no bot, é só `String(ctx.chat.id)`.
+- **Depois de fechar ou cancelar, o próximo pedido reaproveita o mesmo `sessionId`.** A sessão encerrada é substituída pela nova no armazenamento. Ou seja: `sessionId` identifica "o pedido atual do grupo", **não** um pedido para sempre. Para identificar um pedido específico, use o `proposalId` (abaixo).
+- **Por que `String(...)`:** os contratos tratam ids como texto opaco (o core não depende do Telegram). Os ids do Telegram são números (grupos têm id negativo); converter para texto mantém o core independente do canal.
+
+### Mensagem privada x mensagem no grupo
+
+Uma `send_message` **com** `participantId` é para a pessoa, no privado. No Telegram, o chat privado de um usuário tem o mesmo id do usuário: `bot.api.sendMessage(participantId, text)`. Isso só funciona se a pessoa já iniciou conversa com o bot; se falhar, responda no grupo em reply à mensagem dela, **sem dados privados** (como orçamento). **Sem** `participantId`, a mensagem é para o grupo: envie para o `sessionId` (o id do chat).
+
+### Ids de proposta e de pedido
+
+| Id | Formato | Para que serve |
+|---|---|---|
+| `proposal.id` | `{sessionId}-p{n}` (ex.: `-100123-p1`), com `-r1`, `-r2` a cada ajuste | Identifica uma proposta. `n` cresce a cada proposta do chat e **não volta a 1** quando um pedido novo começa no mesmo grupo. |
+| `alternative.id` | `{proposal.id}-b` | A segunda opção da mesma proposta. |
+| `order.proposalId` | O `proposal.id` autorizado | Chave para quem executa a compra não executar duas vezes. |
+
+## Componentes
+
+```text
+Telegram ──▶ agrupador (debounce) ──▶ agente (fachada) ──▶ fases do core ──▶ CatalogPort (iFood) / LlmPort (modelo)
+   ▲                                       │
+   └──────────── Resposta (actions, proposal, order) ◀──┘          SessionStore (sessões em memória)
+```
+
+| Componente | O que é | Quem cria | Por que existe |
+|---|---|---|---|
+| `criarAgente` (fachada) | Ponto único de entrada do bot: `iniciar`, `mensagem(ns)`, `propor`, `outraOpcao`, `fechar`, `cancelar`, `reabrirColeta`, `obter` | `src/index.ts` | O bot não precisa saber de fases, catálogo nem modelo; e erros esperados viram `outcome`, não exceção. Processa um chat por vez, para duas pessoas falando juntas não sobrescreverem o pedido. |
+| `criarAgrupador` | Junta mensagens quase simultâneas do mesmo chat (debounce) e envia como lote | `src/index.ts` (ou o bot) | O provedor gratuito limita tokens por minuto: 10 mensagens viram 1 chamada ao modelo. |
+| `SessionStore` | Onde as sessões ficam (`SessoesEmMemoria` por padrão) | Opcional no `criarAgente` | Separar o armazenamento permite trocar por persistência sem mudar o agente. Em memória, reiniciar o processo perde os pedidos em andamento. |
+| `CatalogPort` | Leitura do catálogo: `searchStores`, `getMenu` | Módulo iFood (hoje, `CatalogoFake`) | O core não conhece as ferramentas do MCP; o módulo iFood traduz para `Store` e `MenuItem`, em centavos. |
+| `LlmPort` | Acesso ao modelo de IA | `criarLlmDoAmbiente(process.env)` | Trocar de provedor é só mudar o `.env`. Sem `AI_PROVIDER`, usa um modelo fake, sem rede. |
+| `Resposta` | Retorno de toda chamada: `outcome`, `actions` e dados (`proposal`, `alternative`, `order`) | O agente | O bot só apresenta: envia as `actions` e desenha os dados. |
+| `CoreAction` | O que enviar: mensagem (grupo ou privada) ou "sessão atualizada" | O agente | Texto e destino já decididos pelo core (ex.: o que é privado). |
+| `Proposal` | Proposta com pedidos por loja, rateio, substitutos e justificativa | O agente | É o que o grupo vê e confirma. Valores sempre calculados pelo código. |
+| `AuthorizedOrder` | Pedido autorizado pelo organizador | O agente, ao fechar | Fronteira com quem executa a compra no iFood. O core não compra nada. |
 
 ## Chamadas
+
+Nas chamadas abaixo, `sessionId` é `String(ctx.chat.id)` e `actorId` é o `participantId` de quem apertou o botão, `String(ctx.from.id)`. O core usa sempre esses dois nomes.
 
 Todas devolvem `Promise<Resposta>` e **não lançam exceção** para casos esperados: o resultado vem em `outcome`.
 
 | Evento no Telegram | Chamada |
 |---|---|
-| Alguém menciona o bot | `iris.iniciar(chatId, { id, displayName })` — quem mencionou vira organizador |
+| Alguém menciona o bot | `iris.iniciar(sessionId, { id, displayName })` — quem mencionou vira organizador |
 | Mensagem no grupo durante o pedido | `agrupador.adicionar(...)` (recomendado, ver "Mensagens em lote") ou `iris.mensagem({ sessionId, participantId, text }, displayName)` |
-| Botão "Montar pedido" | `iris.propor(chatId, quemClicou)` |
-| Botão "Outra opção" | `iris.outraOpcao(chatId, quemClicou)` |
-| Botão "Confirmar pedido" | `iris.fechar(chatId, quemClicou)` |
-| Botão "Voltar para a coleta" | `iris.reabrirColeta(chatId, quemClicou)` |
-| Botão "Cancelar" | `iris.cancelar(chatId, quemClicou)` |
-| Mostrar estado | `iris.obter(chatId)` |
+| Botão "Montar pedido" | `iris.propor(sessionId, actorId)` |
+| Botão "Outra opção" | `iris.outraOpcao(sessionId, actorId)` |
+| Botão "Confirmar pedido" | `iris.fechar(sessionId, actorId)` |
+| Botão "Voltar para a coleta" | `iris.reabrirColeta(sessionId, actorId)` |
+| Botão "Cancelar" | `iris.cancelar(sessionId, actorId)` |
+| Mostrar estado | `iris.obter(sessionId)` |
 
 Não precisa checar se quem clicou é o organizador: o core recusa com `outcome: 'not_authorized'` e já devolve a mensagem privada. Mensagens de pessoas diferentes no mesmo grupo podem chegar ao mesmo tempo: o core processa uma de cada vez por grupo.
 
@@ -54,7 +98,7 @@ const agrupador = criarAgrupador(iris, {
   esperaMs: 2000,     // envia 2 s depois da última mensagem (debounce)
   esperaMaxMs: 6000,  // ...ou no máximo 6 s depois da primeira, mesmo com gente digitando
   maxLote: 10,        // ...ou na hora, ao juntar 10 mensagens
-  aoResponder: async (chatId, resposta) => {
+  aoResponder: async (sessionId, resposta) => {
     // mesmas regras de sempre: envie resposta.actions, desenhe resposta.proposal se vier
   },
   onError: (e) => console.error(e),
@@ -68,15 +112,15 @@ bot.on('message:text', (ctx) => {
 });
 
 // Antes de propor, fechar, cancelar ou reabrir, envie o que estiver pendente:
-await agrupador.esvaziar(chatId);
-await iris.propor(chatId, quemClicou);
+await agrupador.esvaziar(sessionId);
+await iris.propor(sessionId, actorId);
 ```
 
 - `adicionar` não espera o modelo; a resposta chega em `aoResponder`, uma vez por lote.
 - Mensagens da mesma pessoa no mesmo lote são lidas juntas, em ordem (a última vale se ela mudou de ideia).
 - Na proposta, o lote é processado como ajustes, um por mensagem, em ordem.
 - `resposta.resultados` traz o outcome de cada pessoa (`{ participantId, outcome }[]`), útil para reagir à mensagem certa (ex.: 👍).
-- Sem o agrupador, dá para chamar direto `iris.mensagens(chatId, [{ participantId, text, displayName }, ...])`.
+- Sem o agrupador, dá para chamar direto `iris.mensagens(sessionId, [{ participantId, text, displayName }, ...])`.
 - Ao desligar o bot: `await agrupador.esvaziarTudo()`.
 
 ## `Resposta`
@@ -133,13 +177,14 @@ interface Resposta {
 - `proposal.uncoveredParticipantIds`: quem ficou sem item.
 - `proposal.justification`: texto curto da Íris, pode ir no topo.
 - **Nunca mostre `preferences.budgetCents` no grupo**: o orçamento é privado.
+- **Como o orçamento vale:** "até 30 reais" limita a **soma dos itens** da pessoa (como o iFood mostra os preços). A parte da entrega aparece no rateio (`deliveryCents`), mas **não tira ninguém do pedido**: o total de uma pessoa (`totalCents`) pode passar do orçamento por causa da entrega. Se quiser, avise no privado ("seu total com entrega fica em R$ X"), nunca no grupo.
 
 ## Outra opção
 
 Além da proposta escolhida, `propor` devolve em `resposta.alternative` a **segunda melhor combinação** (com itens diferentes), quando existir. Para o botão "Outra opção":
 
 ```ts
-const r = await iris.outraOpcao(chatId, quemClicou); // só o organizador
+const r = await iris.outraOpcao(sessionId, actorId); // só o organizador
 // r.outcome === "switched": desenhe r.proposal (a nova atual); r.alternative é a anterior
 ```
 
@@ -150,4 +195,7 @@ const r = await iris.outraOpcao(chatId, quemClicou); // só o organizador
 
 ## Fechamento
 
-`order` (`AuthorizedOrder`) é a fronteira com quem executa a compra no iFood: pedidos por loja, rateio e a autorização (quem, quando, qual proposta). O core não compra nada. Com `already_closed`, o `order` é o mesmo da primeira vez: use `order.proposalId` como chave para não executar duas vezes.
+`order` (`AuthorizedOrder`) é a fronteira com quem executa a compra no iFood: pedidos por loja, rateio e a autorização (quem, quando, qual proposta). O core não compra nada.
+
+- Com `already_closed`, o `order` é o mesmo da primeira vez: **não execute de novo**.
+- Chave de idempotência para o executor: `order.proposalId`. Ele não se repete entre pedidos do mesmo grupo enquanto o processo estiver no ar. Como as sessões ficam em memória e o contador recomeça se o processo reiniciar, use `${order.proposalId}:${order.authorization.authorizedAt}` se o executor guardar histórico entre reinícios.

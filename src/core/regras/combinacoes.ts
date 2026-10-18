@@ -69,6 +69,8 @@ export interface Metricas {
   lojas: number;
   /** Substitutos de categoria diferente do desejo (ex.: comida no lugar de bebida). */
   substitutosForaDaCategoria: number;
+  /** Pessoas com orçamento cujo total (itens + parte da entrega) passa dele. */
+  acimaDoOrcamentoComEntrega: number;
   totalCents: MoneyCents;
 }
 
@@ -78,6 +80,7 @@ export function medir(
   lojas: number,
   totalCents: MoneyCents,
   mesmaCategoria: (escolha: Escolha) => boolean = () => true,
+  acimaDoOrcamentoComEntrega = 0,
 ): Metricas {
   const atendidos = pessoas.filter((p) =>
     p.desejos.every((_, i) => escolhas.some((e) => e.participantId === p.participantId && e.desejo === i && !e.isSubstitute)),
@@ -90,6 +93,7 @@ export function medir(
     substitutos: substitutos.length,
     lojas,
     substitutosForaDaCategoria: substitutos.filter((e) => !mesmaCategoria(e)).length,
+    acimaDoOrcamentoComEntrega,
     totalCents,
   };
 }
@@ -97,7 +101,8 @@ export function medir(
 /**
  * Ordem de preferência: mais pessoas atendidas com o que pediram > menos
  * desejos sem item > menos substitutos > menos lojas > substitutos da mesma
- * categoria do desejo > menor total.
+ * categoria do desejo > mais pessoas com o total (itens + entrega) dentro do
+ * orçamento > menor total.
  * ("menos desejos sem item" impede que deixar alguém sem nada vença um substituto.)
  */
 export function compararMetricas(a: Metricas, b: Metricas): number {
@@ -107,6 +112,7 @@ export function compararMetricas(a: Metricas, b: Metricas): number {
     a.substitutos - b.substitutos ||
     a.lojas - b.lojas ||
     a.substitutosForaDaCategoria - b.substitutosForaDaCategoria ||
+    a.acimaDoOrcamentoComEntrega - b.acimaDoOrcamentoComEntrega ||
     a.totalCents - b.totalCents
   );
 }

@@ -70,11 +70,20 @@ describe('ajustar', () => {
     expect(!tres.ok && tres.problems[0]?.code).toBe('invalid_proposal');
   });
 
-  it('item que estoura o orçamento da pessoa é recusado sem expor o valor', async () => {
-    const { catalog, revisao } = await cenarioPadaria(1500);
+  it('soma dos itens acima do orçamento é recusada, sem expor o valor', async () => {
+    // Lanche Natural (R$ 13,90) passa de R$ 10.
+    const { catalog, revisao } = await cenarioPadaria(1000);
     const result = ajustar(revisao, { participantId: 'caio', storeId: LOJAS.padaria, menuItemId: 'pad-lanche-natural' }, catalog);
     expect(result).toEqual({ ok: false, problems: [{ code: 'over_budget', participantId: 'caio' }] });
-    expect(JSON.stringify(result)).not.toContain('1500');
+    expect(JSON.stringify(result)).not.toContain('1000');
+  });
+
+  it('a parte da entrega não tira ninguém: itens dentro do orçamento passam mesmo com o total acima', async () => {
+    // Lanche Natural R$ 13,90 ≤ R$ 15; com R$ 1,63 de entrega o total vai a R$ 15,53, e tudo bem.
+    const { catalog, revisao } = await cenarioPadaria(1500);
+    const result = ajustar(revisao, { participantId: 'caio', storeId: LOJAS.padaria, menuItemId: 'pad-lanche-natural' }, catalog);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.proposal.split.shares.find((s) => s.participantId === 'caio')?.totalCents).toBe(1390 + 163);
   });
 
   it.each([

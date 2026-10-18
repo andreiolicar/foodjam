@@ -56,10 +56,11 @@ describe('medir e compararMetricas', () => {
       1,
       2000,
     );
-    expect(m).toEqual({ atendidos: 1, faltando: 1, substitutos: 1, lojas: 1, substitutosForaDaCategoria: 0, totalCents: 2000 });
+    expect(m).toEqual({ atendidos: 1, faltando: 1, substitutos: 1, lojas: 1, substitutosForaDaCategoria: 0, acimaDoOrcamentoComEntrega: 0, totalCents: 2000 });
   });
 
-  const m = (atendidos: number, faltando: number, substitutos: number, lojas: number, totalCents: number, fora = 0): Metricas => ({
+  const m = (atendidos: number, faltando: number, substitutos: number, lojas: number, totalCents: number, fora = 0, acima = 0): Metricas => ({
+    acimaDoOrcamentoComEntrega: acima,
     substitutosForaDaCategoria: fora,
     atendidos,
     faltando,
@@ -74,6 +75,7 @@ describe('medir e compararMetricas', () => {
     ['menos substitutos', m(1, 0, 0, 2, 9000), m(1, 0, 1, 1, 1000)],
     ['menos lojas', m(1, 0, 0, 1, 9000), m(1, 0, 0, 2, 1000)],
     ['substituto da mesma categoria do desejo', m(1, 0, 1, 1, 9000, 0), m(1, 0, 1, 1, 1000, 1)],
+    ['mais pessoas com o total (itens + entrega) no orçamento', m(1, 0, 0, 1, 9000, 0, 0), m(1, 0, 0, 1, 1000, 0, 1)],
     ['menor total', m(1, 0, 0, 1, 1000), m(1, 0, 0, 1, 1001)],
   ])('%s vence', (_nome, melhor, pior) => {
     expect(compararMetricas(melhor, pior)).toBeLessThan(0);
