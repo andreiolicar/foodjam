@@ -47,13 +47,13 @@ afterEach(async()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.restoreAllMocks(
 async function setup(enabled=true){
  const runtime=await criarAplicacaoReal({...env,...enabled?{FOODJAM_CART_PREPARATION_ENABLED:'true',FOODJAM_CART_JOURNAL_DIR:directory,FOODJAM_CART_MONEY_UNIT:'BRL'}:{}});
  runtime.bot.botInfo={id:999,is_bot:true,first_name:'Bot',username:'fixture_bot'} as UserFromGetMe;
- const sent:{id:number;text:string;buttons:{text:string;callback_data?:string}[]}[]=[];const removed:number[]=[];const alerts:string[]=[];let sequence=100;let rejectReview=false;
+ const sent:{id:number;chatId:string;text:string;buttons:{text:string;callback_data?:string}[]}[]=[];const removed:number[]=[];const alerts:string[]=[];let sequence=100;let rejectReview=false;
  runtime.bot.api.config.use(async(_prev,method,payload)=>{
   const p=payload as Record<string,unknown>;
   if(method==='answerCallbackQuery'){alerts.push(String(p.text??''));return {ok:true,result:true} as never;}
   if(method==='deleteMessage')removed.push(Number(p.message_id));
   if(method==='editMessageText'){const m=sent.find(m=>m.id===p.message_id);if(m)m.text=String(p.text);return {ok:true,result:true} as never;}
-  if(method==='sendMessage'){if(rejectReview&&String(p.text).includes('Revisão do carrinho')){rejectReview=false;throw new GrammyError('Controlled rejection',{ok:false,error_code:400,description:'Controlled rejection'},'sendMessage',{});}const id=++sequence;sent.push({id,text:String(p.text),buttons:(p.reply_markup as {inline_keyboard?:{text:string;callback_data?:string}[][]})?.inline_keyboard?.flat()??[]});return {ok:true,result:{message_id:id,date:0,chat:{id:-501},text:p.text}} as never;}
+  if(method==='sendMessage'){if(rejectReview&&String(p.text).includes('Revisão do carrinho')){rejectReview=false;throw new GrammyError('Controlled rejection',{ok:false,error_code:400,description:'Controlled rejection'},'sendMessage',{});}const id=++sequence;sent.push({id,chatId:String(p.chat_id),text:String(p.text),buttons:(p.reply_markup as {inline_keyboard?:{text:string;callback_data?:string}[][]})?.inline_keyboard?.flat()??[]});return {ok:true,result:{message_id:id,date:0,chat:{id:Number(p.chat_id)},text:p.text}} as never;}
   return {ok:true,result:true} as never;
  });
  const from=(id:number)=>({id,is_bot:false,first_name:{71:'Andrei',72:'Ana Paula',73:'Allan'}[id]??'Pessoa'});
@@ -61,8 +61,23 @@ async function setup(enabled=true){
  const click=(id:number,data:string,messageId:number)=>runtime.bot.handleUpdate({update_id:++sequence,callback_query:{id:String(sequence),from:from(id),chat_instance:'fixture',data,message:{message_id:messageId,date:0,chat:{id:-501,type:'supergroup'},text:''}}} as Update);
  const button=(name:string)=>{const m=sent.findLast(m=>m.buttons.some(b=>b.text.includes(name)));expect(m,`button ${name}`).toBeDefined();return {id:m!.id,data:m!.buttons.find(b=>b.text.includes(name))!.callback_data!};};
  await text(71,'/iniciar');const b=button('Confirmar endereço');await click(71,b.data,b.id);await text(71,'coxinha');await text(72,'pão de queijo');await text(73,'pão de queijo');await text(71,'/montar');
- return {runtime,sent,removed,alerts,text,click,button,rejectReview:()=>{rejectReview=true;},prepare:()=>{const b=button('Preparar carrinho');return click(71,b.data,b.id);}};
+ const privateText=(id:number,value:string)=>runtime.bot.handleUpdate({update_id:++sequence,message:{message_id:sequence,date:0,from:from(id),chat:{id,type:'private',first_name:'Pessoa'},text:value,entities:[{type:'bot_command',offset:0,length:value.length}]}} as Update);
+ return {runtime,sent,removed,alerts,text,privateText,click,button,rejectReview:()=>{rejectReview=true;},prepare:()=>{const b=button('Preparar carrinho');return click(71,b.data,b.id);}};
 }
+it('checkout privado na composição real relê carrinho e Pix, sem configurar pagamento ou submeter',async()=>{
+ transport.list.mockResolvedValue([...tools,{name:'listPaymentMethods',inputSchema:{type:'object',properties:{merchantId:uuid},required:['merchantId']}}]);
+ const method=randomUUID();transport.payment.mockResolvedValue(envelope({paymentMethods:[{paymentMethodId:method,kind:'PIX',displayName:'Pix',cardTokenId:'private-card-token'}]}));
+ const h=await setup();try{
+  await h.privateText(71,'/checkout');expect(transport.payment).not.toHaveBeenCalled();
+  await h.prepare();expect(transport.payment).not.toHaveBeenCalled();
+  await h.privateText(72,'/checkout');expect(transport.payment).not.toHaveBeenCalled();
+  price=9;
+  await h.privateText(71,'/checkout');expect(transport.payment).toHaveBeenCalledExactlyOnceWith('listPaymentMethods',{merchantId:stores[0]});
+  const message=h.sent.findLast(m=>m.text.includes('Conferência do checkout'))!;expect(message).toBeDefined();expect(message.chatId).toBe('71');expect(message.text).toContain('Pix disponível');expect(message.text).toContain('bloqueado');expect(message.text).not.toMatch(/private-card-token|[a-f0-9]{8}-[a-f0-9]{4}/);
+  expect(message.text).toContain('R$ 30,00');expect(message.text).toContain('não confirmado para compra');
+  expect(transport.cart.mock.calls.map(c=>c[0])).toEqual(['createCart','getCart','getCart']);
+ }finally{await h.runtime.close();}
+});
 it('composição real controlada: três pessoas, duas linhas consolidadas, preço do carrinho e revisão sem compra',async()=>{
  const h=await setup();try{
  expect(transport.cart).not.toHaveBeenCalled();const b=h.button('Preparar carrinho');await h.click(72,b.data,b.id);expect(transport.cart).not.toHaveBeenCalled();

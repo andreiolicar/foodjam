@@ -5,6 +5,7 @@ import { apresentarActions, enviar } from '../services/apresentacao.js';
 import { lerCallback, PADRAO_BOTAO_PRIVADO, enderecoEnviado, consumirEnderecoEnviado } from '../services/callbacks.js';
 import { retirarPendentes, sessaoDa } from '../services/privado.js';
 import { atualizarCard, exibirProposta, retirarBotoesDoCard } from '../services/proposta-tela.js';
+import { textoConferenciaCheckout } from '../services/checkout-card.js';
 
 // Respostas do orçamento que mudam o pedido: a proposta nova vai para o grupo.
 const MUDOU_PEDIDO = new Set(['budget_item_swapped', 'budget_left_out']);
@@ -14,6 +15,26 @@ export const TEXTO_VALORES_CONFIRMADOS =
 
 export function registrarConversaPrivada(bot: Bot, iris: Agente, preliminaryOnly = false): void {
   const privado = bot.chatType('private');
+
+  privado.command('checkout', async ctx => {
+    const actor = String(ctx.from.id); const id = sessaoDa(actor);
+    const session = id ? await iris.obter(id) : undefined;
+    if (!id || session?.organizerId !== actor || !session.preliminary || !iris.revisarCheckout) {
+      await ctx.reply('Prepare o carrinho da proposta vigente no grupo. Esta consulta é exclusiva de quem organizou e não compra.'); return;
+    }
+    const expected = session.preliminary.id;
+    const fingerprint = JSON.stringify({ proposal: session.preliminary, participants: session.participants, address: session.address });
+    try {
+      const response = await iris.revisarCheckout(id, actor, expected);
+      const names = await iris.nomes(id);
+      const latest = await iris.obter(id);
+      if (sessaoDa(actor) !== id || !latest || JSON.stringify({ proposal: latest.preliminary, participants: latest.participants, address: latest.address }) !== fingerprint) return;
+      await ctx.reply(textoConferenciaCheckout(response, names), { parse_mode: 'HTML' });
+    } catch {
+      console.error('Conferência de checkout não concluída. Dados privados omitidos.');
+      await ctx.reply('Não foi possível conferir o checkout. Nenhuma compra ou configuração de pagamento foi executada.');
+    }
+  });
 
   // /start: entrega o que ficou guardado porque a pessoa ainda não tinha falado com o bot.
   privado.command('start', async (ctx) => {

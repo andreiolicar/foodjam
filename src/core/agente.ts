@@ -9,6 +9,7 @@ import type {
   DiscoveryStore,
   PreliminaryProposal,
   CommercialReview,
+  CheckoutInspection,
   CoreAction,
   IncomingMessage,
   MenuItemId,
@@ -76,6 +77,7 @@ export interface Resposta {
   outcome: string;
   cartReview?: CommercialReview;
   cartProposal?: PreliminaryProposal;
+  checkout?: CheckoutInspection;
   actions: CoreAction[];
   session?: CoreSession;
   proposal?: Proposal;
@@ -136,6 +138,8 @@ export interface Agente {
   prepararCarrinho?(sessionId: SessionId, actorId: ParticipantId, proposalId: string): Promise<Resposta>;
   /** Apenas relê carrinhos registrados; jamais cria ou adiciona itens. */
   revisarCarrinho?(sessionId: SessionId, actorId: ParticipantId, proposalId: string): Promise<Resposta>;
+  /** Somente leitura: carrinho conhecido e métodos reais, sem seleção ou submissão. */
+  revisarCheckout?(sessionId: SessionId, actorId: ParticipantId, proposalId: string): Promise<Resposta>;
   /** Ação vinculada ao card exibido; verifica identidade dentro da fila da sessão. */
   agirNaPropostaPreliminar?(sessionId: SessionId, actorId: ParticipantId, proposalId: string, action: AcaoPropostaPreliminar): Promise<Resposta>;
   /** Alguém mencionou o bot: abre a sessão do chat (ou devolve a que já está ativa). */

@@ -55,6 +55,32 @@ it('revisão sem preparo não autoriza escrita e falha não é apresentada como 
  service.prepare.mockRejectedValueOnce(new Error('Private'));expect((await agent.prepararCarrinho!('g','a','p1')).outcome).toBe('cart_uncertain');
  expect((await agent.prepararCarrinho!('g','a','p1')).cartReview).toBeUndefined();expect(service.prepare).toHaveBeenCalledTimes(1);
 });
+it('inspeção do checkout compartilha autorização/revisão e nunca prepara outro carrinho',async()=>{
+ const {agent,service}=await setup();
+ const checkout=vi.fn(async()=>({status:'blocked' as const,review:structuredClone(review),stores:[],blockers:['submission_result_unconfirmed']}));
+ Object.assign(service,{checkout});
+ expect((await agent.revisarCheckout!('g','a','p1')).outcome).toBe('cart_not_prepared');
+ await agent.prepararCarrinho!('g','a','p1');
+ expect((await agent.revisarCheckout!('g','b','p1')).outcome).toBe('not_authorized');
+ expect((await agent.revisarCheckout!('g','a','old')).outcome).toBe('proposal_stale');
+ expect((await agent.revisarCheckout!('g','a','p1')).checkout?.status).toBe('blocked');
+ expect(checkout).toHaveBeenCalledOnce();expect(service.prepare).toHaveBeenCalledOnce();
+});
+it('troca durante inspeção não libera resposta tardia nem nova escrita',async()=>{
+ const {agent,service,sessions}=await setup();await agent.prepararCarrinho!('g','a','p1');
+ let release!:(value:{status:'blocked';review:CommercialReview;stores:[];blockers:string[]})=>void;
+ Object.assign(service,{checkout:vi.fn(()=>new Promise(resolve=>{release=resolve;}))});
+ const first=agent.revisarCheckout!('g','a','p1');await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+ expect((await agent.revisarCheckout!('g','a','p1')).outcome).toBe('cart_preparing');
+ const record=(await sessions.get('g'))!;delete record.session.preliminary;await sessions.set(record);
+ release({status:'blocked',review,stores:[],blockers:[]});expect((await first).outcome).toBe('proposal_stale');expect(service.prepare).toHaveBeenCalledOnce();
+});
+it('prazo da inspeção termina sem submissão nem repetição da preparação',async()=>{
+ const {agent,service}=await setup();await agent.prepararCarrinho!('g','a','p1');vi.useFakeTimers();
+ Object.assign(service,{checkout:vi.fn(()=>new Promise(()=>{}))});
+ const result=agent.revisarCheckout!('g','a','p1');await vi.advanceTimersByTimeAsync(30_001);
+ expect((await result).outcome).toBe('cart_uncertain');expect(service.prepare).toHaveBeenCalledOnce();
+});
 it('mesmo ID não reaproveita revisão se composição ou participantes mudarem',async()=>{
  const {agent,service,sessions}=await setup();await agent.prepararCarrinho!('g','a','p1');
  const record=(await sessions.get('g'))!;record.session.preliminary!.items[0]!.quantity=2;await sessions.set(record);

@@ -6,6 +6,7 @@ import { DADOS_CARD, textoPedido } from '../services/card.js';
 import { exibirProposta, retirarBotoesDoCard, cardAtual, propostaDoCard } from '../services/proposta-tela.js';
 import { cancelarPedido } from './cancelar.js';
 import { exibirRevisaoCarrinho } from '../services/cart-tela.js';
+import { lembrarSessao } from '../services/privado.js';
 
 type Acao = (sessionId: string, actorId: string) => Promise<Resposta>;
 
@@ -64,6 +65,7 @@ export function registrarProposta(bot: Bot, iris: Agente, agrupador: Agrupador, 
     await ctx.answerCallbackQuery({ text: readOnly ? 'Consultando carrinho registrado…' : 'Preparando carrinho para revisão, sem comprar…' });
     await agrupador.esvaziar(id);
     if (propostaDoCard(id, messageId!) !== expected) return;
+    lembrarSessao(String(ctx.from.id), id);
     const response = await method(id, String(ctx.from.id), expected);
     if (['proposal_stale', 'not_authorized', 'cart_preparing'].includes(response.outcome)) return;
     await exibirRevisaoCarrinho(ctx.api, iris, id, messageId!, expected, response);

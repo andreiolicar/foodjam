@@ -1,0 +1,118 @@
+{
+  "source": "MCP tools/list autenticado; metadados, sem dados de conta ou pagamento",
+  "inspectedAt": "2026-10-18T13:05:58.988Z",
+  "toolCount": 23,
+  "tools": [
+    {
+      "name": "listPaymentMethods",
+      "description": "Retrieves all available payment methods (PIX, credit card, debit card, etc.) and saved card tokens for a merchant. Call this when the user needs to choose a payment method. Use the merchantId from the cart details. Use the returned payment method IDs when calling setCartPayment.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "merchantId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Merchant unique identifier"
+          }
+        },
+        "required": [
+          "merchantId"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      }
+    },
+    {
+      "name": "setCartPayment",
+      "description": "Selects a payment method for the cart. Call this after the user has chosen a payment option from the listPaymentMethods response. Use the exact payment method ID (e.g. \"PIX\", \"CREDIT_CARD\") from that response. Include cardTokenId only when paying with a saved credit or debit card — omit it for PIX or other non-card methods.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cartId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The cart ID from a previous createCart or getCart response"
+          },
+          "cardTokenId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Required when paymentMethod refers to a card payment method (e.g. CREDIT_CARD, DEBIT_CARD). Must be the exact token ID returned in the 'cardTokenId' field of the listPaymentMethods response for the chosen card. Do NOT invent or reuse values — always copy from listPaymentMethods. Omit (leave null) for non-card methods such as PIX."
+          },
+          "paymentMethodId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The payment method ID the user chose (e.g. \"PIX\", \"CREDIT_CARD\"). Use the exact ID from the listPaymentMethods response."
+          }
+        },
+        "required": [
+          "cartId",
+          "paymentMethodId"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      }
+    },
+    {
+      "name": "submitOrder",
+      "description": "Places the order for the given cart. Call getCart first to show the cart details to the user, then ask the user to explicitly confirm they want to submit the order. Only call this tool after the user has confirmed. Set userConsent to true only when the user has explicitly agreed. If the user provides an identification document, pass it in the document field. Accepted documents: CPF (Brazilian individuals), CNPJ (Brazilian businesses), or Passport (foreign accounts).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cartId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The cart ID from a previous createCart or getCart response"
+          },
+          "userConsent": {
+            "type": "boolean",
+            "description": "Set to true only after asking the user to confirm the order and they explicitly agree. Defaults to false — the tool will reject the request if left as false."
+          },
+          "document": {
+            "type": "string",
+            "description": "The user's identification document. For Brazilian accounts: CPF (individuals) or CNPJ (businesses). For foreign accounts: Passport number. Collect this if there's an error about this field when trying to checkout the cart. Omit if the user has not provided it."
+          }
+        },
+        "required": [
+          "cartId"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      }
+    },
+    {
+      "name": "getOrder",
+      "description": "Get detailed order information — merchant, items, payment, delivery address, and verification code",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "string",
+            "description": "The order ID (UUID) to get details for"
+          }
+        },
+        "required": [
+          "orderId"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      }
+    },
+    {
+      "name": "trackOrder",
+      "description": "Track an order by ID — returns current status, event history, and hints for the agent on when to poll again",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "string",
+            "description": "The order ID (UUID) to track"
+          },
+          "nextPageToken": {
+            "type": "string",
+            "description": "Opaque token from agentHints.moreStatusEvents to fetch older events"
+          }
+        },
+        "required": [
+          "orderId"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      }
+    }
+  ]
+}

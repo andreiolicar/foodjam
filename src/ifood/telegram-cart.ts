@@ -7,6 +7,7 @@ import { catalogDocument } from './catalog-data.js';
 import { createPrivateCartJournal } from './cart-journal.js';
 import { createIfoodCommercialPreparation } from './commercial.js';
 import { findCartTool } from './cart-tools.js';
+import { createIfoodCheckoutInspection } from './checkout-inspection.js';
 
 /** Composição opt-in. Só duas ferramentas de carrinho chegam ao cliente desta sessão. */
 export async function createTelegramCartPreparation(client: IfoodMcpClient, tools: readonly IfoodMcpTool[], directory: string, moneyUnit?: 'BRL' | 'cents'): Promise<CartPreparationService> {
@@ -30,5 +31,6 @@ export async function createTelegramCartPreparation(client: IfoodMcpClient, tool
     const port = createIfoodCommercialPreparation(restricted, { authority, journal, authenticatedUserId: scope, tools, scopeBySession: true, isCurrent: current, ...(moneyUnit ? { moneyUnit } : {}) });
     return prepareCommercialProposal(proposal, actor, scope, authority, readOnly ? { prepare: context => port.readPrepared(context) } : port);
   };
-  return { prepare: (...args) => execute(false, ...args), read: (...args) => execute(true, ...args) };
+  const read: CartPreparationService['read'] = (...args) => execute(true, ...args);
+  return { prepare: (...args) => execute(false, ...args), read, checkout: createIfoodCheckoutInspection(client, tools, read) };
 }

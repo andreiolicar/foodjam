@@ -320,6 +320,14 @@ export interface CommercialReview {
   revision: string;
 }
 
+/** Inspeção somente leitura. Contratos de retorno não homologados nunca autorizam compra. */
+export interface CheckoutInspection {
+  status: 'blocked';
+  review: CommercialReview;
+  stores: { storeId: StoreId; pixAvailable?: boolean; issues: string[] }[];
+  blockers: string[];
+}
+
 /** Texto coletado ainda não é DeliveryAddress nem localização válida. */
 export interface AddressRegistrationIntent {
   sessionId: SessionId;
