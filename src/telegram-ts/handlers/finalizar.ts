@@ -6,6 +6,7 @@ import * as collector from "../collector.js";
 import {
   clearOrganizador,
   getOrganizador,
+  isAguardandoEndereco,
 } from "./state.js";
 
 import {
@@ -22,7 +23,15 @@ export function registrarFinalizar(
     const organizadorId = getOrganizador(chatId);
 
     if (!collector.isActive(chatId)) {
-      await ctx.reply("Não existe coleta ativa.");
+      if (organizadorId) {
+        await ctx.reply(
+          isAguardandoEndereco(chatId)
+            ? "Primeiro informe o endereço de entrega. Para desistir, use /cancelar."
+            : "Primeiro confirme o endereço de entrega nos botões acima. Para desistir, use /cancelar.",
+        );
+      } else {
+        await ctx.reply("Não existe coleta ativa. Use /iniciar para começar.");
+      }
       return;
     }
 
@@ -114,11 +123,21 @@ export function registrarFinalizar(
 
       console.log("Proposta da Íris:", respostaProposta);
 
-      await mostrarResultado(
-        ctx,
-        chatId,
-        respostaProposta,
-      );
+      await mostrarResultado(ctx, chatId, respostaProposta);
+
+      // Se a Íris não conseguiu montar a proposta,
+      // não encerre nem cancele a sessão automaticamente.
+      if (!respostaProposta.proposal) {
+        if (respostaProposta.outcome === "address_required") {
+          await ctx.reply(
+            "Antes de montar o pedido, precisamos confirmar o endereço de entrega. " +
+            "A sessão permanece pendente.",
+          );
+        }
+
+        collector.restore(chatId, messages);
+        return;
+      }
     } catch (error) {
       console.error("Erro ao processar a coleta:", error);
 

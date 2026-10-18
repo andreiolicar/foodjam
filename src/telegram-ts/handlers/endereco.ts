@@ -1,22 +1,23 @@
-import { Markup, type Context, type Telegraf } from "telegraf";
+import type { Context, Telegraf } from "telegraf";
 
 import { iris } from "../iris.js";
 import * as collector from "../collector.js";
 import {
   getOrganizador,
   setAguardandoEndereco,
-  isAguardandoEndereco,
   clearAguardandoEndereco,
 } from "./state.js";
 
 import { apresentarActions } from "../services/apresentacao.js";
 
-const FALHAS = [
+const FALHAS: string[] = [
   "error",
   "not_authorized",
   "invalid_state",
   "no_session",
   "session_finished",
+  "address_nothing_to_confirm",
+  "address_invalid",
 ];
 
 export function registrarEndereco(bot: Telegraf<Context>): void {
@@ -47,9 +48,17 @@ export function registrarEndereco(bot: Telegraf<Context>): void {
       console.log("Confirmação do endereço:", resposta);
 
       if (FALHAS.includes(resposta.outcome)) {
-        await ctx.reply(
-          `Não foi possível confirmar o endereço. Resultado: ${resposta.outcome}.`,
-        );
+        // Se a Íris não tem endereço, volta a pedir um.
+        if (resposta.session?.address?.status === "awaiting_text") {
+          setAguardandoEndereco(chatId);
+          await ctx.reply(
+            "Ainda não há um endereço. Envie o endereço de entrega completo, incluindo rua, número, bairro e cidade.",
+          );
+        } else {
+          await ctx.reply(
+            `Não foi possível confirmar o endereço. Resultado: ${resposta.outcome}.`,
+          );
+        }
         return;
       }
 
@@ -111,7 +120,4 @@ export function registrarEndereco(bot: Telegraf<Context>): void {
       await ctx.reply("Não foi possível solicitar outro endereço.");
     }
   });
-
-  // Registra que a pessoa ainda está na etapa do endereço.
-  // A mensagem em si será tratada em mensagens.ts.
 }
