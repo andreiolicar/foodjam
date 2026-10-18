@@ -74,7 +74,7 @@ Para o iFood, a Íris transforma conversas sociais cotidianas em **conversões d
 ## 4. Métricas e KPIs de Sucesso
 
 1. **Taxa de Conversão de Sessões Coletivas:** % de sessões iniciadas no grupo que resultam em pedido autorizado (`AuthorizedOrder`).
-2. **Tempo Médio até a Decisão:** Redução do tempo de debate do grupo de ~25 minutos para menos de 3 minutos.
+2. **Tempo Médio até a Decisão:** Redução do tempo de debate do grupo para um tempo significativamente menor.
 3. **Acurácia no Respeito a Restrições e Orçamentos:** 100% de conformidade garantida por guardrails em código determinístico.
 4. **Índice de Conforto Financeiro:** Taxa de resolução de estouro de orçamento no privado sem abandono do participante.
 
