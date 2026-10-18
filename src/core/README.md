@@ -30,9 +30,10 @@ qualquer fase não final ──cancelar──▶ cancelada
 | Fase | Arquivo | Modelo | O que faz |
 |---|---|---|---|
 | Coleta | `coleta.ts` | `fast`, sem ferramentas | Filtro barato (descarta vazias e só emoji), extrai `foodPreferences`, `dietaryRestrictions`, `avoids` e o trecho de orçamento (convertido em código). Perguntas ficam em `pendingQuestions`. `coletarLote` faz o mesmo para até 10 pessoas numa chamada, com schema montado com os ids do lote. |
-| Proposta | `proposta.ts` | `capable` (classificação) + `fast` (justificativa) | Busca lojas em código (`catalogo.ts`) e filtra itens elegíveis por pessoa (`regras/elegibilidade.ts`). O modelo só classifica, por desejo de cada pessoa, os itens em "atende", "substituto" ou "não serve". O código (`regras/combinacoes.ts`) enumera todas as combinações de 1 e 2 lojas, escolhe o melhor item por desejo, confere pedido mínimo e orçamento (soma dos itens; a entrega não tira ninguém) e escolhe: mais atendidos > menos desejos sem item > menos substitutos > menos lojas > mesma categoria do desejo > total com entrega dentro do orçamento > menor total. O modelo só escreve uma frase objetiva por opção (com os motivos dos substitutos, calculados em código). Devolve também a segunda melhor combinação (`alternative`, botão "Outra opção"). |
+| Proposta | `proposta.ts` | `capable` (classificação) + `fast` (justificativa) | Busca lojas em código (`catalogo.ts`) e filtra itens elegíveis por pessoa (`regras/elegibilidade.ts`). O modelo só classifica, por desejo de cada pessoa, os itens em "atende", "substituto" ou "não serve". O código (`regras/combinacoes.ts`) enumera todas as combinações de 1 e 2 lojas, escolhe o melhor item por desejo, confere pedido mínimo e escolhe: mais atendidos > menos desejos sem item > menos substitutos > menos lojas > mesma categoria do desejo > total com entrega dentro do orçamento > menor total. Depois cota a taxa de serviço da escolhida e da alternativa (`taxas.ts`, porta `quoteOrder`). O modelo só escreve uma frase objetiva por opção (com os motivos dos substitutos, calculados em código). Devolve também a segunda melhor combinação (`alternative`, botão "Outra opção"). |
 | Ajuste | `ajuste.ts` | `fast` | `interpretarAjuste` converte texto em troca estruturada; `ajustar` troca o item da pessoa e recalcula. A pessoa só troca o próprio item. |
-| Fechamento | `fechamento.ts` | nenhum | Exige organizador e catálogo consultado há no máximo 60 s; revalida tudo e devolve `AuthorizedOrder`. |
+| Orçamento | `orcamento.ts` | nenhum | O orçamento cobre itens + parte da entrega + parte da taxa de serviço. Quem passa é perguntado no privado ([Aceito] [Quero outro]); em "Quero outro", o código sugere o item mais próximo que caiba ([Aceito a sugestão] [Fico sem]). Só a própria pessoa responde; quem passar a estourar depois de uma mudança também é perguntado. |
+| Fechamento | `fechamento.ts` | nenhum | Exige organizador, endereço confirmado, nenhuma pergunta de orçamento pendente e catálogo consultado há no máximo 60 s; a fachada cota a taxa de serviço de novo (se mudou, recusa e atualiza a proposta); revalida tudo e devolve `AuthorizedOrder`. |
 
 ## Guardrails do modelo
 
@@ -55,12 +56,14 @@ Sem HTTP: o Telegram importa o core e chama a fachada `criarAgente` (`agente.ts`
 | Caminho | Conteúdo |
 |---|---|
 | `index.ts` | API pública: `criarAgente`, `SessoesEmMemoria`, tipos, fakes e `criarLlmDoAmbiente`. |
-| `agente.ts` | Fachada para a interface: iniciar, mensagem, mensagens (lote), confirmarEndereco, pedirOutroEndereco, propor, outraOpcao, reabrirColeta, fechar, cancelar, obter. |
+| `agente.ts` | Fachada para a interface: iniciar, mensagem, mensagens (lote), confirmarEndereco, pedirOutroEndereco, propor, outraOpcao, responderOrcamento, reabrirColeta, fechar, cancelar, obter. |
+| `orcamento.ts` | Perguntas de orçamento: quem passou, respostas, sugestão de item, recotação e efeito em cascata. |
+| `taxas.ts` | Cotação da taxa de serviço pela porta e comparação no fechamento. |
 | `endereco.ts` | Fluxo do endereço de entrega: padrão ou digitado, validado pela porta do iFood, confirmado só pelo organizador. |
 | `agrupador.ts` | `criarAgrupador`: debounce por chat; mensagens quase simultâneas viram um lote (uma chamada ao modelo para até 10 pessoas). |
 | `sessoes.ts` | `SessoesEmMemoria` (implementação da `SessionStore`). |
 | `contracts.ts` | Tipos compartilhados com o time (ver abaixo). |
-| `ports.ts` | `CatalogPort` (só leitura: `validateAddress`, `searchStores` e `getMenu` com endereço), `LlmPort` (níveis `fast`/`capable`) e `SessionStore`. |
+| `ports.ts` | `CatalogPort` (sem compra: `validateAddress`, `searchStores`, `getMenu` e `quoteOrder` com endereço), `LlmPort` (níveis `fast`/`capable`) e `SessionStore`. |
 | `schemas.ts` | Schemas Zod do domínio e das saídas do modelo (coleta, proposta, ajuste). |
 | `sessao.ts` | Máquina de estados, confirmação idempotente, `CoreSession` (proposta, fechamento, perguntas). |
 | `llm.ts` | `gerarEstruturado`: chamada + Zod + nova tentativa + timeout + registro. |
@@ -77,8 +80,9 @@ Sem HTTP: o Telegram importa o core e chama a fachada `criarAgente` (`agente.ts`
 - `ParticipantPreferences`: `foodPreferences` (gosto e atributos), `wishes` (itens a receber, um por entrada: "um lanche e um bolo" → 2 itens, até 3), `dietaryRestrictions` (restrição dura, de saúde), `avoids` (rejeição de gosto) e `budgetCents` (privado).
 - `SessionStatus`: `collecting`, `reviewing`, `awaiting_confirmation`, `closed`, `cancelled`.
 - `IncomingMessage`, `CoreAction`.
-- Catálogo e proposta: `Store`, `MenuItem` (com `category?`: comida ou bebida), `ProposedItem` (com `isSubstitute?`), `StoreOrder`, `ParticipantShare`, `Split`, `Proposal`.
+- Catálogo e proposta: `Store`, `MenuItem` (com `category?`: comida ou bebida), `ProposedItem` (com `isSubstitute?`), `StoreOrder` (com `serviceFeeCents?`: taxa de serviço cotada no iFood), `ParticipantShare` (itens + `deliveryCents` + `serviceCents`), `Split`, `Proposal`.
 - Endereço: `DeliveryAddress` (texto normalizado pelo iFood e id opcional); ações `request_address` e `confirm_address` em `CoreAction`.
+- Orçamento: ações `budget_question` (pergunta de valor, privada) e `item_suggestion` (sugestão de outro item) em `CoreAction`.
 - Fechamento: `OrderAuthorization` e **`AuthorizedOrder`** (com `deliveryAddress`) — fronteira com quem executa o pedido. Guia do módulo iFood: [`docs/integracao-ifood.md`](../../docs/integracao-ifood.md).
 
 Alterações aqui são mínimas e combinadas com o time; consuma com `import type`.

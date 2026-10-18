@@ -12,13 +12,20 @@ Registro do que foi decidido no core, por quê, e o que foi medido. Base para o 
 |---|---|---|---|
 | Coleta | fast | Classifica a mensagem e extrai gosto, itens desejados, restrições, rejeições e o trecho do orçamento | Filtro barato antes do modelo, converte orçamento em centavos, atualiza só a pessoa que escreveu |
 | Coleta em lote | fast | O mesmo para até 10 pessoas numa chamada | Debounce por chat (`criarAgrupador`), schema montado com os ids do lote |
-| Proposta | capable | Só o casamento semântico: por desejo, itens que "atendem", "substitutos" ou "não servem" | Busca lojas, filtra itens elegíveis, enumera combinações de 1 e 2 lojas, escolhe itens, valida mínimo e orçamento, calcula rateio |
+| Proposta | capable | Só o casamento semântico: por desejo, itens que "atendem", "substitutos" ou "não servem" | Busca lojas, filtra itens elegíveis, enumera combinações de 1 e 2 lojas, escolhe itens, valida mínimo, calcula rateio, cota a taxa de serviço |
 | Justificativa | fast | Duas frases sobre a opção escolhida | Texto padrão se falhar |
 | Ajuste | fast | Aponta qual item a pessoa quer | Valida e recalcula |
-| Fechamento | — | Nada | Revalida tudo com catálogo de até 60 s e devolve o `AuthorizedOrder` |
+| Orçamento | — | Nada | Pergunta a quem passou, sugere outro item, recota a taxa |
+| Fechamento | — | Nada | Bloqueia com pergunta pendente, recota a taxa, revalida tudo com catálogo de até 60 s e devolve o `AuthorizedOrder` |
 
 - **Critério de escolha da proposta:** mais pessoas atendidas com o que pediram > menos desejos sem item > menos substitutos > menos lojas > substituto da mesma categoria do desejo > mais pessoas com o total (itens + entrega) dentro do orçamento > menor total. O critério "menos desejos sem item" impede que deixar alguém sem nada vença dar um substituto.
-- **Orçamento vale para a soma dos itens:** "até 30 reais" limita a soma dos itens da pessoa (é como o iFood mostra os preços): o filtro de itens e a validação usam essa soma. A parte da entrega aparece no rateio, mas não tira ninguém do pedido; ela só entra no desempate. Exemplo: X-Salada (R$ 25,90) sozinho na hamburgueria com "até 30 reais" fica no pedido, mesmo pagando R$ 33,89 com a entrega; um item de R$ 31 continua barrado.
+- **Orçamento cobre itens + entrega + taxa de serviço** (mudança decidida pelo time, substitui "orçamento vale para a soma dos itens"). "Até 30 reais" é o que a pessoa paga: itens + parte da entrega + parte da taxa de serviço, as duas divididas igualmente entre quem pediu na loja.
+  - **Taxa de serviço vem do iFood** (`CatalogPort.quoteOrder`): só o MCP sabe calculá-la. Para poupar chamadas, o core escolhe a proposta e a alternativa por itens + entrega e só depois cota as duas (2 a 4 chamadas). Se a cotação falhar, a proposta sai sem a taxa e o grupo é avisado.
+  - **Passou do orçamento, de qualquer valor: pergunta no privado** ([Aceito] [Quero outro]). Em "Quero outro", o código sugere o item mais próximo do pedido que caiba ([Aceito a sugestão] [Fico sem]). O item nunca sai sozinho: a pessoa decide. Só ela responde.
+  - **Fechamento bloqueado** até todos responderem. No fechamento a taxa é cotada de novo; se mudou, o fechamento é recusado e a proposta atualizada.
+  - **Respostas zeradas** quando a proposta muda (ajuste do grupo, outra opção, endereço, proposta nova). Mudanças vindas das próprias respostas mantêm as outras, e quem passar a estourar por elas (efeito em cascata) é perguntado.
+  - **Item com preço acima do orçamento continua barrado** na elegibilidade: um item de R$ 31 nunca é oferecido a quem disse "até 30 reais".
+  - **Privacidade:** valores só no privado; no grupo, só os nomes de quem falta responder.
 - **Endereço de entrega:** o iFood busca lojas e cardápios por endereço, então todo pedido exige endereço **confirmado pelo organizador**. Ao iniciar, o core oferece o endereço padrão ([Sim] [Outro endereço]) ou pede que o organizador digite no privado; o texto é validado pela porta do iFood (`validateAddress`: normalizado ou motivo do erro) e confirmado com [Confirmar] [Corrigir]. Enquanto espera o endereço, a mensagem do organizador vai para a validação, nunca para a coleta. A coleta não espera; propor e fechar exigem endereço; trocar o endereço descarta a proposta. O modelo não participa. Guia do módulo iFood: `docs/integracao-ifood.md`.
 
 ## Guardrails
@@ -80,20 +87,6 @@ As 10 interpretações saíram certas, incluindo pessoa com dois itens, orçamen
 |---|---|---|---|
 | Modelo escolhe itens e lojas | Evitou lojas com pedido mínimo e deu substitutos a quem não precisava | ~4.100 | 5,3–5,6 s |
 | **Modelo classifica, código combina** | Bia com lanche e bolo na padaria, Caio no Bowl de Quinoa, Ana com o melhor substituto (hambúrguer exigiria 3ª loja); 10 combinações avaliadas | **3.238** | **3,7 s** |
-
-## Evolução futura: confirmação de valor por botão
-
-Para implementar **se sobrar tempo depois da integração** (exige mudança no contrato, na fachada e no bot). Hoje o orçamento vale para a soma dos itens e a entrega nunca tira ninguém; este desenho cobre o caso em que o total com entrega passa do que a pessoa disse.
-
-- **Tolerância em código:** até R$ 2,00 acima do orçamento (itens + parte da entrega) passa sem perguntar; constante fácil de ajustar.
-- **Acima da tolerância, perguntar em vez de decidir:** mensagem **privada** para a pessoa: "Seu pedido sai por R$ 33,89 (com entrega). Pode ser?", com os botões **[Pode]** e **[Prefiro algo mais barato]**.
-  - **Pode:** segue com o item.
-  - **Mais barato:** o código tenta o item mais barato que caiba; se não houver, a pessoa fica sem item.
-- **Fechamento bloqueado:** o organizador não fecha enquanto houver confirmação pendente; o bot mostra "aguardando Ana confirmar o valor".
-- **Confirmação vale para uma proposta só:** qualquer mudança (ajuste, "Outra opção", nova proposta) invalida as confirmações; o código pergunta de novo se ainda precisar.
-- **Preferir quem cabe:** entre combinações equivalentes, a que exige menos confirmações vence (já parcialmente coberto pelo desempate atual).
-- **Privacidade:** o valor só vai no privado. Se o bot não conseguir mandar DM (a pessoa nunca falou com ele), responde no grupo sem valor: "@Ana, confirme o valor do seu pedido no privado".
-- **O que mudaria:** uma nova `CoreAction` (ex.: `ask_budget_confirmation` com pessoa, proposta e valor), um método na fachada para registrar a resposta (`confirmarValor(sessionId, participantId, aceita)`), o registro das confirmações na sessão e os botões no bot.
 
 ## Estado
 

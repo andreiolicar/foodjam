@@ -7,7 +7,20 @@ export { criarAgrupador } from './agrupador.js';
 export type { Agrupador, AgrupadorOptions } from './agrupador.js';
 export type { ItemLote } from './coleta.js';
 export { SessoesEmMemoria } from './sessoes.js';
-export type { AddressError, AddressValidation, CatalogPort, LlmPort, LlmRequest, LlmTier, SessionRecord, SessionStore } from './ports.js';
+export type {
+  AddressError,
+  AddressValidation,
+  CatalogPort,
+  CotacaoPedido,
+  ItemCotacao,
+  LlmPort,
+  LlmRequest,
+  LlmTier,
+  SessionRecord,
+  SessionStore,
+} from './ports.js';
+export { TEXTOS_ORCAMENTO } from './orcamento.js';
+export type { RespostaOrcamento } from './orcamento.js';
 export { StoreNotFoundError } from './ports.js';
 export type { CoreSession, EnderecoSessao, PendingQuestion } from './sessao.js';
 export { TEXTOS_ENDERECO } from './endereco.js';

@@ -10,7 +10,7 @@ core ──AuthorizedOrder──▶ executor do pedido (módulo iFood) ──MCP
 ## 1. O que implementar: `CatalogPort` (`src/core/ports.ts`)
 
 ```ts
-import type { CatalogPort, AddressValidation } from '../core/index.js';
+import type { CatalogPort, AddressValidation, CotacaoPedido, ItemCotacao } from '../core/index.js';
 import type { DeliveryAddress, MenuItem, Store } from '../core/index.js';
 import { StoreNotFoundError } from '../core/index.js';
 
@@ -18,10 +18,11 @@ export class CatalogoIfood implements CatalogPort {
   async validateAddress(text: string): Promise<AddressValidation> { /* ... */ }
   async searchStores(query: string, address: DeliveryAddress): Promise<Store[]> { /* ... */ }
   async getMenu(storeId: string, address: DeliveryAddress): Promise<MenuItem[]> { /* ... */ }
+  async quoteOrder(storeId: string, items: readonly ItemCotacao[], address: DeliveryAddress): Promise<CotacaoPedido> { /* ... */ }
 }
 ```
 
-É **só leitura**: nenhuma operação de compra passa pela porta. O modelo de IA nunca tem acesso ao MCP; quem chama a porta é o código do core.
+**Nenhuma operação de compra** passa pela porta: `quoteOrder` só cota. O modelo de IA nunca tem acesso ao MCP; quem chama a porta é o código do core.
 
 ### `validateAddress(text)`
 
@@ -48,11 +49,20 @@ O organizador digita o endereço livremente; o core repassa o texto para cá.
 - Cardápio da loja para o endereço, **incluindo itens indisponíveis** (`available: false`).
 - Loja que não existe: lance `StoreNotFoundError(storeId)`.
 
+### `quoteOrder(storeId, items, address)`
+
+Cota um pedido de uma loja **sem comprar** e devolve a **taxa de serviço** que o iFood cobraria: `{ serviceFeeCents }`, em centavos inteiros. O orçamento das pessoas inclui essa taxa, e só o iFood sabe calculá-la.
+
+- `items`: `{ menuItemId, quantity }[]` do pedido daquela loja.
+- Se o iFood montar um carrinho para cotar, **descarte o carrinho** depois: a cotação não pode deixar nada pendente na conta.
+- Sem taxa de serviço: devolva `0`.
+- Loja que não existe: `StoreNotFoundError(storeId)`. Falha de rede, MCP ou item recusado: lance erro. O core trata: a proposta sai sem a taxa e o grupo é avisado; no fechamento, não fecha até conseguir cotar.
+
 ### Formato dos dados (`src/core/contracts.ts`)
 
 | Campo | Regra |
 |---|---|
-| Todo valor (`deliveryFeeCents`, `minimumOrderCents`, `priceCents`) | **Centavos inteiros**: R$ 25,90 → `2590`. Nunca reais com vírgula ou ponto. |
+| Todo valor (`deliveryFeeCents`, `minimumOrderCents`, `priceCents`, `serviceFeeCents`) | **Centavos inteiros**: R$ 25,90 → `2590`. Nunca reais com vírgula ou ponto. |
 | `Store.isOpen` | Se a loja está aberta agora. |
 | `Store.minimumOrderCents` | Pedido mínimo, se houver; ausente se não houver. |
 | `MenuItem.available` | Se o item pode ser pedido agora. |
@@ -69,7 +79,9 @@ Importa se o MCP tiver limite de requisições.
 | Início da sessão, com endereço padrão | 1 `validateAddress` |
 | Cada endereço digitado pelo organizador | 1 `validateAddress` |
 | Cada proposta (`propor`) | até 8 `searchStores` (um por termo de preferência) e até 4 `getMenu` (lojas candidatas) |
-| Fechamento (`fechar`) | por loja do pedido: 1 `searchStores` (pelo nome da loja) e 1 `getMenu`, para revalidar preços e disponibilidade |
+| Cada proposta, depois de escolher | 1 `quoteOrder` por loja da proposta escolhida e da alternativa (2 a 4) |
+| Cada mudança de itens na proposta (ajuste, resposta de orçamento) | 1 `quoteOrder` por loja |
+| Fechamento (`fechar`) | por loja do pedido: 1 `searchStores` (pelo nome da loja), 1 `getMenu` e 1 `quoteOrder`, para revalidar preços, disponibilidade e a taxa de serviço |
 
 O fechamento usa o catálogo consultado há no máximo 60 s. A busca da loja pelo nome é provisória: veja `docs/proposta-catalog-getstore.md` (um `getStore(storeId)` deixaria isso exato).
 
@@ -83,13 +95,13 @@ interface AuthorizedOrder {
   proposalId: string;           // a proposta autorizada
   authorization: { proposalId; authorizedBy; authorizedAt };
   deliveryAddress: { formatted; id? };   // endereço confirmado pelo organizador
-  orders: StoreOrder[];         // um pedido por loja: itens, subtotal, entrega, total (centavos)
+  orders: StoreOrder[];         // um pedido por loja: itens, subtotal, entrega, taxa de serviço, total (centavos)
   split: Split;                 // quanto cada pessoa paga (informativo)
 }
 ```
 
 - **Um pedido no iFood por item de `orders`** (no máximo 2 lojas), todos para `deliveryAddress`.
-- Use os `menuItemId`, `quantity` e `unitPriceCents` de cada `ProposedItem`. Se o preço no iFood estiver diferente na hora da compra, **não compre**: avise o grupo (o fechamento já revalidou, mas pode mudar entre o fechamento e a execução).
+- Use os `menuItemId`, `quantity` e `unitPriceCents` de cada `ProposedItem`. Se o preço ou a taxa de serviço (`serviceFeeCents`) no iFood estiver diferente na hora da compra, **não compre**: avise o grupo (o fechamento já revalidou, mas pode mudar entre o fechamento e a execução).
 - `split` é o rateio entre as pessoas: informativo para o grupo, não muda o pedido no iFood.
 - **Idempotência:** se o organizador apertar "Confirmar" duas vezes, a fachada devolve o mesmo `order` com `outcome: 'already_closed'`: **não execute de novo**. Chave sugerida: `${order.proposalId}:${order.authorization.authorizedAt}`.
 
@@ -112,12 +124,13 @@ O core não lê `process.env` nem abre conexões sozinho: tudo chega por `criarA
 
 ## 5. Como testar
 
-- **Sem bot:** no simulador (`npm run simular`), troque `new CatalogoFake()` pela sua porta e use `/endereco`, `/buscar`, `/cardapio` e `/propor`.
-- **Referência de comportamento:** o `CatalogoFake` (`src/core/fakes/catalogo-fake.ts`) implementa a mesma porta com as mesmas regras (lojas fechadas na busca, itens indisponíveis no cardápio, `StoreNotFoundError`, validação de endereço com os três motivos). Os testes dele (`tests/core/fakes/catalogo-fake.test.ts`) mostram o que o core espera.
+- **Sem bot:** no simulador (`npm run simular`), troque `new CatalogoFake()` pela sua porta e use `/endereco`, `/buscar`, `/cardapio`, `/propor`, `/orcamento` e `/fechar`.
+- **Referência de comportamento:** o `CatalogoFake` (`src/core/fakes/catalogo-fake.ts`) implementa a mesma porta com as mesmas regras (lojas fechadas na busca, itens indisponíveis no cardápio, `StoreNotFoundError`, validação de endereço com os três motivos, taxa de serviço de 5% dos itens entre R$ 0,99 e R$ 2,99). Os testes dele (`tests/core/fakes/catalogo-fake.test.ts`) mostram o que o core espera.
 - **Valores:** confira que nenhum valor sai em reais (`25.9`): o core rejeita valor que não seja centavo inteiro.
 
 ## Pendências a combinar
 
 - `getStore(storeId)` na porta, para o fechamento não depender da busca por nome (`docs/proposta-catalog-getstore.md`).
 - Se o MCP devolve a seção do cardápio, preencher `MenuItem.category`.
+- Como o MCP cota a taxa de serviço sem comprar (carrinho temporário? simulação?) e se ela depende de algo além de loja, itens e endereço.
 - Se a autenticação do MCP precisa de dados do usuário do Telegram (hoje o core não repassa nada além do endereço).

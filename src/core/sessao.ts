@@ -1,4 +1,4 @@
-import type { DeliveryAddress, OrderAuthorization, ParticipantId, Proposal, SessionState, SessionStatus } from './contracts.js';
+import type { DeliveryAddress, MenuItemId, MoneyCents, OrderAuthorization, ParticipantId, Proposal, SessionState, SessionStatus, StoreId } from './contracts.js';
 
 /** Autorização de compra registrada uma única vez, no fechamento. O horário vem de quem chama. */
 export type Closure = OrderAuthorization;
@@ -25,6 +25,25 @@ export interface EnderecoSessao {
   confirmed?: DeliveryAddress;
 }
 
+/** Pergunta de orçamento esperando a resposta da própria pessoa. */
+export interface PerguntaOrcamento {
+  participantId: ParticipantId;
+  /** "valor": aceita passar do orçamento? "sugestao": aceita o item sugerido (ou fica sem)? */
+  etapa: 'valor' | 'sugestao';
+  /** Total perguntado (itens + entrega + serviço). */
+  totalCents: MoneyCents;
+  /** Na etapa "sugestao": o item sugerido e o que ele substitui. Ausente: nada cabe, só "fico sem". */
+  sugestao?: { menuItemId: MenuItemId; storeId: StoreId; replaceMenuItemId: MenuItemId; totalCents: MoneyCents };
+}
+
+export interface EstadoOrcamento {
+  /** Proposta (id sem as revisões -rN) a que as respostas se referem. */
+  proposalBaseId: string;
+  pendentes: PerguntaOrcamento[];
+  /** Quem aceitou passar do orçamento, e até quanto. */
+  aceitos: { participantId: ParticipantId; totalCents: MoneyCents }[];
+}
+
 /** Estado interno do core; compatível com SessionState para a interface. */
 export interface CoreSession extends SessionState {
   address?: EnderecoSessao;
@@ -33,6 +52,8 @@ export interface CoreSession extends SessionState {
   alternative?: Proposal;
   closure?: Closure;
   pendingQuestions?: PendingQuestion[];
+  /** Perguntas de orçamento da proposta atual (quem passou do orçamento). */
+  budget?: EstadoOrcamento;
 }
 
 /** Transições permitidas. closed e cancelled são finais. */
@@ -118,6 +139,7 @@ export function voltarParaColeta(session: CoreSession): CoreSession {
   const next: CoreSession = { ...session, status: 'collecting' };
   delete next.proposal;
   delete next.alternative;
+  delete next.budget;
   return next;
 }
 

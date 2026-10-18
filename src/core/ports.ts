@@ -1,5 +1,6 @@
-import type { DeliveryAddress, MenuItem, SessionId, Store, StoreId } from './contracts.js';
+import type { DeliveryAddress, MenuItem, MenuItemId, MoneyCents, SessionId, Store, StoreId } from './contracts.js';
 import type { TimedCatalogSnapshot } from './regras/validar-escolhas.js';
+import type { PessoaClassificada } from './regras/combinacoes.js';
 import type { CoreSession } from './sessao.js';
 
 /** Tudo que o agente guarda por sessão (chat). */
@@ -7,6 +8,8 @@ export interface SessionRecord {
   session: CoreSession;
   /** Retrato do catálogo usado na proposta atual (para ajustes e fechamento). */
   catalog?: TimedCatalogSnapshot;
+  /** Classificação do modelo na proposta atual, para sugerir outro item a quem estourar o orçamento. */
+  classificacao?: PessoaClassificada[];
   /** Quantas propostas já foram geradas (para ids previsíveis). */
   proposalCount: number;
 }
@@ -44,6 +47,24 @@ export interface CatalogPort {
    * Rejeita com StoreNotFoundError se a loja não existir.
    */
   getMenu(storeId: StoreId, address: DeliveryAddress): Promise<MenuItem[]>;
+
+  /**
+   * Cota um pedido de uma loja (sem comprar) e devolve a taxa de serviço que o
+   * iFood cobraria. O core chama só para a proposta escolhida e a alternativa
+   * (uma vez por loja) e de novo no fechamento.
+   */
+  quoteOrder(storeId: StoreId, items: readonly ItemCotacao[], address: DeliveryAddress): Promise<CotacaoPedido>;
+}
+
+/** Item de um pedido a cotar. */
+export interface ItemCotacao {
+  menuItemId: MenuItemId;
+  quantity: number;
+}
+
+export interface CotacaoPedido {
+  /** Taxa de serviço em centavos inteiros. */
+  serviceFeeCents: MoneyCents;
 }
 
 /** Motivos de endereço recusado pelo iFood. */

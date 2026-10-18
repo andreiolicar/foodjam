@@ -69,9 +69,9 @@ describe('calcularRateio', () => {
 
     expect(split).toEqual({
       shares: [
-        { participantId: 'ana', itemsCents: 2590, deliveryCents: 234, totalCents: 2824 },
-        { participantId: 'bia', itemsCents: 3000, deliveryCents: 233, totalCents: 3233 },
-        { participantId: 'caio', itemsCents: 2000, deliveryCents: 233, totalCents: 2233 },
+        { participantId: 'ana', itemsCents: 2590, deliveryCents: 234, serviceCents: 0, totalCents: 2824 },
+        { participantId: 'bia', itemsCents: 3000, deliveryCents: 233, serviceCents: 0, totalCents: 3233 },
+        { participantId: 'caio', itemsCents: 2000, deliveryCents: 233, serviceCents: 0, totalCents: 2233 },
       ],
       totalCents: 8290,
     });
@@ -109,9 +109,9 @@ describe('calcularRateio', () => {
     ]);
 
     expect(split.shares).toEqual([
-      { participantId: 'ana', itemsCents: 1200, deliveryCents: 250, totalCents: 1450 },
-      { participantId: 'bia', itemsCents: 800, deliveryCents: 250, totalCents: 1050 },
-      { participantId: 'caio', itemsCents: 4500, deliveryCents: 999, totalCents: 5499 },
+      { participantId: 'ana', itemsCents: 1200, deliveryCents: 250, serviceCents: 0, totalCents: 1450 },
+      { participantId: 'bia', itemsCents: 800, deliveryCents: 250, serviceCents: 0, totalCents: 1050 },
+      { participantId: 'caio', itemsCents: 4500, deliveryCents: 999, serviceCents: 0, totalCents: 5499 },
     ]);
     expect(split.totalCents).toBe(1200 + 800 + 500 + 4500 + 999);
   });
@@ -151,8 +151,8 @@ describe('calcularRateio', () => {
     ]);
 
     expect(split.shares).toEqual([
-      { participantId: 'ana', itemsCents: 1000, deliveryCents: 151, totalCents: 1151 },
-      { participantId: 'bia', itemsCents: 1900, deliveryCents: 550, totalCents: 2450 },
+      { participantId: 'ana', itemsCents: 1000, deliveryCents: 151, serviceCents: 0, totalCents: 1151 },
+      { participantId: 'bia', itemsCents: 1900, deliveryCents: 550, serviceCents: 0, totalCents: 2450 },
     ]);
   });
 
@@ -160,7 +160,51 @@ describe('calcularRateio', () => {
     const split = calcularRateio([
       { storeId: 'a', deliveryFeeCents: 0, items: [{ participantId: 'ana', unitPriceCents: 1990, quantity: 3 }] },
     ]);
-    expect(split.shares).toEqual([{ participantId: 'ana', itemsCents: 5970, deliveryCents: 0, totalCents: 5970 }]);
+    expect(split.shares).toEqual([{ participantId: 'ana', itemsCents: 5970, deliveryCents: 0, serviceCents: 0, totalCents: 5970 }]);
+  });
+
+  it('taxa de serviço é dividida igual entre quem pediu na loja, como a entrega', () => {
+    const split = calcularRateio([
+      {
+        storeId: 'burger',
+        deliveryFeeCents: 700,
+        serviceFeeCents: 199,
+        items: [
+          { participantId: 'ana', unitPriceCents: 2590, quantity: 1 },
+          { participantId: 'bia', unitPriceCents: 3000, quantity: 1 },
+          { participantId: 'caio', unitPriceCents: 1000, quantity: 2 },
+        ],
+      },
+    ]);
+
+    expect(split.shares).toEqual([
+      { participantId: 'ana', itemsCents: 2590, deliveryCents: 234, serviceCents: 67, totalCents: 2891 },
+      { participantId: 'bia', itemsCents: 3000, deliveryCents: 233, serviceCents: 66, totalCents: 3299 },
+      { participantId: 'caio', itemsCents: 2000, deliveryCents: 233, serviceCents: 66, totalCents: 2299 },
+    ]);
+    expect(split.totalCents).toBe(2590 + 3000 + 2000 + 700 + 199);
+  });
+
+  it('taxa de serviço de cada loja fica só com quem pediu nela', () => {
+    const split = calcularRateio([
+      {
+        storeId: 'a',
+        deliveryFeeCents: 0,
+        serviceFeeCents: 100,
+        items: [
+          { participantId: 'ana', unitPriceCents: 1000, quantity: 1 },
+          { participantId: 'bia', unitPriceCents: 1000, quantity: 1 },
+        ],
+      },
+      { storeId: 'b', deliveryFeeCents: 0, items: [{ participantId: 'caio', unitPriceCents: 900, quantity: 1 }] },
+    ]);
+    expect(split.shares.map((s) => s.serviceCents)).toEqual([50, 50, 0]);
+  });
+
+  it('rejeita taxa de serviço inválida', () => {
+    const item = { participantId: 'ana', unitPriceCents: 1000, quantity: 1 };
+    expect(() => calcularRateio([{ storeId: 'a', deliveryFeeCents: 0, serviceFeeCents: -1, items: [item] }])).toThrow(RangeError);
+    expect(() => calcularRateio([{ storeId: 'a', deliveryFeeCents: 0, serviceFeeCents: 1.5, items: [item] }])).toThrow(RangeError);
   });
 
   it('sem pedidos o rateio é vazio', () => {
@@ -202,7 +246,7 @@ describe('calcularRateio', () => {
       expect(split.totalCents).toBe(expected);
       expect(split.shares.reduce((s, p) => s + p.totalCents, 0)).toBe(expected);
       for (const share of split.shares) {
-        expect(share.totalCents).toBe(share.itemsCents + share.deliveryCents);
+        expect(share.totalCents).toBe(share.itemsCents + share.deliveryCents + share.serviceCents);
       }
     }
   });

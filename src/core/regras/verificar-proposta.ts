@@ -15,7 +15,12 @@ export type ProblemaProposta =
   | { code: 'delivery_fee_changed'; storeId: StoreId; proposedCents: MoneyCents; currentCents: MoneyCents }
   | { code: 'below_minimum'; storeId: StoreId }
   | { code: 'split_mismatch' }
-  | { code: 'over_budget'; participantId: ParticipantId }
+  /** Fechamento com pessoas acima do orçamento que ainda não aceitaram o valor. */
+  | { code: 'budget_pending'; participantIds: ParticipantId[] }
+  /** Fechamento: a taxa de serviço cotada agora difere da proposta. */
+  | { code: 'service_fee_changed'; storeId: StoreId; proposedCents: MoneyCents | null; currentCents: MoneyCents }
+  /** Fechamento: não foi possível cotar a taxa de serviço no iFood. */
+  | { code: 'service_fee_unavailable'; storeId: StoreId }
   | { code: 'stale_catalog'; fetchedAt: string; maxAgeMs: number }
   /** Fechamento sem endereço de entrega confirmado pelo organizador. */
   | { code: 'address_not_confirmed' }
@@ -25,6 +30,8 @@ export type ProblemaProposta =
 /**
  * Validação completa de uma proposta contra a sessão e o catálogo atual.
  * Lista vazia = proposta pode seguir. Usada no ajuste e no fechamento.
+ * O orçamento de cada pessoa NÃO é checado aqui: estourar vira pergunta à
+ * pessoa (orcamento.ts), e o fechamento bloqueia enquanto houver pendência.
  */
 export function verificarProposta(
   proposal: Proposal,
@@ -76,15 +83,6 @@ export function verificarProposta(
   if (!isDeepStrictEqual(calcularRateio(proposal.orders), proposal.split)) {
     problems.push({ code: 'split_mismatch' });
     return problems;
-  }
-
-  // "Até X reais" vale para a soma dos itens da pessoa (como o iFood mostra os
-  // preços). A parte da entrega aparece no rateio, mas não tira ninguém do pedido.
-  for (const share of proposal.split.shares) {
-    const budget = session.participants.find((p) => p.id === share.participantId)?.preferences.budgetCents;
-    if (budget !== undefined && share.itemsCents > budget) {
-      problems.push({ code: 'over_budget', participantId: share.participantId });
-    }
   }
 
   return problems;

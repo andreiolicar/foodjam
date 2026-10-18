@@ -3,6 +3,7 @@ import type { TimedCatalogSnapshot } from './regras/validar-escolhas.js';
 import type { ProblemaProposta } from './regras/verificar-proposta.js';
 import { verificarProposta } from './regras/verificar-proposta.js';
 import { enderecoConfirmado } from './endereco.js';
+import { pendenciasOrcamento } from './orcamento.js';
 import type { Closure, CoreSession } from './sessao.js';
 import { NaoAutorizadoError, TransicaoInvalidaError, confirmar } from './sessao.js';
 
@@ -50,6 +51,10 @@ export function fechar(
 
   // O pedido precisa de endereço confirmado pelo organizador (é para onde tudo vai).
   if (!enderecoConfirmado(session)) return { ok: false, problems: [{ code: 'address_not_confirmed' }] };
+
+  // Quem passou do orçamento precisa ter respondido (aceito o valor, trocado de item ou ficado sem).
+  const pendentes = pendenciasOrcamento(session);
+  if (pendentes.length > 0) return { ok: false, problems: [{ code: 'budget_pending', participantIds: pendentes }] };
 
   const maxAgeMs = options.maxCatalogAgeMs ?? MAX_CATALOG_AGE_MS;
   const ageMs = Date.parse(now) - Date.parse(catalog.fetchedAt);

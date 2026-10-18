@@ -147,9 +147,9 @@ describe('descreverProblemas', () => {
       descreverProblemas([
         { code: 'below_minimum', storeId: 'x' },
         { code: 'below_minimum', storeId: 'y' },
-        { code: 'over_budget', participantId: 'a' },
+        { code: 'service_fee_changed', storeId: 'x', proposedCents: 100, currentCents: 120 },
       ]),
-    ).toBe('Não consegui fazer essa troca: a loja não atingiria o pedido mínimo; passaria do seu orçamento.');
+    ).toBe('Não consegui fazer essa troca: a loja não atingiria o pedido mínimo; a taxa de serviço mudou.');
   });
 });
 

@@ -1,5 +1,5 @@
 import type { DeliveryAddress, MenuItem, Store, StoreId } from '../contracts.js';
-import type { AddressValidation, CatalogPort } from '../ports.js';
+import type { AddressValidation, CatalogPort, CotacaoPedido, ItemCotacao } from '../ports.js';
 import { StoreNotFoundError } from '../ports.js';
 
 export const LOJAS = {
@@ -56,7 +56,7 @@ const normalize = (text: string) =>
     .toLowerCase();
 
 export interface CatalogCall {
-  operation: 'validateAddress' | 'searchStores' | 'getMenu';
+  operation: 'validateAddress' | 'searchStores' | 'getMenu' | 'quoteOrder';
   input: string;
   /** Endereço recebido nas buscas (formatted), quando houver. */
   address?: string;
@@ -66,6 +66,10 @@ export interface CatalogCall {
 export const ENDERECO_FAKE = 'Rua das Flores, 123 - Centro, São Paulo - SP';
 
 const PREPOSICOES = new Set(['da', 'das', 'de', 'do', 'dos', 'e']);
+
+/** Limites da taxa de serviço do fake (5% dos itens). */
+export const TAXA_SERVICO_MIN = 99;
+export const TAXA_SERVICO_MAX = 299;
 
 /**
  * Catálogo em memória para testes e simulação. Cenários: hamburgueria com item
@@ -120,6 +124,22 @@ export class CatalogoFake implements CatalogPort {
       throw new StoreNotFoundError(storeId);
     }
     return this.itemsOf(storeId).map((item) => structuredClone(item));
+  }
+
+  /**
+   * Taxa de serviço previsível para testes: 5% dos itens, no mínimo R$ 0,99 e
+   * no máximo R$ 2,99. Item ou loja desconhecidos lançam erro.
+   */
+  async quoteOrder(storeId: StoreId, items: readonly ItemCotacao[], address?: DeliveryAddress): Promise<CotacaoPedido> {
+    this.calls.push({ operation: 'quoteOrder', input: storeId, ...(address && { address: address.formatted }) });
+    if (!this.data.stores.some((s) => s.id === storeId)) throw new StoreNotFoundError(storeId);
+    let subtotal = 0;
+    for (const { menuItemId, quantity } of items) {
+      const item = this.data.menuItems.find((i) => i.id === menuItemId && i.storeId === storeId);
+      if (!item) throw new Error(`item ${menuItemId} não existe na loja ${storeId}`);
+      subtotal += item.priceCents * quantity;
+    }
+    return { serviceFeeCents: Math.min(TAXA_SERVICO_MAX, Math.max(TAXA_SERVICO_MIN, Math.round(subtotal * 0.05))) };
   }
 
   private itemsOf(storeId: StoreId) {
