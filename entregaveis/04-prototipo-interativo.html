@@ -70,7 +70,7 @@
             </h2>
             <p id="chat-subtitle" class="text-xs text-emerald-400 flex items-center gap-1">
               <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-              Íris bot está online
+              foodjam bot está online
             </p>
           </div>
         </div>
@@ -199,7 +199,7 @@
         </div>
       </div>`;
 
-    const iris = (conteudo, titulo = 'Íris', borda = 'border-slate-700') => `
+    const iris = (conteudo, titulo = 'foodjam', borda = 'border-slate-700') => `
       <div class="flex items-start gap-2.5">
         <div class="w-7 h-7 rounded-full ifood-red flex items-center justify-center text-xs font-bold text-white shrink-0">Í</div>
         <div class="bg-slate-850 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[92%] text-xs border ${borda} shadow-md space-y-2">
@@ -252,7 +252,7 @@
         ⏳ Aguardando confirmação de valor no privado: <strong>Bia</strong>
       </div>` : ''}
       ${botoes([['✅ Confirmar pedido', pendente ? 0 : 5], ['↩️ Voltar para a coleta', 2], ['❌ Cancelar pedido', 0]])}
-    `, 'Íris', 'border-slate-700 shadow-xl');
+    `, 'foodjam', 'border-slate-700 shadow-xl');
 
     const dados = {
       1: {
@@ -264,23 +264,23 @@
         tokens: '0 (sem modelo)',
         privadoDe: 'Ana',
         logs: [
-          '<span class="text-slate-400">12:00:01</span> [core] iniciar(): Ana mencionou a Íris e virou organizadora',
+          '<span class="text-slate-400">12:00:01</span> [core] iniciar(): Ana mencionou foodjam e virou organizadora',
           '<span class="text-amber-400">12:00:01</span> [core] request_address → privado da Ana (a coleta já começa no grupo)',
           '<span class="text-blue-400">12:00:09</span> [catálogo] validateAddress("Av. Paulista, 1000 ...") → ok',
           '<span class="text-amber-400">12:00:09</span> [core] confirm_address (digitado) → [Confirmar] [Corrigir]',
           '<span class="text-emerald-400">12:00:12</span> [core] Endereço confirmado pela organizadora'
         ],
         chatGrupo: `
-          ${pessoa('A', 'Ana (organizadora)', '@iris_bot bora pedir o almoço?', 'bg-blue-600', 'text-blue-400')}
+          ${pessoa('A', 'Ana (organizadora)', '@foodjam_bot bora pedir o almoço?', 'bg-blue-600', 'text-blue-400')}
           ${iris(`<p>Pedido iniciado por Ana! Mandem aqui o que querem comer, restrições e limite de valor.</p>
                   <p>Ana, te chamei no privado para combinar o endereço de entrega. Quando todos tiverem falado, use /montar.</p>
                   ${botoes([['Ver o privado da Ana →', 'privado']])}`)}
         `,
         chatPrivado: `
-          ${iris('<p>Qual o endereço de entrega? Digite rua, número, bairro e cidade.</p>', 'Íris (privado)')}
+          ${iris('<p>Qual o endereço de entrega? Digite rua, número, bairro e cidade.</p>', 'foodjam (privado)')}
           ${pessoa('A', 'Ana', 'Av. Paulista, 1000 - Bela Vista, São Paulo - SP', 'bg-blue-600', 'text-blue-400')}
           ${iris(`<p>Encontrei este endereço: Av. Paulista, 1000 - Bela Vista, São Paulo - SP. Está certo?</p>
-                  ${botoes([['Confirmar', 2], ['Corrigir', 0]])}`, 'Íris (privado)')}
+                  ${botoes([['Confirmar', 2], ['Corrigir', 0]])}`, 'foodjam (privado)')}
         `
       },
       2: {
@@ -305,7 +305,7 @@
           ${pessoa('A', 'Ana (organizadora)', '/montar', 'bg-blue-600', 'text-blue-400')}
           ${iris(`<p>Montando a sugestão com o que vocês mandaram...</p>${botoes([['Ver a sugestão →', 3]])}`)}
         `,
-        chatPrivado: nadaNoPrivado('Endereço confirmado. A Íris só volta ao privado para endereço e valores.')
+        chatPrivado: nadaNoPrivado('Endereço confirmado. O bot foodjam só volta ao privado para endereço e valores.')
       },
       3: {
         fsm: 'reviewing',
@@ -347,8 +347,8 @@
         chatPrivado: `
           ${iris(`<p>Seu pedido fica em <strong>R$ 31,40</strong> com entrega e taxa de serviço, acima do seu orçamento. Pode ser?</p>
                   ${botoes([['Aceito', 5], ['Quero outro', 0]])}
-                  <p class="text-[10px] text-slate-500">[Quero outro] sugere o item mais parecido que caiba no limite: [Aceito a sugestão] [Fico sem].</p>`, 'Íris (privado)')}
-          ${iris('<p>Combinado: valor confirmado.</p>', 'Íris (privado)')}
+                  <p class="text-[10px] text-slate-500">[Quero outro] sugere o item mais parecido que caiba no limite: [Aceito a sugestão] [Fico sem].</p>`, 'foodjam (privado)')}
+          ${iris('<p>Combinado: valor confirmado.</p>', 'foodjam (privado)')}
         `
       },
       5: {
@@ -385,7 +385,7 @@
             </div>
             <p class="text-slate-400 text-[10px]">Autorizado por Ana · pedido <code>-1001234567890-p1</code></p>
             <p class="text-slate-400 text-[11px]">Para um novo pedido, me mencione ou use /iniciar.</p>
-          `, 'Íris', 'border-emerald-500/50')}
+          `, 'foodjam', 'border-emerald-500/50')}
           <div class="p-3 rounded-xl border border-dashed border-slate-700 text-[11px] text-slate-400 space-y-1">
             <div class="font-bold text-slate-300">🛣️ Próximos passos (fora do MVP)</div>
             <p>O core entrega o <code>AuthorizedOrder</code> e não compra nada. Submeter o pedido no iFood, link de rastreio e cobrança por Pix ficam para o executor de pedidos, ainda não implementado.</p>
