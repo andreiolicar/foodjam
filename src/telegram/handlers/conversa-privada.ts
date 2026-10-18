@@ -9,7 +9,8 @@ import { atualizarCard, exibirProposta, retirarBotoesDoCard } from '../services/
 // Respostas do orçamento que mudam o pedido: a proposta nova vai para o grupo.
 const MUDOU_PEDIDO = new Set(['budget_item_swapped', 'budget_left_out']);
 
-export const TEXTO_VALORES_CONFIRMADOS = '✅ Todos confirmaram os valores. Quem organizou já pode confirmar o pedido.';
+export const TEXTO_VALORES_CONFIRMADOS =
+  '🎉 Boa! Todo mundo confirmou os valores. Quem organizou o pedido já pode seguir com a confirmação!';
 
 export function registrarConversaPrivada(bot: Bot, iris: Agente, preliminaryOnly = false): void {
   const privado = bot.chatType('private');
@@ -20,7 +21,9 @@ export function registrarConversaPrivada(bot: Bot, iris: Agente, preliminaryOnly
 
     if (pendentes.length === 0) {
       await ctx.reply(
-        'Oi! Por aqui eu mando o que é só seu: endereço de entrega e valores do pedido. O pedido em si acontece no grupo.',
+        'Oi! 👋 Que bom ter você por aqui!\n\n' +
+        'Vou te chamar no privado quando precisar confirmar valores ou combinar o endereço de entrega. ' +
+        'Já as preferências e decisões sobre o pedido ficam lá no grupo. 😊',
       );
       return;
     }
@@ -42,17 +45,29 @@ export function registrarConversaPrivada(bot: Bot, iris: Agente, preliminaryOnly
     const sessionId = sessaoDa(participantId);
     const sessao = sessionId !== undefined ? await iris.obter(sessionId) : undefined;
 
-    if (sessionId === undefined || sessao?.address?.status !== 'awaiting_text' || sessao.organizerId !== participantId) {
-      await ctx.reply('Por aqui eu só recebo o endereço de entrega, quando eu pedir. As preferências vão no grupo.');
+    if (
+      sessionId === undefined ||
+      sessao?.address?.status !== 'awaiting_text' ||
+      sessao.organizerId !== participantId
+    ) {
+      await ctx.reply(
+        'Opa! 😊 Por aqui, você pode me enviar o endereço de entrega quando eu pedir. ' +
+        'Para conversar sobre preferências e alterações no pedido, é só mandar uma mensagem lá no grupo!',
+      );
       return;
     }
 
     try {
-      const resposta = await iris.mensagem({ sessionId, participantId, text: ctx.message.text }, ctx.from.first_name);
+      const resposta = await iris.mensagem(
+        { sessionId, participantId, text: ctx.message.text },
+        ctx.from.first_name,
+      );
       await apresentarActions(ctx.api, resposta, ctx.me.username);
     } catch {
       console.error('Erro ao processar o endereço. Dados privados omitidos.');
-      await ctx.reply('Não foi possível processar esse endereço.');
+      await ctx.reply(
+        'Ops! 😅 Não consegui processar o endereço desta vez. Pode tentar enviá-lo novamente?',
+      );
     }
   });
 
@@ -83,7 +98,9 @@ export function registrarConversaPrivada(bot: Bot, iris: Agente, preliminaryOnly
       }
     } catch {
       console.error('Erro ao tratar botão do privado. Dados privados omitidos.');
-      await ctx.reply('Não foi possível registrar sua resposta.');
+      await ctx.reply(
+        'Ops! 😕 Não consegui registrar sua resposta. Tente novamente em alguns instantes.',
+      );
       return;
     }
 
@@ -104,7 +121,7 @@ export function registrarConversaPrivada(bot: Bot, iris: Agente, preliminaryOnly
     await apresentarActions(ctx.api, resposta, ctx.me.username);
     if (preliminaryOnly && botao.tipo === 'endereco' && ['error', 'catalog_failed', 'address_invalid', 'address_stale'].includes(resposta.outcome)) await ctx.reply('Não foi possível confirmar este endereço. Use /endereco no grupo para apresentar novamente um registro salvo atual.');
 
-    // Valor aceito: o card no grupo tira a pessoa da lista de espera; sem ninguém faltando, o grupo é avisado.
+    // Valor aceito: tira a pessoa da lista de espera; sem ninguém faltando, o grupo é avisado.
     if (resposta.outcome === 'budget_accepted') {
       await atualizarCard(ctx.api, iris, botao.sessionId, resposta);
       if (resposta.pendingBudget?.length === 0) {
