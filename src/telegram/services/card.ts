@@ -160,8 +160,11 @@ export interface DadosPropostaPreliminar {
 export function textoPropostaPreliminar(dados: DadosPropostaPreliminar): string {
   const { proposal } = dados;
   const people = new Set([...proposal.participants.map(p => p.id), ...(dados.collection ?? []).map(p => p.participantId)]);
+  const withItem = new Set(proposal.items.map(i => i.participantId));
+  const withAlternative = new Set(proposal.items.filter(i => i.isSubstitute).map(i => i.participantId));
   const lines = ['🍽️ <b>Sugestão preliminar da Íris</b>',
-    `Cobertura: ${new Set(proposal.items.map(i => i.participantId)).size} de ${people.size} pessoas com item.`];
+    `Cobertura: ${withItem.size} de ${people.size} pessoas com item.`,
+    `Do pedido: ${withItem.size - withAlternative.size}; com alternativa compatível: ${withAlternative.size}; sem item adequado: ${people.size - withItem.size}.`];
   for (const person of proposal.participants.filter(p => !proposal.items.some(i => i.participantId === p.id))) lines.push(`🙋 ${escapar(person.displayName)}: sem item compatível nesta amostra.`);
   for (const person of dados.collection ?? []) if (!person.included) lines.push(`🙋 ${escapar(person.displayName)}: preferência ainda não reconhecida; sem item nesta proposta.`);
   if (proposal.coverage?.classificationLimited) lines.push('Classificação limitada por pessoa aos candidatos da amostra priorizados por desejo.');

@@ -19,8 +19,11 @@ Para cada pessoa (todas, com o participantId exato) e cada desejo dela, NA MESMA
 - atende: ids de "itensPermitidos" DESSA pessoa que atendem o desejo, do melhor para o pior.
 - substitutos: ids de "itensPermitidos" dessa pessoa que não atendem exatamente, mas são uma alternativa razoável, do melhor para o pior.
 - Itens que não servem ficam de fora. Nunca use id fora de "itensPermitidos" da pessoa.
-- Desejo de comida (ex.: "algo leve", "lanche") só é atendido por comida; bebida sozinha não atende, a menos que a pessoa peça bebida.
-- Bebida NUNCA é substituto de desejo de comida: para desejo de comida, "substitutos" só tem comida.
+- Para pedidos específicos, exija correspondência do produto ou sinônimo legítimo no nome do item. Mesma categoria genérica (comida/bebida), ingrediente isolado ou acompanhamento não provam compatibilidade.
+- Substitutos precisam manter a identidade do pedido, com uma variação justificável. Sem evidência, deixe as duas listas vazias; nunca preencha cobertura com um produto arbitrário.
+- Pedidos amplos de café da manhã permitem produtos pertinentes variados, inclusive bebidas. Se também houver um produto específico no pedido, preserve essa exigência.
+- Desejo de comida (ex.: "algo leve", "lanche") só é atendido por comida; bebida sozinha não atende, exceto no contexto amplo de café da manhã ou quando a pessoa pede bebida.
+- Bebida NUNCA é substituto de desejo de comida fora dessas exceções.
 - Considere as preferências ("gosta") da pessoa para ordenar.
 Você não escolhe lojas nem calcula nada: o sistema monta as combinações, preços e rateio.`;
 

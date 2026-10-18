@@ -14,7 +14,7 @@ import type { ClassificacaoOutput } from './schemas.js';
 import { criarClassificacaoSchema } from './schemas.js';
 import { enumerarCombinacoes, escolherNaCombinacao } from './regras/combinacoes.js';
 import { contemTermo, palavras, evitado, violaRestricao } from './regras/elegibilidade.js';
-import { categoriaDoDesejo, categoriaDoItem } from './regras/categoria.js';
+import { compatibilidadeComprovada } from './regras/compatibilidade.js';
 
 /** Escolha salva é proposta ao Core, não confirmação nem cadastro silencioso. */
 export async function selecionarEnderecoSalvo(inputSession: CoreSession, actorId: ParticipantId, port: DiscoveryCatalogPort, addressId: string) {
@@ -83,13 +83,12 @@ export async function proporDescoberta(inputSession: CoreSession, deps: {
   const safe = classified.pessoas.map(p => {
     const person = people.find(x => x.participant.id === p.participantId);
     return { participantId: p.participantId, desejos: p.desejos.map((d, index) => {
-      const filter = (ids: readonly string[], substitute = false) => ids.filter(id => {
+      const filter = (ids: readonly string[]) => ids.filter(id => {
         const item = byId.get(id);
         return item && person?.itensPermitidos.some(i => i.id === id)
-          && !(categoriaDoDesejo(person.desejos[index] ?? '') === 'food' && categoriaDoItem(item) === 'drink')
-          && (!substitute || categoriaDoDesejo(person.desejos[index] ?? '') === categoriaDoItem(item));
+          && compatibilidadeComprovada(person.desejos[index] ?? '', item);
       });
-      return { atende: filter(d.atende), substitutos: filter(d.substitutos, true) };
+      return { atende: filter(d.atende), substitutos: filter(d.substitutos) };
     }) };
   });
   const owners = new Map(items.map(i => [i.id, i.storeId]));

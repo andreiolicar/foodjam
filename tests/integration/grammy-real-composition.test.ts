@@ -27,6 +27,7 @@ const http = vi.fn(async (_url: unknown, init?: RequestInit) => {
 });
 const defaultHttp = http.getMockImplementation()!;
 beforeEach(() => {
+  http.mockImplementation(defaultHttp);
   merchant = randomUUID(); products = [randomUUID(), randomUUID()]; isOpen = true;
   transport.connect.mockResolvedValue(undefined); transport.list.mockResolvedValue([]); transport.close.mockResolvedValue(undefined);
   transport.read.mockImplementation(async (name: string, args: Record<string, unknown> = {}) => envelope(name === 'listAddresses' ? { results: [{ addressId: 'fixture-private-address', formattedAddress: 'Endereço privado de teste', coordinates: { latitude: 0, longitude: 0 } }] }
@@ -95,6 +96,45 @@ it('loja fechada não produz card nem classificação; configuração fake não 
   try { await h.text(71, 'Hambúrguer'); await h.text(71, '/montar'); expect(h.sent.some(m => m.text.includes('amostra pesquisada') && m.text.includes('fechad'))).toBe(true); expect(h.sent.some(m => m.text.includes('atingiu limites de amostra, chamadas ou tempo'))).toBe(false); expect(h.sent.some(m => m.text.includes('Sugestão preliminar'))).toBe(false); expect(http).toHaveBeenCalledTimes(1); } finally { await h.runtime.close(); }
   transport.factory.mockClear();
   await expect(criarAplicacaoReal({ ...env, AI_PROVIDER: 'fake' })).rejects.toThrow(); expect(transport.factory).not.toHaveBeenCalled();
+});
+
+it.each(['atende', 'substitutos'] as const)('composição real controlada rejeita incompatíveis classificados em %s e apresenta cobertura honesta 1/3', async field => {
+  const read = transport.read.getMockImplementation()!;
+  transport.read.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+    if (name === 'browseOffers' || name === 'searchOffers' && args.resultKind === 'ITEM') return envelope({
+      resultKind: 'ITEM', hasMore: false, results: products.map((itemId, index) => ({
+        itemId, itemName: index ? 'Água mineral' : 'Misto quente', merchant: { merchantId: merchant },
+      })),
+    });
+    return read(name, args);
+  });
+  http.mockImplementation(async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    const collection = body.response_format?.json_schema?.name === 'coleta_lote';
+    const ids: string[] = collection ? body.response_format.json_schema.schema.properties.resultados.items.properties.participantId.enum
+      : JSON.parse(/<pessoas>(.*?)<\/pessoas>/s.exec(body.messages[1].content)![1]!).map((p: { participantId: string }) => p.participantId);
+    const wishes: Record<string, string> = { '71': 'misto quente', '72': 'cappuccino', '73': 'croissant' };
+    const output = collection ? { resultados: ids.map(participantId => ({ participantId, kind: 'preference', wishes: [wishes[participantId]], foodPreferences: [], dietaryRestrictions: [], avoids: [], budgetText: null, clarification: null })) }
+      : { pessoas: ids.map(participantId => ({ participantId, desejos: [participantId === '71' ? { atende: [products[0]], substitutos: [] }
+        : { atende: [], substitutos: [], [field]: [products[participantId === '72' ? 1 : 0]] }] })) };
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(output) } }] }), { status: 200 });
+  });
+  const h = await setup();
+  try {
+    await h.text(71, 'Misto quente'); await h.text(72, 'Cappuccino'); await h.text(73, 'Croissant'); await h.text(71, '/montar');
+    const proposal = (await h.runtime.iris.obter(String(group)))?.preliminary;
+    expect(proposal?.items, JSON.stringify(h.runtime.diagnostico())).toEqual([{ participantId: '71', storeId: merchant, menuItemId: products[0], quantity: 1 }]);
+    expect(proposal?.participants).toHaveLength(3);
+    const summary = h.sent.findLast(m => m.text.includes('Sugestão preliminar'))!;
+    expect(summary.text).toContain('1 de 3 pessoas com item');
+    expect(summary.text).toContain('Pessoa 72: sem item compatível nesta amostra');
+    expect(summary.text).toContain('Pessoa 73: sem item compatível nesta amostra');
+    const individual = h.sent.filter(m => m.text.startsWith('🍽️ <b>') && !m.text.includes('Sugestão preliminar'));
+    expect(individual).toHaveLength(1); expect(individual[0]!.text).toContain('Misto quente');
+    await h.click(71, 'proposta:confirmar', group, summary.id);
+    expect((await h.runtime.iris.obter(String(group)))?.status).not.toBe('closed');
+    expect(transport.read.mock.calls.every(([name]) => ['listAddresses', 'searchOffers', 'getMerchant', 'browseOffers'].includes(name))).toBe(true);
+  } finally { await h.runtime.close(); }
 });
 it('composição de produção procura hambúrguer e açaí em duas lojas e mostra preço unitário comprovado', async () => {
   const second = randomUUID(); const addressRead = transport.read.getMockImplementation()!;
