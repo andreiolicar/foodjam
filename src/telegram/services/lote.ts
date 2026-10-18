@@ -13,7 +13,7 @@ export function lembrarMensagem(sessionId: SessionId, participantId: Participant
 
 /** Lote que trocou itens da proposta: o grupo precisa ver a proposta nova. */
 export function loteAjustouProposta(resposta: Resposta): boolean {
-  return resposta.proposal !== undefined && (resposta.resultados ?? []).some((r) => r.outcome === 'adjusted');
+  return (resposta.proposal !== undefined || resposta.preliminary !== undefined) && (resposta.resultados ?? []).some((r) => r.outcome === 'adjusted');
 }
 
 /** Reage com 👍 à última mensagem de quem teve a preferência registrada. Falha não atrapalha o fluxo. */

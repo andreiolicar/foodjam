@@ -4,6 +4,11 @@ import type { ItemLote } from './coleta.js';
 import { coletar, coletarLote } from './coleta.js';
 import type {
   AuthorizedOrder,
+  DeliveryAddress,
+  DiscoveryItem,
+  DiscoveryStore,
+  PreliminaryProposal,
+  CommercialReview,
   CoreAction,
   IncomingMessage,
   MenuItemId,
@@ -69,9 +74,16 @@ export const TEXTOS = {
  */
 export interface Resposta {
   outcome: string;
+  cartReview?: CommercialReview;
+  cartProposal?: PreliminaryProposal;
   actions: CoreAction[];
   session?: CoreSession;
   proposal?: Proposal;
+  preliminary?: PreliminaryProposal;
+  preliminaryAlternative?: PreliminaryProposal;
+  collection?: { participantId: string; displayName: string; outcome: string; included: boolean }[];
+  items?: DiscoveryItem[];
+  stores?: DiscoveryStore[];
   /** Segunda melhor combinação (itens diferentes), para o botão "Outra opção". */
   alternative?: Proposal;
   order?: AuthorizedOrder;
@@ -117,7 +129,15 @@ export interface NomesCatalogo {
   itens: Record<MenuItemId, string>;
 }
 
+export type AcaoPropostaPreliminar = 'outra_opcao' | 'voltar_coleta' | 'cancelar' | 'revisar';
+
 export interface Agente {
+  /** Preparar exige callback autenticado do organizador e revisão vigente. Não compra. */
+  prepararCarrinho?(sessionId: SessionId, actorId: ParticipantId, proposalId: string): Promise<Resposta>;
+  /** Apenas relê carrinhos registrados; jamais cria ou adiciona itens. */
+  revisarCarrinho?(sessionId: SessionId, actorId: ParticipantId, proposalId: string): Promise<Resposta>;
+  /** Ação vinculada ao card exibido; verifica identidade dentro da fila da sessão. */
+  agirNaPropostaPreliminar?(sessionId: SessionId, actorId: ParticipantId, proposalId: string, action: AcaoPropostaPreliminar): Promise<Resposta>;
   /** Alguém mencionou o bot: abre a sessão do chat (ou devolve a que já está ativa). */
   iniciar(sessionId: SessionId, organizador: Organizador): Promise<Resposta>;
   /** Mensagem de alguém do grupo: preferência na coleta, pedido de ajuste na proposta. */
@@ -129,7 +149,7 @@ export interface Agente {
    */
   mensagens(sessionId: SessionId, itens: readonly ItemLote[]): Promise<Resposta>;
   /** Botões [Sim] / [Confirmar] do endereço. Só o organizador. Trocar o endereço descarta a proposta. */
-  confirmarEndereco(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
+  confirmarEndereco(sessionId: SessionId, actorId: ParticipantId, expected?: DeliveryAddress): Promise<Resposta>;
   /** Botões [Outro endereço] / [Corrigir]: o organizador vai digitar o endereço no privado. Só o organizador. */
   pedirOutroEndereco(sessionId: SessionId, actorId: ParticipantId): Promise<Resposta>;
   /** Monta (ou refaz) a proposta. Só o organizador; exige endereço confirmado. */
@@ -429,11 +449,13 @@ export function criarAgente(deps: AgenteDeps): Agente {
         }),
       ),
 
-    confirmarEndereco: (sessionId, actorId) =>
+    confirmarEndereco: (sessionId, actorId, expected) =>
       enfileirar(sessionId, () =>
         protegido(actorId, sessionId, async () => {
           const record = await ativa(sessionId, actorId);
           if (ehResposta(record)) return record;
+          const candidate = record.session.address?.candidate;
+          if (record.session.organizerId === actorId && expected && (!candidate || candidate.id !== expected.id || candidate.formatted !== expected.formatted)) return { outcome: 'address_stale', session: record.session, actions: [] };
           const r = confirmarEnderecoDaSessao(record.session, actorId);
           // Endereço mudou com proposta na mesa: a proposta (e o catálogo dela) deixam de valer.
           await salvar(record, r.session, r.proposalDiscarded ? { catalog: undefined } : {});

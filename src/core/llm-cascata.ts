@@ -29,8 +29,8 @@ export interface CascataOptions {
   /** Em ordem de preferência: o primeiro disponível atende. */
   provedores: readonly ProvedorDaCascata[];
   /**
-   * Tempo máximo de cada provedor antes de passar ao próximo. O último da fila
-   * não tem limite próprio: vale o timeout de quem chamou. Padrão: 10 s.
+   * Tempo máximo de cada provedor, incluindo o último. Padrão: 8 s;
+   * o prazo total/cancelamento do chamador também prevalece.
    */
   timeoutPorProvedorMs?: number;
   /** Relógio em ms, injetável para testes. Padrão: Date.now. */
@@ -52,13 +52,16 @@ const PAUSA_MS: Record<MotivoTroca, number> = {
 };
 
 export class CascataEsgotadaError extends Error {
+  /** A chamada já percorreu a fila; não repetir via gerarEstruturado. */
+  readonly retryable = false;
+
   constructor(
     readonly tentativas: number,
-    readonly ultimoErro: unknown,
+    ultimoErro: unknown,
     /** Todos falharam por chave, plano ou cota: tentar de novo não adianta. */
     readonly fatal: boolean,
   ) {
-    const detalhe = ultimoErro instanceof Error ? ultimoErro.message : String(ultimoErro);
+    const detalhe = ultimoErro instanceof LlmHttpError ? `HTTP ${ultimoErro.status}` : 'indisponibilidade ou saída inválida';
     super(`nenhum dos ${tentativas} provedor(es) de IA respondeu; último erro: ${detalhe}`);
     this.name = 'CascataEsgotadaError';
   }
@@ -89,11 +92,8 @@ function usosDe(llm: LlmPort): readonly UsoTokens[] | undefined {
  * LlmPort que empilha vários provedores: tenta o primeiro disponível e, se ele
  * falhar (429, 5xx, timeout, rede, chave ou cota), passa ao próximo na hora.
  * O provedor que falhou vai para o fim da fila por um tempo (PAUSA_MS) e volta
- * sozinho depois. Se todos estiverem em pausa, tenta mesmo assim, do que volta
- * primeiro ao que volta por último.
- *
- * Saída fora do schema não é problema do provedor: a nova tentativa com
- * correção fica no gerarEstruturado, como sem a cascata.
+ * sozinho depois. Provedores em cooldown não recebem chamadas.
+ * Saída fora do schema Zod também permite tentar o próximo provedor.
  */
 export class LlmEmCascata implements LlmPort {
   /** Uso de tokens das respostas, na ordem em que chegaram. */
@@ -118,25 +118,23 @@ export class LlmEmCascata implements LlmPort {
     const agora = this.now();
     const indices = this.options.provedores.map((_, i) => i);
     const livres = indices.filter((i) => (this.pausadoAte[i] ?? 0) <= agora);
-    const pausados = indices
-      .filter((i) => (this.pausadoAte[i] ?? 0) > agora)
-      .sort((a, b) => (this.pausadoAte[a] ?? 0) - (this.pausadoAte[b] ?? 0));
-    return [...livres, ...pausados];
+    return livres;
   }
 
   async generate(request: LlmRequest): Promise<unknown> {
+    if (request.signal?.aborted) throw request.signal.reason;
     const fila = this.fila();
     let ultimoErro: unknown;
     let todosFatais = true;
 
     for (const [posicao, indice] of fila.entries()) {
       const provedor = this.options.provedores[indice];
-      if (!provedor) continue;
-      const ultimo = posicao === fila.length - 1;
+      if (!provedor || (this.pausadoAte[indice] ?? 0) > this.now()) continue;
+      if (request.signal?.aborted) throw request.signal.reason;
       const antes = usosDe(provedor.llm)?.length ?? 0;
       try {
-        const resultado = await this.chamar(provedor.llm, request, ultimo);
-        this.pausadoAte[indice] = 0;
+        const resultado = await this.chamar(provedor.llm, request);
+        if (request.validateOutput && !request.validateOutput(resultado)) throw new Error('saída incompatível com schema');
         this.usos.push(...(usosDe(provedor.llm)?.slice(antes) ?? []));
         return resultado;
       } catch (error) {
@@ -145,8 +143,8 @@ export class LlmEmCascata implements LlmPort {
         ultimoErro = error;
         if (!erroFatal(error)) todosFatais = false;
         const motivo = motivoDe(error);
-        const pausaMs = PAUSA_MS[motivo];
-        if (pausaMs > 0) this.pausadoAte[indice] = this.now() + pausaMs;
+        const pausaMs = Math.max(PAUSA_MS[motivo], error instanceof LlmHttpError ? error.retryAfterMs ?? 0 : 0);
+        if (pausaMs > 0) this.pausadoAte[indice] = Math.max(this.pausadoAte[indice] ?? 0, this.now() + pausaMs);
         const proximo = this.options.provedores[fila[posicao + 1] ?? -1];
         const troca: TrocaDeProvedor = {
           tier: request.tier,
@@ -156,33 +154,32 @@ export class LlmEmCascata implements LlmPort {
           pausaMs,
         };
         this.trocas.push(troca);
-        this.options.aoTrocar?.(troca);
+        try { this.options.aoTrocar?.(troca); } catch { /* Diagnóstico não interfere na recuperação. */ }
       }
     }
     throw new CascataEsgotadaError(fila.length, ultimoErro, todosFatais);
   }
 
-  /** Chama um provedor com timeout próprio (exceto o último), ligado ao sinal de quem chamou. */
-  private async chamar(llm: LlmPort, request: LlmRequest, ultimo: boolean): Promise<unknown> {
+  /** Prazo por provedor e cancelamento também encerram transportes que ignoram o sinal. */
+  private async chamar(llm: LlmPort, request: LlmRequest): Promise<unknown> {
     const controller = new AbortController();
-    const repassar = () => controller.abort(request.signal?.reason);
-    if (request.signal?.aborted) throw request.signal.reason;
-    request.signal?.addEventListener('abort', repassar, { once: true });
-
-    const limiteMs = this.options.timeoutPorProvedorMs ?? 10_000;
+    const limiteMs = this.options.timeoutPorProvedorMs ?? 8_000;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const tempoEsgotado = ultimo
-      ? undefined
-      : new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            const erro = new TimeoutDoProvedor(limiteMs);
-            controller.abort(erro);
-            reject(erro);
-          }, limiteMs);
-        });
+    let repassar = () => {};
+    const interrompido = new Promise<never>((_, reject) => {
+      repassar = () => {
+        const erro = request.signal?.reason ?? new Error('requisição cancelada');
+        controller.abort(erro); reject(erro);
+      };
+      if (request.signal?.aborted) { repassar(); return; }
+      request.signal?.addEventListener('abort', repassar, {once: true});
+      timer = setTimeout(() => {
+        const erro = new TimeoutDoProvedor(limiteMs);
+        controller.abort(erro); reject(erro);
+      }, limiteMs);
+    });
     try {
-      const chamada = llm.generate({ ...request, signal: controller.signal });
-      return await (tempoEsgotado ? Promise.race([chamada, tempoEsgotado]) : chamada);
+      return await Promise.race([llm.generate({...request, signal: controller.signal}), interrompido]);
     } finally {
       clearTimeout(timer);
       request.signal?.removeEventListener('abort', repassar);

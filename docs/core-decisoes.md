@@ -1,5 +1,7 @@
 # Core (Íris): decisões e medições
 
+> **Distinção de fases IF-05/IF-06:** as decisões e medições do fluxo cotado abaixo permanecem como histórico e referência dos testes. Na produção preliminar, MCP e Groq são obrigatórios; não há fallback fake nem repetição automática após HTTP 429. O endereço salvo é confirmado no grupo, enquanto orçamento permanece privado. Valores finais, rateio comercial e fechamento aguardam preparação autorizada e consulta ao carrinho. Veja [arquitetura atual](architecture.md) e [ensaio IF-06](../src/ifood/IF-06.md).
+
 Registro do que foi decidido no core, por quê, e o que foi medido. Base para o documento técnico e para a apresentação. Detalhes de uso: [`src/core/README.md`](../src/core/README.md) e [`docs/api-core.md`](api-core.md).
 
 ## Arquitetura do agente

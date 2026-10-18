@@ -1,0 +1,140 @@
+import { merchantReview, validatedItemImageUrl } from './visual-metadata.js';
+import type { DiscoveryCatalogPort, DiscoverySearchOptions } from '../core/ports.js';
+import type { DiscoveryItem, DiscoveryStore } from '../core/contracts.js';
+import type { IfoodMcpClient } from './client.js';
+import { catalogAddress, savedAddressLocation, savedAddressRecords } from './catalog-address.js';
+import { addCatalogRecord, catalogDocument, catalogInput, catalogDiscoveryItem, catalogMerchantIdentity, catalogPage, IfoodCatalogError, mapMerchant, catalogMoneyCents } from './catalog-data.js';
+
+/** Porta preliminar. Não configura unidade financeira por padrão. */
+export function createIfoodDiscoveryCatalog(client: Pick<IfoodMcpClient, 'callReadTool'>,
+  options: { moneyUnit?: 'BRL' | 'cents'; itemMoneyUnit?: 'BRL' | 'cents' | 'unknown'; maxPages?: number; pageSize?: number; allowTruncatedStoreSearch?: boolean } = {}): DiscoveryCatalogPort {
+  const unit = options.moneyUnit;
+  const maxPages = options.maxPages ?? 3;
+  const itemUnit = options.itemMoneyUnit === 'unknown' ? undefined : options.itemMoneyUnit ?? unit;
+  if (itemUnit !== undefined && itemUnit !== 'BRL' && itemUnit !== 'cents' || options.pageSize !== undefined && (!Number.isInteger(options.pageSize) || options.pageSize < 1 || options.pageSize > 50)) throw new IfoodCatalogError('invalid_config');
+  if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 3 || unit !== undefined && unit !== 'BRL' && unit !== 'cents') throw new IfoodCatalogError('invalid_config');
+  async function read(name: string, args: Record<string, unknown>, context?: DiscoverySearchOptions) {
+    try {
+      context?.signal?.throwIfAborted();
+      const result = context?.signal ? await client.callReadTool(name, args, { signal: context.signal }) : await client.callReadTool(name, args);
+      context?.signal?.throwIfAborted();
+      return catalogDocument(result);
+    }
+    catch (e) { if (e instanceof IfoodCatalogError) throw e; throw new IfoodCatalogError('read_failed'); }
+  }
+  async function location(address: { formatted: string; id?: string }, context?: DiscoverySearchOptions) {
+    const selected = catalogAddress(address);
+    return savedAddressLocation(await read('listAddresses', {}, context), selected);
+  }
+  function store(value: unknown): DiscoveryStore {
+    const row = catalogMerchantIdentity(value);
+    const result: DiscoveryStore = { id: row.merchantId, name: row.merchantName, isOpen: row.isOpen, ...merchantReview(value) };
+    if (unit && value && typeof value === 'object' && 'deliveryMethod' in value) {
+      const method = value.deliveryMethod;
+      if (method && typeof method === 'object' && !('fee' in method)) return result;
+      try { return { ...mapMerchant(value, unit), ...merchantReview(value) }; }
+      catch (e) { if (!(e instanceof IfoodCatalogError) || e.reason !== 'delivery_fee_unconfirmed') throw e; }
+    }
+    return result;
+  }
+  function item(value: unknown, storeId: string): DiscoveryItem {
+    const row = catalogDiscoveryItem(value, storeId);
+    const image = validatedItemImageUrl((value as Record<string, unknown>).itemImageUrl);
+    const base = itemUnit && row.unitPrice !== undefined ? catalogMoneyCents(row.unitPrice, itemUnit) : undefined;
+    const pricesEqual = row.promotionalUnitPrice === undefined || itemUnit && catalogMoneyCents(row.promotionalUnitPrice, itemUnit) === base;
+    return { id: row.itemId, storeId: row.merchantId, name: row.itemName,
+      ...(image === undefined ? {} : { itemImageUrl: image }),
+      ...(row.description === undefined ? {} : { description: row.description }),
+      ...(row.category === undefined ? {} : { category: row.category }),
+      ...(row.available === undefined ? {} : { available: row.available }),
+      ...(base === undefined ? {} : pricesEqual ? { priceCents: base } : { basePriceCents: base }),
+    };
+  }
+  async function pages<T extends { id: string }>(name: string, args: Record<string, unknown>, kind: 'MERCHANT' | 'ITEM', map: (value: unknown) => T, allowTruncation = false, context?: DiscoverySearchOptions) {
+    const rows = new Map<string, T>(); const tokens = new Set<string>();
+    let nextPageToken: string | undefined;
+    for (let n = 0; n < (context?.firstPageOnly ? 1 : maxPages); n++) {
+      const page = catalogPage(await read(name, { ...args, ...(options.pageSize ? { pageSize: options.pageSize } : {}), ...(nextPageToken ? { nextPageToken } : {}) }, context), kind);
+      for (const value of page.results) {
+        const row = map(value);
+        const previous = rows.get(row.id);
+        // Identidade/preço/escopo continuam estritos; metadados opcionais não
+        // transformam duas observações do mesmo registro em conflito estrutural.
+        const structural = (entry: T) => Object.fromEntries(Object.entries(entry).filter(([key]) => !['itemImageUrl', 'reviewRating', 'ratingCount'].includes(key)));
+        const checked = new Map<string, Record<string, unknown> & { id: string }>();
+        if (previous) checked.set(previous.id, { ...structural(previous), id: previous.id });
+        addCatalogRecord(checked, { ...structural(row), id: row.id });
+        rows.set(row.id, { ...previous, ...row });
+      }
+      if (!page.nextPageToken) return { rows: [...rows.values()], truncated: false };
+      if (tokens.has(page.nextPageToken)) throw new IfoodCatalogError('pagination_cycle');
+      tokens.add(page.nextPageToken); nextPageToken = page.nextPageToken;
+    }
+    if (allowTruncation || context?.firstPageOnly) return { rows: [...rows.values()], truncated: true };
+    throw new IfoodCatalogError('pagination_limit');
+  }
+  async function merchant(storeId: string, userLocation: { latitude: number; longitude: number }, context?: DiscoverySearchOptions) {
+    const value = await read('getMerchant', { merchantId: storeId, userLocation }, context);
+    if (catalogMerchantIdentity(value).merchantId !== storeId) throw new IfoodCatalogError('merchant_scope_mismatch');
+    return value;
+  }
+  function build(resolveLocation: typeof location): DiscoveryCatalogPort { return {
+    async forDiscovery(address, context) {
+      const selected = JSON.stringify(catalogAddress(address));
+      const userLocation = await location(address, context);
+      // Só localização, só este endereço/operação. Lojas, estado, ofertas e
+      // valores nunca são armazenados; menu mantém sua releitura independente.
+      return build(async candidate => {
+        if (JSON.stringify(catalogAddress(candidate)) !== selected) throw new IfoodCatalogError('invalid_input');
+        return { ...userLocation };
+      });
+    },
+    async listSavedAddresses() {
+      return savedAddressRecords(await read('listAddresses', {})).map(row => ({ id: row.addressId, formatted: row.formattedAddress }));
+    },
+    async searchStores(query, address, searchOptions) {
+      if (typeof query !== 'string') throw new IfoodCatalogError('invalid_input');
+      const userLocation = await resolveLocation(address, searchOptions);
+      // Filtro documentado para descoberta; funcionamento ainda é validado no Core.
+      const args = { merchantType: 'RESTAURANT', resultKind: 'MERCHANT', userLocation, refinements: { onlyOpen: true } };
+      const stores = await pages(query.trim() ? 'searchOffers' : 'browseOffers', { ...args, ...(query.trim() ? { query } : {}) }, 'MERCHANT', store, options.allowTruncatedStoreSearch === true, searchOptions);
+      if (stores.truncated) searchOptions?.onTruncated?.();
+      if (stores.rows.length || !query.trim()) return stores.rows;
+      // Uma busca de produto pode não encontrar MERCHANT. Cada linha ITEM
+      // fornece a própria loja, sem atribuir ofertas globais a outra loja.
+      const offers = await pages('searchOffers', { ...args, resultKind: 'ITEM', query }, 'ITEM', value => {
+        if (!value || typeof value !== 'object' || !('merchant' in value)) throw new IfoodCatalogError('invalid_data');
+        const actual = store(value.merchant);
+        catalogDiscoveryItem(value, actual.id);
+        return actual;
+      }, options.allowTruncatedStoreSearch === true, searchOptions);
+      if (offers.truncated) searchOptions?.onTruncated?.();
+      return offers.rows;
+    },
+    async searchItems(query, address, searchOptions) {
+      catalogInput(query);
+      const offers = await pages('searchOffers', { merchantType: 'RESTAURANT', resultKind: 'ITEM', query, userLocation: await resolveLocation(address, searchOptions), refinements: { onlyOpen: true } }, 'ITEM', value => {
+        if (!value || typeof value !== 'object') throw new IfoodCatalogError('invalid_data');
+        const row = value as { merchantId?: unknown; merchant?: { merchantId?: unknown } };
+        const owner = row.merchant?.merchantId ?? row.merchantId;
+        if (typeof owner !== 'string') throw new IfoodCatalogError('invalid_data');
+        return item(value, owner);
+      }, true, searchOptions);
+      if (offers.truncated) searchOptions?.onTruncated?.();
+      return offers.rows;
+    },
+    async getStore(storeId, address, context) {
+      catalogInput(storeId);
+      return store(await merchant(storeId, await resolveLocation(address, context), context));
+    },
+    async getMenu(storeId, address, context) {
+      catalogInput(storeId);
+      const userLocation = await resolveLocation(address, context);
+      const current = catalogMerchantIdentity(await merchant(storeId, userLocation, context));
+      const items = await pages('browseOffers', { merchantType: 'RESTAURANT', resultKind: 'ITEM', userLocation,
+        refinements: { merchantId: storeId } }, 'ITEM', value => item(value, storeId), true, context);
+      return { items: items.rows, coverage: 'offers_only', truncated: items.truncated, storeOpen: current.isOpen };
+    },
+  }; }
+  return build(location);
+}

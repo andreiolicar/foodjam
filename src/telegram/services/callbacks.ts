@@ -1,7 +1,7 @@
-import type { RespostaOrcamento, SessionId } from '../../core/index.js';
+import type { DeliveryAddress, RespostaOrcamento, SessionId } from '../../core/index.js';
 
-// Botões do privado (endereço e orçamento) levam o sessionId do grupo no callback_data,
-// porque no privado ctx.chat.id é o chat da pessoa, não o grupo.
+// Botões de endereço e orçamento levam o sessionId do grupo no callback_data.
+// Endereço pode aparecer no grupo; orçamento permanece privado.
 // Formato: "<código>:<sessionId>". O Telegram limita callback_data a 64 bytes.
 
 export type BotaoPrivado =
@@ -54,3 +54,18 @@ export function lerCallback(data: string): BotaoPrivado | undefined {
   }
   return undefined;
 }
+
+
+// Vínculo do teclado à mensagem/candidato efetivamente apresentados.
+interface EnderecoEnviado { sessionId: string; participantId: string; candidate: DeliveryAddress; active: boolean }
+const enderecosEnviados = new Map<string, EnderecoEnviado>();
+export function registrarEnderecoEnviado(chatId: string, messageId: number, sessionId: string, participantId: string, candidate: DeliveryAddress) {
+  const anteriores: { chatId: string; messageId: number }[] = [];
+  for (const [key, route] of enderecosEnviados) if (route.sessionId === sessionId && route.active) {
+    route.active = false; const [chat, message] = key.split(':'); anteriores.push({ chatId: chat!, messageId: Number(message) });
+  }
+  enderecosEnviados.set(`${chatId}:${messageId}`, { sessionId, participantId, candidate: { ...candidate }, active: true });
+  return anteriores;
+}
+export function enderecoEnviado(chatId: string, messageId: number) { return enderecosEnviados.get(`${chatId}:${messageId}`); }
+export function consumirEnderecoEnviado(chatId: string, messageId: number) { const route = enderecoEnviado(chatId, messageId); if (route) route.active = false; }

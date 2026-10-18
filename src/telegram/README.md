@@ -1,3 +1,5 @@
+> Na composição real IF-06, o endereço é exibido e confirmado no grupo; orçamentos e seus aceites permanecem privados. Veja [o fluxo e os limites atuais](../ifood/IF-06.md). O fluxo cotado descrito abaixo continua preservado, com fechamento bloqueado na produção preliminar.
+
 # Telegram — Desenvolvedor 2
 
 Branch: `feat/telegram-bot`.

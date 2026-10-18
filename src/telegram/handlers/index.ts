@@ -9,11 +9,11 @@ import { registrarMensagens } from './mensagens.js';
 import { registrarCancelar } from './cancelar.js';
 
 // A ordem importa: comandos e botões antes da coleta de mensagens do grupo.
-export function registerHandlers(bot: Bot, iris: Agente, agrupador: Agrupador, aoAutorizar: ExecutorPedido): void {
+export function registerHandlers(bot: Bot, iris: Agente, agrupador: Agrupador, aoAutorizar: ExecutorPedido, preliminaryOnly = false): void {
   registrarIniciar(bot, iris);
-  registrarConversaPrivada(bot, iris);
+  registrarConversaPrivada(bot, iris, preliminaryOnly);
   registrarMontar(bot, iris, agrupador);
-  registrarProposta(bot, iris, agrupador, aoAutorizar);
+  registrarProposta(bot, iris, agrupador, aoAutorizar, preliminaryOnly);
   registrarCancelar(bot, iris, agrupador);
   registrarMensagens(bot, iris, agrupador);
 }

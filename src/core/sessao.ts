@@ -1,4 +1,4 @@
-import type { DeliveryAddress, MenuItemId, MoneyCents, OrderAuthorization, ParticipantId, Proposal, SessionState, SessionStatus, StoreId } from './contracts.js';
+import type { DeliveryAddress, PreliminaryProposal, MenuItemId, MoneyCents, OrderAuthorization, ParticipantId, Proposal, SessionState, SessionStatus, StoreId } from './contracts.js';
 
 /** Autorização de compra registrada uma única vez, no fechamento. O horário vem de quem chama. */
 export type Closure = OrderAuthorization;
@@ -48,6 +48,9 @@ export interface EstadoOrcamento {
 export interface CoreSession extends SessionState {
   address?: EnderecoSessao;
   proposal?: Proposal;
+  /** Exploração real sem cotação; não autoriza compra nem substitui Proposal. */
+  preliminary?: PreliminaryProposal;
+  preliminaryAlternative?: PreliminaryProposal;
   /** Segunda melhor combinação, para o botão "Outra opção". Some quando a proposta muda. */
   alternative?: Proposal;
   closure?: Closure;

@@ -21,6 +21,8 @@ export interface ParticipantPreferences {
    * combine com foodPreferences.
    */
   wishes?: string[];
+  /** Quantidades comprovadas, na mesma ordem de wishes. Ausência mantém uma unidade. */
+  wishQuantities?: number[];
   budgetCents?: MoneyCents;
 }
 
@@ -73,10 +75,12 @@ export type CoreAction =
     }
   | {
       /**
-       * Pedir ao organizador, no privado, que confirme o endereço, com botões:
+       * Pedir ao organizador que confirme o endereço, no destino indicado, com botões:
        * kind "default" → [Sim] [Outro endereço]; kind "typed" → [Confirmar] [Corrigir].
        */
       type: 'confirm_address';
+      /** Destino aprovado para a confirmação; orçamento continua privado. */
+      visibility?: 'group';
       sessionId: SessionId;
       participantId: ParticipantId;
       address: DeliveryAddress;
@@ -217,4 +221,109 @@ export interface AuthorizedOrder {
   deliveryAddress: DeliveryAddress;
   orders: StoreOrder[];
   split: Split;
+}
+
+/** Descoberta real antes da cotação: ausência significa não comprovado. */
+export type DiscoveryStore = Omit<Store, 'deliveryFeeCents'> & {
+  deliveryFeeCents?: MoneyCents;
+  /** Metadados informativos do estabelecimento; nunca participam da seleção. */
+  reviewRating?: number;
+  ratingCount?: number;
+};
+export type DiscoveryItem = Omit<MenuItem, 'priceCents' | 'available'> & {
+  /** Foto principal validada, opcional e exclusivamente visual. */
+  itemImageUrl?: string;
+  priceCents?: MoneyCents;
+  /** Preço base conhecido; promoção/valor aplicável ainda não comprovado. */
+  basePriceCents?: MoneyCents;
+  available?: boolean;
+};
+export interface DiscoveryMenu {
+  /** Funcionamento observado ao consultar este menu, quando fornecido. */
+  storeOpen?: boolean;
+  items: DiscoveryItem[];
+  coverage: 'offers_only' | 'complete';
+  /** Consulta limitada intencionalmente; não representa fim de catálogo. */
+  truncated?: boolean;
+}
+/** Motivos observados; amostra parcial não implica esgotamento de chamadas/tempo. */
+export type DiscoveryCoverageReason = 'term_limit' | 'store_limit' | 'request_limit' | 'time_limit'
+  | 'catalog_partial' | 'pagination_truncated' | 'item_limit' | 'classification_limit';
+export interface DiscoveryCoverage {
+  reasons?: DiscoveryCoverageReason[];
+  /** Lojas distintas encontradas na amostra, incluindo fechadas. */
+  candidateStores?: number;
+  /** Lojas relidas individualmente para conferir funcionamento. */
+  checkedStores?: number;
+  /** Lojas distintas observadas fechadas na busca ou nas releituras. */
+  closedStores?: number;
+  classificationLimited?: boolean;
+  /** requests conta operações da porta; cada uma pode ter paginação interna limitada. */
+  terms: number; stores: number; items: number; requests: number; limited: boolean;
+}
+export interface PreliminaryProposal {
+  coverage?: DiscoveryCoverage;
+  id: string;
+  sessionId: SessionId;
+  organizerId: ParticipantId;
+  address: DeliveryAddress;
+  participants: Participant[];
+  items: { participantId: ParticipantId; storeId: StoreId; menuItemId: MenuItemId; quantity: number; isSubstitute?: boolean }[];
+  status: 'preliminary';
+  /** Sem total/orçamento confirmado; não é autorização de compra. */
+  pending: readonly ('commercial_validation' | 'catalog_incomplete')[];
+}
+
+export interface CartObservation {
+  cartId: string;
+  storeId: StoreId;
+  items: { menuItemId: MenuItemId; quantity: number; unitPriceCents?: MoneyCents }[];
+  amounts?: {
+    subtotalCents: MoneyCents;
+    deliveryCents: MoneyCents;
+    feesCents: MoneyCents;
+    benefitsCents: MoneyCents;
+    voucherCents: MoneyCents;
+    totalCents: MoneyCents;
+  };
+  issues: string[];
+}
+export interface PreparationContext {
+  authenticatedUserId: string;
+  sessionId: SessionId;
+  proposalId: string;
+  storeId: StoreId;
+  address: DeliveryAddress;
+  items: { menuItemId: MenuItemId; quantity: number }[];
+}
+/** Opaca: apenas a autoridade da aplicação reconhece a instância emitida. */
+export interface PreparationPermit { readonly purpose: 'prepare_cart' }
+export interface PreparationAuthority {
+  verify(permit: PreparationPermit, context: PreparationContext): void;
+}
+export type CommercialShare = Omit<ParticipantShare, 'serviceCents'> & {
+  feesCents: MoneyCents;
+  discountCents: MoneyCents;
+  /** Política local explícita; não representa a origem de descontos do iFood. */
+  unattributedAdjustment?: { creditCents: MoneyCents; debitCents: MoneyCents };
+};
+export interface CommercialSplit { shares: CommercialShare[]; totalCents: MoneyCents }
+export interface CommercialReview {
+  status: 'blocked' | 'review_required';
+  observations: CartObservation[];
+  failures: StoreId[];
+  split?: CommercialSplit;
+  /** Confirmação individual necessária para cada excesso. */
+  overBudget: { participantId: ParticipantId; totalCents: MoneyCents }[];
+  /** Todos os compradores afetados precisam aceitar a política e a revisão. */
+  adjustmentPolicy?: { name: 'proportional_unattributed_adjustment'; requiredParticipantIds: ParticipantId[] };
+  revision: string;
+}
+
+/** Texto coletado ainda não é DeliveryAddress nem localização válida. */
+export interface AddressRegistrationIntent {
+  sessionId: SessionId;
+  organizerId: ParticipantId;
+  rawText: string;
+  status: 'requires_registration_consent';
 }

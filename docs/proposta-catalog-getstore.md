@@ -1,5 +1,7 @@
 # Proposta: `getStore(storeId)` na `CatalogPort`
 
+> **Proposta histórica:** as assinaturas e o diagnóstico abaixo retratam uma versão anterior da porta cotada. A `CatalogPort` atual inclui endereço, `validateAddress` e `quoteOrder`, sem `getStore`. A produção preliminar já utiliza `DiscoveryCatalogPort.getStore(storeId, address)`, mapeada para `getMerchant`; não foi necessário adicionar o método à porta cotada. Esta integração não habilita fechamento comercial. Veja [arquitetura atual](architecture.md).
+
 Status: **em discussão**, a combinar entre o core e o módulo iFood. Nada foi alterado na porta.
 
 ## Problema

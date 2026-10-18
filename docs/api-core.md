@@ -1,8 +1,10 @@
 # API do core (Íris) para o bot do Telegram
 
+> **Produção IF-05/IF-06:** `src/index.ts` usa `criarAplicacaoReal` de `src/app.ts`, com `criarAgenteDescoberta`, `DiscoveryCatalogPort`, MCP iFood e Groq reais obrigatórios. O retorno usa `preliminary` e dados do catálogo para o card; não autoriza fechamento. Endereço salvo é confirmado no grupo; orçamento continua privado. O exemplo fake e as seções de `Proposal`/`CatalogPort`/`fechar` abaixo documentam o fluxo cotado preservado para desenvolvimento e testes, não a composição principal. Veja [arquitetura atual](architecture.md) e [IF-06](../src/ifood/IF-06.md).
+
 O bot **não faz requisição HTTP** ao agente: ele importa o core e chama funções no mesmo processo. Toda a regra de negócio (fases, preços, rateio, quem pode fechar) fica no core; o bot só traduz o Telegram para chamadas e apresenta o resultado.
 
-## Montando o agente
+## Montando o agente cotado para desenvolvimento e testes
 
 ```ts
 import { CatalogoFake, criarAgente, criarLlmDoAmbiente } from './core/index.js';
@@ -15,7 +17,7 @@ const iris = criarAgente({
 });
 ```
 
-Para desenvolver o bot sem chave nem iFood, use exatamente isso: o catálogo fake tem 5 lojas e o modelo fake responde por palavras-chave. A ligação final fica em `src/index.ts`, combinada entre o time.
+Para desenvolver e testar o fluxo cotado sem chave nem iFood, o exemplo acima usa cinco lojas fictícias e um modelo heurístico. Não substituir a composição real de `src/index.ts` por esse exemplo na demonstração.
 
 ## Conceitos: chat, sessão, pessoa e organizador
 

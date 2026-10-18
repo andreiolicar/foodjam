@@ -1,0 +1,25 @@
+import { expect, it } from 'vitest';
+import { criarAgenteDescoberta } from '../../src/core/discovery-agent.js';
+import { criarHarness, GRUPO } from './harness.js';
+const owner = { id: 81, first_name: 'Pessoa A' }; const other = { id: 82, first_name: 'Pessoa B' };
+it('endereço aparece no grupo sem DM; só organizador troca/confirma e teclado antigo é recusado', async () => {
+  const addresses = [{ id: 'saved-a', formatted: 'Rua fictícia A' }, { id: 'saved-b', formatted: 'Rua fictícia B' }];
+  const agent = criarAgenteDescoberta({ catalog: { listSavedAddresses: async () => addresses, searchStores: async () => [], getStore: async () => { throw new Error('não utilizado'); }, getMenu: async () => ({ items: [], coverage: 'offers_only' }) }, llm: { generate: async () => { throw new Error('não utilizado'); } } });
+  const h = criarHarness(agent, { preliminaryOnly: true, semPrivado: [owner.id, other.id] });
+  await h.texto(owner, '/iniciar');
+  const first = h.enviadas(GRUPO).find(m => m.text.includes('Rua fictícia A'))!;
+  expect(first).toBeDefined(); expect(h.enviadas(owner.id)).toHaveLength(0);
+  expect(h.enviadas(GRUPO).map(m => m.text).join(' ')).not.toContain('limite de valor');
+  const confirm = first.botoes.find(b => b.text.includes('Confirmar endereço'))!.callback_data!;
+  const change = first.botoes.find(b => b.text.includes('Corrigir'))!.callback_data!;
+  await h.clicar(other, confirm, { chatId: GRUPO, messageId: first.messageId });
+  expect((await agent.obter(String(GRUPO)))?.address?.status).toBe('pending_confirmation');
+  expect(h.chamadasDe('answerCallbackQuery').at(-1)?.payload.show_alert).toBe(true);
+  await h.clicar(owner, change, { chatId: GRUPO, messageId: first.messageId });
+  expect((await agent.obter(String(GRUPO)))?.address?.candidate?.id).toBe('saved-b');
+  await h.clicar(owner, confirm, { chatId: GRUPO, messageId: first.messageId });
+  expect((await agent.obter(String(GRUPO)))?.address?.status).toBe('pending_confirmation');
+  await h.clicarBotao(owner, GRUPO, '✅ Confirmar endereço');
+  expect((await agent.obter(String(GRUPO)))?.address?.confirmed?.id).toBe('saved-b');
+  expect(h.enviadas(GRUPO).at(-1)?.text).toContain('confirmado');
+});

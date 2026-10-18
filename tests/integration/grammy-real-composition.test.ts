@@ -1,0 +1,284 @@
+import { randomUUID } from 'node:crypto';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import type { Update, UserFromGetMe } from 'grammy/types';
+import type * as Ifood from '../../src/ifood/index.js';
+const transport = vi.hoisted(() => ({ factory: vi.fn(), connect: vi.fn(), list: vi.fn(), read: vi.fn(), close: vi.fn() }));
+vi.mock('../../src/ifood/index.js', async original => ({ ...await original<typeof Ifood>(), createIfoodMcpClient: transport.factory.mockImplementation(() => ({ connect: transport.connect, listTools: transport.list, callReadTool: transport.read, close: transport.close })) }));
+vi.mock('../../src/core/fakes/catalogo-fake.js', () => ({ CatalogoFake: class { constructor() { throw new Error('Catálogo fake proibido'); } } }));
+vi.mock('../../src/core/fakes/llm-fake.js', () => ({ FakeLlm: class { constructor() { throw new Error('Modelo fake proibido'); } }, responderHeuristico() { throw new Error('Heurística proibida'); } }));
+import { criarAplicacaoReal } from '../../src/app.js';
+const env = { TELEGRAM_BOT_TOKEN: '123:fixture-token', AI_PROVIDER: 'openai-compat', AI_BASE_URL: 'https://api.groq.com/openai/v1', AI_API_KEY: 'fixture-api', AI_MODEL_FAST: 'openai/gpt-oss-20b', AI_MODEL_CAPABLE: 'openai/gpt-oss-120b', IFOOD_MCP_CLIENT_ID: 'fixture-client', IFOOD_MCP_CLIENT_SECRET: 'fixture-secret', IFOOD_MCP_CALLBACK_URL: 'http://localhost:3333/callback' };
+const envelope = (v: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(v) }], isError: false });
+const group = -200500;
+let merchant: string; let products: string[]; let isOpen = true;
+const http = vi.fn(async (_url: unknown, init?: RequestInit) => {
+  const body = JSON.parse(String(init?.body));
+  let output: unknown;
+  if (body.response_format?.json_schema?.name === 'coleta_lote') {
+    const ids: string[] = body.response_format.json_schema.schema.properties.resultados.items.properties.participantId.enum;
+    output = { resultados: ids.map(participantId => ({ participantId, kind: 'preference', wishes: ['hambúrguer'], foodPreferences: [], dietaryRestrictions: [], avoids: [], budgetText: null, clarification: null })) };
+  } else {
+    expect(body.model).toBe('openai/gpt-oss-120b');
+    const people = JSON.parse(/<pessoas>(.*?)<\/pessoas>/s.exec(body.messages[1].content)![1]!);
+    expect(people).toHaveLength(1);
+    output = { pessoas: people.map((p: {participantId:string}) => ({ participantId: p.participantId, desejos: [{ atende: products, substitutos: [] }] })) };
+  }
+  return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(output) } }] }), { status: 200 });
+});
+const defaultHttp = http.getMockImplementation()!;
+beforeEach(() => {
+  http.mockImplementation(defaultHttp);
+  merchant = randomUUID(); products = [randomUUID(), randomUUID()]; isOpen = true;
+  transport.connect.mockResolvedValue(undefined); transport.list.mockResolvedValue([]); transport.close.mockResolvedValue(undefined);
+  transport.read.mockImplementation(async (name: string, args: Record<string, unknown> = {}) => envelope(name === 'listAddresses' ? { results: [{ addressId: 'fixture-private-address', formattedAddress: 'Endereço privado de teste', coordinates: { latitude: 0, longitude: 0 } }] }
+    : name === 'searchOffers' && args.resultKind !== 'ITEM' ? { resultKind: 'MERCHANT', results: [{ merchantId: merchant, merchantName: 'Restaurante do MCP', isOpen }], hasMore: false }
+      : name === 'getMerchant' ? { merchantId: merchant, merchantName: 'Restaurante do MCP', isOpen }
+        : { resultKind: 'ITEM', results: products.map((itemId, i) => ({ itemId, itemName: `Hambúrguer MCP ${i + 1}`, merchant: { merchantId: merchant } })), hasMore: false }));
+  vi.spyOn(console, 'info').mockImplementation(() => undefined); vi.stubGlobal('fetch', http);
+});
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
+async function setup() {
+  const runtime = await criarAplicacaoReal(env);
+  runtime.bot.botInfo = { id: 999, is_bot: true, first_name: 'Bot', username: 'fixture_bot', can_read_all_group_messages: true, can_join_groups: true, supports_inline_queries: false, can_connect_to_business: false, has_main_web_app: false } as UserFromGetMe;
+  const sent: {chat:number;text:string;id:number;buttons:{text:string;callback_data?:string}[]}[] = [];
+  let sequence = 100;
+  runtime.bot.api.config.use(async (_prev, method, payload) => {
+    const p = payload as Record<string, unknown>;
+    if (method === 'sendMessage' || method === 'sendPhoto') { const id = ++sequence; sent.push({ chat: Number(p.chat_id), text: String(method === 'sendPhoto' ? p.caption : p.text), id, buttons: (p.reply_markup as {inline_keyboard?: {text:string;callback_data?:string}[][]})?.inline_keyboard?.flat() ?? [] }); return { ok: true, result: { message_id: id, date: 0, chat: { id: Number(p.chat_id) }, text: p.text } } as never; }
+    return { ok: true, result: true } as never;
+  });
+  const from = (id: number) => ({ id, is_bot: false, first_name: `Pessoa ${id}` });
+  const text = (id: number, value: string, chat = group) => runtime.bot.handleUpdate({ update_id: ++sequence, message: { message_id: sequence, date: 0, from: from(id), chat: { id: chat, type: chat === id ? 'private' : 'supergroup', title: 'Teste' }, text: value, ...(value.startsWith('/') ? { entities: [{ type: 'bot_command', offset: 0, length: value.split(' ')[0]!.length }] } : {}) } } as Update);
+  const click = (id: number, data: string, chat: number, messageId: number) => runtime.bot.handleUpdate({ update_id: ++sequence, callback_query: { id: String(sequence), from: from(id), chat_instance: 'fixture', data, message: { message_id: messageId, date: 0, chat: { id: chat, type: chat === id ? 'private' : 'supergroup', title: 'Teste' }, text: '' } } } as Update);
+  const button = (label: string) => { const m = sent.findLast(m => m.buttons.some(b => b.text.includes(label)))!; return { m, data: m.buttons.find(b => b.text.includes(label))!.callback_data! }; };
+  await text(71, '/iniciar'); const address = button('Confirmar endereço'); await click(71, address.data, group, address.m.id);
+  return { runtime, sent, text, click, button };
+}
+it('entrada real conecta grammY/Core/adaptador MCP, preserva revisão/alternativa/ajuste e bloqueia compra', async () => {
+  const h = await setup();
+  try {
+    await h.text(71, 'Quero hambúrguer'); await h.text(72, 'Hambúrguer também');
+    await h.text(71, '/montar');
+    const publicText = h.sent.filter(m => m.chat === group).map(m => m.text).join('\n');
+    expect(publicText).toContain('Restaurante do MCP'); expect(publicText).toContain('Hambúrguer MCP');
+    const proposal = (await h.runtime.iris.obter(String(group)))?.preliminary;
+    expect(proposal?.items).toHaveLength(2);
+    expect(proposal?.items.every(i => i.storeId === merchant && products.includes(i.menuItemId))).toBe(true);
+    expect(publicText).toContain('2 de 2'); expect(publicText).toContain('preço a confirmar'); expect(publicText).not.toContain('disponibilidade não confirmada');
+    expect(publicText).toContain('Disponibilidade e valores comerciais ainda precisam de confirmação.');
+    expect(publicText).not.toMatch(new RegExp(`${merchant}|${products.join('|')}|loja-burger|burger-x-salada|R\\$ 0,00`));
+    const confirm = vi.spyOn(h.runtime.iris, 'fechar'); const readCount = transport.read.mock.calls.length;
+    const review = h.button('Revisar proposta preliminar');
+    await h.click(72, review.data, group, review.m.id); await h.click(71, 'proposta:confirmar', group, review.m.id);
+    expect(confirm).not.toHaveBeenCalled(); expect(transport.read).toHaveBeenCalledTimes(readCount);
+    await h.click(71, review.data, group, review.m.id); expect(h.sent.at(-1)?.text).toContain('Nenhuma compra');
+    const before = http.mock.calls.length; const alternative = h.button('Outra opção'); await h.click(71, alternative.data, group, alternative.m.id);
+    expect(http.mock.calls.length).toBe(before);
+    const afterSwitch = h.sent.length; await h.click(71, alternative.data, group, alternative.m.id); expect(h.sent.length).toBe(afterSwitch);
+    await h.click(71, 'proposta:cancelar', group, alternative.m.id);
+    expect((await h.runtime.iris.obter(String(group)))?.status).toBe('collecting');
+    await h.text(72, 'Quero outro hambúrguer'); await h.runtime.agrupador.esvaziar(String(group));
+    expect(h.sent.filter(m => m.chat === group && m.text.includes('Sugestão preliminar')).length).toBeGreaterThanOrEqual(3);
+    await h.click(72, `oa:${group}`, 72, 300);
+    expect(h.sent.at(-1)?.text).toContain('Nenhum aceite financeiro');
+    expect((await h.runtime.iris.obter(String(group)))?.status).not.toBe('closed');
+    const back = h.button('Voltar para a coleta'); await h.click(71, back.data, group, back.m.id);
+    expect((await h.runtime.iris.obter(String(group)))?.preliminary).toBeUndefined();
+    await h.text(72, '/cancelar'); expect((await h.runtime.iris.obter(String(group)))?.status).toBe('collecting');
+    await h.text(71, '/cancelar'); expect((await h.runtime.iris.obter(String(group)))?.status).toBe('cancelled');
+    expect(transport.factory).toHaveBeenCalledTimes(1); expect(transport.connect).toHaveBeenCalledTimes(1);
+    expect(transport.factory).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ allowCartMutations: false, allowPaymentConfiguration: false }));
+    expect(transport.read.mock.calls.every(([name]) => ['listAddresses', 'searchOffers', 'getMerchant', 'browseOffers'].includes(name))).toBe(true);
+    expect(h.runtime.bot.isRunning()).toBe(false);
+  } finally { await h.runtime.close(); }
+});
+it('loja fechada não produz card nem classificação; configuração fake não chega ao MCP', async () => {
+  isOpen = false; const h = await setup();
+  try { await h.text(71, 'Hambúrguer'); await h.text(71, '/montar'); expect(h.sent.some(m => m.text.includes('amostra pesquisada') && m.text.includes('fechad'))).toBe(true); expect(h.sent.some(m => m.text.includes('atingiu limites de amostra, chamadas ou tempo'))).toBe(false); expect(h.sent.some(m => m.text.includes('Sugestão preliminar'))).toBe(false); expect(http).toHaveBeenCalledTimes(1); } finally { await h.runtime.close(); }
+  transport.factory.mockClear();
+  await expect(criarAplicacaoReal({ ...env, AI_PROVIDER: 'fake' })).rejects.toThrow(); expect(transport.factory).not.toHaveBeenCalled();
+});
+
+it.each(['atende', 'substitutos'] as const)('composição real controlada rejeita incompatíveis classificados em %s e apresenta cobertura honesta 1/3', async field => {
+  const read = transport.read.getMockImplementation()!;
+  transport.read.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+    if (name === 'browseOffers' || name === 'searchOffers' && args.resultKind === 'ITEM') return envelope({
+      resultKind: 'ITEM', hasMore: false, results: products.map((itemId, index) => ({
+        itemId, itemName: index ? 'Água mineral' : 'Misto quente', merchant: { merchantId: merchant },
+      })),
+    });
+    return read(name, args);
+  });
+  http.mockImplementation(async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    const collection = body.response_format?.json_schema?.name === 'coleta_lote';
+    const ids: string[] = collection ? body.response_format.json_schema.schema.properties.resultados.items.properties.participantId.enum
+      : JSON.parse(/<pessoas>(.*?)<\/pessoas>/s.exec(body.messages[1].content)![1]!).map((p: { participantId: string }) => p.participantId);
+    const wishes: Record<string, string> = { '71': 'misto quente', '72': 'cappuccino', '73': 'croissant' };
+    const output = collection ? { resultados: ids.map(participantId => ({ participantId, kind: 'preference', wishes: [wishes[participantId]], foodPreferences: [], dietaryRestrictions: [], avoids: [], budgetText: null, clarification: null })) }
+      : { pessoas: ids.map(participantId => ({ participantId, desejos: [participantId === '71' ? { atende: [products[0]], substitutos: [] }
+        : { atende: [], substitutos: [], [field]: [products[participantId === '72' ? 1 : 0]] }] })) };
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(output) } }] }), { status: 200 });
+  });
+  const h = await setup();
+  try {
+    await h.text(71, 'Misto quente'); await h.text(72, 'Cappuccino'); await h.text(73, 'Croissant'); await h.text(71, '/montar');
+    const proposal = (await h.runtime.iris.obter(String(group)))?.preliminary;
+    expect(proposal?.items, JSON.stringify(h.runtime.diagnostico())).toEqual([{ participantId: '71', storeId: merchant, menuItemId: products[0], quantity: 1 }]);
+    expect(proposal?.participants).toHaveLength(3);
+    const summary = h.sent.findLast(m => m.text.includes('Sugestão preliminar'))!;
+    expect(summary.text).toContain('1 de 3 pessoas com item');
+    expect(summary.text).toContain('Pessoa 72: sem item compatível nesta amostra');
+    expect(summary.text).toContain('Pessoa 73: sem item compatível nesta amostra');
+    const individual = h.sent.filter(m => m.text.startsWith('🍽️ <b>') && !m.text.includes('Sugestão preliminar'));
+    expect(individual).toHaveLength(1); expect(individual[0]!.text).toContain('Misto quente');
+    await h.click(71, 'proposta:confirmar', group, summary.id);
+    expect((await h.runtime.iris.obter(String(group)))?.status).not.toBe('closed');
+    expect(transport.read.mock.calls.every(([name]) => ['listAddresses', 'searchOffers', 'getMerchant', 'browseOffers'].includes(name))).toBe(true);
+  } finally { await h.runtime.close(); }
+});
+it('composição de produção procura hambúrguer e açaí em duas lojas e mostra preço unitário comprovado', async () => {
+  const second = randomUUID(); const addressRead = transport.read.getMockImplementation()!;
+  const rows = [
+    { itemId: products[0]!, itemName: 'Hambúrguer do MCP', unitPrice: 25.9, promotionalUnitPrice: 25.9, merchant: { merchantId: merchant } },
+    { itemId: products[1]!, itemName: 'Açaí 500ml do MCP', unitPrice: 32.5, promotionalUnitPrice: 32.5, merchant: { merchantId: second } },
+  ];
+  transport.read.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+    if (name === 'listAddresses') return addressRead(name, args);
+    const id = name === 'getMerchant' ? args.merchantId : (args.refinements as { merchantId?: string } | undefined)?.merchantId;
+    if (name === 'getMerchant') return envelope({ merchantId: id, merchantName: id === second ? 'Açaí do MCP' : 'Burger do MCP', isOpen: true });
+    if (name === 'searchOffers' && args.resultKind === 'MERCHANT') return envelope({ resultKind: 'MERCHANT', hasMore: false, results: [{ merchantId: args.query === 'açaí' ? second : merchant, merchantName: args.query === 'açaí' ? 'Açaí do MCP' : 'Burger do MCP', isOpen: true }] });
+    return envelope({ resultKind: 'ITEM', hasMore: false, results: rows.filter(r => name === 'browseOffers' ? r.merchant.merchantId === id : args.query === 'açaí' ? r.merchant.merchantId === second : r.merchant.merchantId === merchant) });
+  });
+  http.mockImplementation(async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    const shape = body.response_format?.json_schema?.schema;
+    const collection = body.response_format?.json_schema?.name === 'coleta_lote';
+    const ids: string[] = collection ? shape.properties.resultados.items.properties.participantId.enum : JSON.parse(/<pessoas>(.*?)<\/pessoas>/s.exec(body.messages[1].content)![1]!).map((p: { participantId: string }) => p.participantId);
+    const output = collection ? { resultados: ids.map(participantId => ({ participantId, kind: 'preference', wishes: [participantId === '72' ? 'açaí' : 'hambúrguer'], foodPreferences: [], dietaryRestrictions: [], avoids: [], budgetText: null, clarification: null })) }
+      : { pessoas: ids.map(participantId => ({ participantId, desejos: [{ atende: [products[participantId === '72' ? 1 : 0]], substitutos: [] }] })) };
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(output) } }] }), { status: 200 });
+  });
+  const h = await setup();
+  try {
+    await h.text(71, 'Hambúrguer até 50'); await h.text(72, 'Açaí até 40'); await h.text(71, '/montar');
+    const proposal = (await h.runtime.iris.obter(String(group)))?.preliminary;
+    expect(proposal?.items).toEqual([
+      { participantId: '71', storeId: merchant, menuItemId: products[0], quantity: 1 },
+      { participantId: '72', storeId: second, menuItemId: products[1], quantity: 1 },
+    ]);
+    const summary = h.sent.findLast(m => m.text.includes('Sugestão preliminar'))!.text;
+    expect(summary).not.toMatch(/R\$|Hambúrguer do MCP|Açaí 500ml|[Tt]otal/);
+    const individual = h.sent.filter(m => m.text.startsWith('🍽️ <b>') && !m.text.includes('Sugestão preliminar'));
+    expect(individual).toHaveLength(2);
+    expect(individual[0]!.text).toContain('Pessoa 71'); expect(individual[0]!.text).not.toContain('Pessoa 72');
+    expect(individual[1]!.text).toContain('Pessoa 72'); expect(individual[1]!.text).not.toContain('Pessoa 71');
+    expect(individual.every(m => m.buttons.length === 0)).toBe(true);
+    const card = h.sent.map(m => m.text).join('\n');
+    expect(card).toContain('2 de 2'); expect(card).toContain('R$ 25,90 por unidade'); expect(card).toContain('R$ 32,50 por unidade');
+    expect(card).not.toContain('disponibilidade não confirmada'); expect(summary).toContain('valores finais não confirmados');
+    expect(summary).toContain('Disponibilidade e valores comerciais ainda precisam de confirmação.');
+    expect(transport.read.mock.calls.every(([name]) => ['listAddresses', 'searchOffers', 'getMerchant', 'browseOffers'].includes(name))).toBe(true);
+    await h.text(72, '/endereco'); expect((await h.runtime.iris.obter(String(group)))?.preliminary).toBeDefined();
+    await h.text(71, '/endereco'); expect((await h.runtime.iris.obter(String(group)))?.preliminary).toBeUndefined();
+    expect((await h.runtime.iris.obter(String(group)))?.address?.status).toBe('pending_confirmation');
+  } finally { await h.runtime.close(); }
+});
+
+it('composição real prioriza lojas abertas por desejo mesmo com ITEM fechado, sem mutações e com diagnóstico sanitizado', async () => {
+  const original = transport.read.getMockImplementation()!;
+  const closed = randomUUID();
+  transport.read.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+    if (name === 'searchOffers' && args.resultKind === 'ITEM') return envelope({ resultKind: 'ITEM', results: [{ itemId: 'closed-product-test', itemName: 'Hambúrguer', merchant: { merchantId: closed } }], hasMore: false });
+    if (name === 'getMerchant' && args.merchantId === closed) return envelope({ merchantId: closed, merchantName: 'Loja fechada', isOpen: false });
+    return original(name, args);
+  });
+  const h = await setup();
+  try {
+    await h.text(71, 'Hambúrguer'); await h.text(72, 'Hambúrguer'); await h.text(71, '/montar');
+    expect((await h.runtime.iris.obter(String(group)))?.preliminary?.items).toHaveLength(2);
+    const diagnostic = h.runtime.diagnostico();
+    expect(diagnostic.discovery).toHaveLength(1);
+    expect(diagnostic.discovery[0]).toMatchObject({ outcome: 'preliminary_ready', coverage: { stores: 1, reasons: ['catalog_partial'] } });
+    const safe = JSON.stringify(diagnostic.discovery);
+    expect(safe).not.toContain(merchant); expect(safe).not.toContain(closed); expect(safe).not.toContain('Endereço privado'); expect(safe).not.toContain('Pessoa');
+    const log = vi.mocked(console.info).mock.calls.find(([label]) => label === 'FoodJam descoberta:');
+    expect(log).toBeDefined(); expect(JSON.parse(String(log![1]))).toEqual(diagnostic.discovery[0]);
+    for (const [name, args] of transport.read.mock.calls) {
+      expect(['listAddresses', 'searchOffers', 'getMerchant', 'browseOffers']).toContain(name);
+      if (name === 'searchOffers') expect(args).toMatchObject({ merchantType: 'RESTAURANT', refinements: { onlyOpen: true } });
+    }
+    expect(transport.factory).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ allowCartMutations: false, allowPaymentConfiguration: false }));
+  } finally { await h.runtime.close(); }
+});
+
+it.each([false, true])('composição real apresenta avaliação getMerchant e card único com foto escolhida; falha de envio=%s preserva fluxo', async failPhoto => {
+  const originalRead = transport.read.getMockImplementation()!;
+  transport.read.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+    const result = await originalRead(name, args);
+    const data = JSON.parse(result.content[0].text);
+    if (name === 'getMerchant') Object.assign(data, { reviewRating: 4.7000001, ratingCount: 850 });
+    if (args.resultKind === 'MERCHANT') for (const row of data.results) Object.assign(row, { reviewRating: 1.2, ratingCount: 1 });
+    if (args.resultKind === 'ITEM') for (const row of data.results) row.itemImageUrl = `https://static.ifood-static.com.br/${row.itemId}.jpg?signature=controlled`;
+    return envelope(data);
+  });
+  const originalHttp = defaultHttp;
+  http.mockImplementation(async (url, init) => new URL(String(url)).hostname === 'static.ifood-static.com.br'
+    ? new Response(new Uint8Array([255, 216, 255]), { headers: { 'content-type': 'image/jpeg' } }) : originalHttp(url, init));
+  const h = await setup();
+  const media: { card: number; caption: string; buttons: unknown }[] = [];
+  const removed: number[] = [];
+  const alerts: string[] = [];
+  h.runtime.bot.api.config.use(async (prev, method, payload) => {
+    const p = payload as Record<string, unknown>;
+    if (method === 'sendPhoto') {
+      expect(p.reply_parameters).toEqual({ message_id: h.sent.findLast(m => m.text.includes('Sugestão preliminar'))!.id });
+      expect(p.parse_mode).toBe('HTML');
+      expect(String(p.caption)).not.toContain('Sugestão preliminar');
+      expect(p.reply_markup).toBeUndefined();
+      if (failPhoto) return { ok: false, error_code: 400, description: 'Controlled media failure' } as never;
+      const result = await prev(method, payload);
+      media.push({ card: (result as {result:{message_id:number}}).result.message_id, caption: String(p.caption), buttons: p.reply_markup });
+      return result;
+    }
+    if (method === 'deleteMessage') removed.push(Number(p.message_id));
+    if (method === 'answerCallbackQuery' && p.show_alert) alerts.push(String(p.text));
+    return prev(method, payload);
+  });
+  try {
+    await h.text(71, 'Hambúrguer'); await h.text(72, 'Hambúrguer'); await h.text(71, '/montar');
+    const old = h.button('Outra opção');
+    expect(old.m.text).not.toMatch(/⭐|Hambúrguer MCP|R\$/);
+    expect(h.sent.some(m => m.text.includes('⭐ 4,7 (850 avaliações)'))).toBe(true); expect(h.sent.some(m => m.text.includes('⭐ 1,2'))).toBe(false);
+    const chosen = (await h.runtime.iris.obter(String(group)))!.preliminary!.items.map(i => i.menuItemId);
+    if (!failPhoto) {
+      expect(media).toHaveLength(new Set(chosen).size); expect(media[0]!.card).not.toBe(old.m.id);
+      expect(media.map(m => m.caption).join('\n')).toContain('Pessoa 71'); expect(media.map(m => m.caption).join('\n')).toContain('Pessoa 72');
+      expect(media.every(m => chosen.some(id => m.caption.includes(`Hambúrguer MCP ${products.indexOf(id) + 1}`)) && !m.buttons)).toBe(true);
+    }
+    if (!failPhoto) {
+      const snapshot = await h.runtime.iris.obter(String(group));
+      await h.click(71, 'proposta:cancelar', group, media[0]!.card);
+      expect(await h.runtime.iris.obter(String(group))).toEqual(snapshot);
+    }
+    const before = media.length;
+    await h.click(71, old.data, group, old.m.id);
+    const alternative = h.button('Outra opção');
+    expect(alternative.m.id).not.toBe(old.m.id);
+    if (!failPhoto) expect(removed.length).toBe(before + 1);
+    const snapshot = await h.runtime.iris.obter(String(group));
+    await h.click(71, old.data, group, old.m.id);
+    // O resumo anterior perde sua identidade; mensagens de item nunca têm callbacks.
+    await h.click(71, 'proposta:cancelar', group, old.m.id);
+    expect(await h.runtime.iris.obter(String(group))).toEqual(snapshot);
+    expect(alerts.filter(text => text.includes('substituída')).length).toBeGreaterThanOrEqual(2);
+    await h.click(71, 'proposta:confirmar', group, alternative.m.id);
+    expect((await h.runtime.iris.obter(String(group)))?.status).not.toBe('closed');
+    expect(transport.factory).toHaveBeenCalledWith(expect.anything(), { allowCartMutations: false, allowPaymentConfiguration: false });
+    expect(transport.read.mock.calls.every(([name]) => ['listAddresses', 'searchOffers', 'getMerchant', 'browseOffers'].includes(name))).toBe(true);
+    expect(transport.read.mock.calls.every(([, args]) => !(args.refinements && 'minRating' in args.refinements))).toBe(true);
+    expect(JSON.stringify(h.runtime.diagnostico())).not.toContain('signature=');
+    expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain('signature=');
+    expect(h.runtime.bot.isRunning()).toBe(false);
+  } finally { await h.runtime.close(); }
+});

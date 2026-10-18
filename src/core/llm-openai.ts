@@ -5,6 +5,8 @@ export type ResponseMode = 'json_schema' | 'json_object' | 'none';
 const MODOS: readonly ResponseMode[] = ['json_schema', 'json_object', 'none'];
 
 export interface OpenAiCompatOptions {
+  /** Compatibilidade por modelo: não muda o modelo nem a validação Zod do Core. */
+  initialResponseModes?: Readonly<Partial<Record<string, ResponseMode>>>;
   /** Ex.: https://generativelanguage.googleapis.com/v1beta/openai (sem /chat/completions). */
   baseUrl: string;
   apiKey?: string;
@@ -26,6 +28,8 @@ export interface OpenAiCompatOptions {
   now?: () => number;
   /** Novas tentativas em 429 de limite por minuto. Padrão: 3. */
   maxRateLimitRetries?: number;
+  /** Em cascata, prioriza credenciais/provedores independentes após falha. */
+  deferModelFallback?: boolean;
   /** Espera máxima aceitável num 429; se o provedor pedir mais, desiste. Padrão: 10 s. */
   maxRateLimitWaitMs?: number;
   /** Injetável para testes; padrão: setTimeout que respeita o AbortSignal. */
@@ -67,6 +71,7 @@ export type LlmErrorKind = 'auth' | 'plan_or_quota' | 'rate_limit' | 'unavailabl
 
 export class LlmHttpError extends Error {
   readonly kind: LlmErrorKind;
+  retryAfterMs?: number;
   /** Mensagem do provedor (corpo da resposta), sem a chave. */
   readonly providerMessage: string;
 
@@ -108,9 +113,14 @@ export function classificarErro(status: number, body: string): LlmErrorKind {
  * Quanto esperar num 429, em ms: header Retry-After, "retryDelay": "23s"
  * (Gemini) ou "try again in 1m2.5s" / "in 450ms" (Groq/OpenAI).
  */
-export function tempoDeEspera(headers: Headers, body: string): number | undefined {
+export function tempoDeEspera(headers: Headers, body: string, now = Date.now()): number | undefined {
   const header = headers.get('retry-after');
   if (header && /^\d+(\.\d+)?$/.test(header.trim())) return Math.ceil(Number(header) * 1000);
+
+  if (header) {
+    const date = Date.parse(header);
+    if (Number.isFinite(date)) return Math.max(0, date - now);
+  }
 
   const retryDelay = /retry_?delay"?\s*:\s*"(\d+(?:\.\d+)?)s"/i.exec(body);
   if (retryDelay?.[1]) return Math.ceil(Number(retryDelay[1]) * 1000);
@@ -165,6 +175,9 @@ export class OpenAiCompatLlm implements LlmPort {
   private readonly now: () => number;
 
   constructor(private readonly options: OpenAiCompatOptions) {
+    for (const [model, mode] of Object.entries(options.initialResponseModes ?? {})) {
+      if (mode !== undefined) this.modeIndex.set(model, MODOS.indexOf(mode));
+    }
     this.fetchFn = options.fetch ?? fetch;
     this.sleep = options.sleep ?? dormir;
     this.now = options.now ?? Date.now;
@@ -203,17 +216,19 @@ export class OpenAiCompatLlm implements LlmPort {
           data = JSON.parse(texto);
         } catch {
           // 200 com corpo que não é JSON (ex.: "OK" de um proxy): falha do provedor, não do modelo.
-          throw new LlmHttpError(response.status, `resposta não é JSON: ${texto}`);
+          throw new LlmHttpError(response.status, 'resposta não é JSON');
         }
         this.registrarUso(request.tier, model, data);
         return extrairJson(data);
       }
       const body = await response.text();
       const error = new LlmHttpError(response.status, body);
+      const esperaInformada = tempoDeEspera(response.headers, body, this.now());
+      if (esperaInformada !== undefined && Number.isFinite(esperaInformada)) error.retryAfterMs = esperaInformada;
 
       // 429 no principal (cota por minuto ou por dia) com reserva configurado: troca na hora.
-      if (response.status === 429 && reserva && model === principal) {
-        const espera = tempoDeEspera(response.headers, body) ?? (error.kind === 'plan_or_quota' ? 3_600_000 : 60_000);
+      if (response.status === 429 && reserva && model === principal && !this.options.deferModelFallback) {
+        const espera = tempoDeEspera(response.headers, body, this.now()) ?? (error.kind === 'plan_or_quota' ? 3_600_000 : 60_000);
         this.bloqueadoAte.set(principal, this.now() + espera);
         this.trocas.push({ tier: request.tier, de: principal, para: reserva, motivo: error.kind, esperaMs: espera });
         model = reserva;
@@ -222,14 +237,17 @@ export class OpenAiCompatLlm implements LlmPort {
       if (error.fatal) throw error;
 
       if (error.kind === 'rate_limit' || error.kind === 'unavailable') {
-        const espera = tempoDeEspera(response.headers, body) ?? 1000 * 2 ** rateLimitRetries;
+        const espera = tempoDeEspera(response.headers, body, this.now()) ?? 1000 * 2 ** rateLimitRetries;
         if (rateLimitRetries >= maxRetries || espera > maxWait) throw error;
         rateLimitRetries++;
         await this.sleep(espera, request.signal);
         continue;
       }
 
-      const recusouFormato = (response.status === 400 || response.status === 422) && this.modoDe(model) !== 'none';
+      const recusouFormato = (response.status === 400 || response.status === 422) && this.modoDe(model) !== 'none'
+        && !/json_validate_failed|schema_validation_failed/i.test(body)
+        && /response_format|json_schema|json_object/i.test(body)
+        && /not supported|unsupported|does not support|not available|unrecognized|unknown parameter/i.test(body);
       if (!recusouFormato) throw error;
       this.modeIndex.set(model, (this.modeIndex.get(model) ?? 0) + 1);
     }
@@ -293,21 +311,24 @@ export class OpenAiCompatLlm implements LlmPort {
  * Lê choices[0].message.content e extrai o JSON. Tolera cercas ```json e
  * texto de raciocínio antes do objeto (comum em modelos com "thinking").
  */
+export class LlmOutputError extends Error {
+  constructor(readonly code: 'missing_content' | 'missing_json_object' | 'invalid_json') { super(`Saída do modelo inválida: ${code}.`); this.name = 'LlmOutputError'; }
+}
 export function extrairJson(data: unknown): unknown {
   const content = (data as { choices?: { message?: { content?: unknown } }[] })?.choices?.[0]?.message?.content;
   if (typeof content !== 'string') {
-    throw new Error('resposta do provedor sem choices[0].message.content em texto');
+    throw new LlmOutputError('missing_content');
   }
   const semRaciocinio = content.replace(/<think>[\s\S]*?<\/think>/g, '');
   const inicio = semRaciocinio.indexOf('{');
   const fim = semRaciocinio.lastIndexOf('}');
   if (inicio < 0 || fim < inicio) {
-    throw new Error(`resposta sem objeto JSON: ${semRaciocinio.slice(0, 200)}`);
+    throw new LlmOutputError('missing_json_object');
   }
   try {
     return JSON.parse(semRaciocinio.slice(inicio, fim + 1));
   } catch {
-    throw new Error(`JSON inválido na resposta: ${semRaciocinio.slice(inicio, inicio + 200)}`);
+    throw new LlmOutputError('invalid_json');
   }
 }
 
