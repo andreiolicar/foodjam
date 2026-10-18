@@ -15,6 +15,7 @@ import { criarClassificacaoSchema } from './schemas.js';
 import { enumerarCombinacoes, escolherNaCombinacao } from './regras/combinacoes.js';
 import { contemTermo, palavras, evitado, violaRestricao } from './regras/elegibilidade.js';
 import { compatibilidadeComprovada } from './regras/compatibilidade.js';
+import { quantidadeDoDesejo } from './regras/quantidades.js';
 
 /** Escolha salva é proposta ao Core, não confirmação nem cadastro silencioso. */
 export async function selecionarEnderecoSalvo(inputSession: CoreSession, actorId: ParticipantId, port: DiscoveryCatalogPort, addressId: string) {
@@ -114,7 +115,8 @@ export async function proporDescoberta(inputSession: CoreSession, deps: {
     coverage: found.coverage,
     id: index ? `${deps.proposalId}-alt-${index}` : deps.proposalId, sessionId: session.id, organizerId: session.organizerId,
     address: { ...address }, participants: structuredClone(session.participants), status: 'preliminary', pending: catalogIncomplete ? ['commercial_validation', 'catalog_incomplete'] : ['commercial_validation'],
-    items: o.picks.map(i => ({ participantId: i.participantId, storeId: i.storeId, menuItemId: i.menuItemId, quantity: 1, ...(i.isSubstitute ? { isSubstitute: true } : {}) })),
+    items: o.picks.map(i => ({ participantId: i.participantId, storeId: i.storeId, menuItemId: i.menuItemId,
+      quantity: quantidadeDoDesejo(session.participants.find(p => p.id === i.participantId)!.preferences, i.desejo), ...(i.isSubstitute ? { isSubstitute: true } : {}) })),
   }));
   return { classificationMode, ...(proposals[0] ? { proposal: proposals[0] } : { reason: 'no_candidates' as const }), alternatives: proposals.slice(1), stores: selected, items, coverage: found.coverage };
 }

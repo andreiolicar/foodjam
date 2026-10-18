@@ -10,6 +10,7 @@ Listas sempre COMPLETAS e atualizadas (atuais + novas; se mudou de ideia, "na ve
 - dietaryRestrictions: saúde ou dieta, nunca violar ("vegetariano", "vegano", "sem lactose", "sem glúten", "alergia a amendoim").
 - avoids: só gosto, nome da comida sem "sem" ("qualquer coisa menos japa" → ["japonês"]). Na dúvida, se envolve saúde, é dietaryRestrictions.
 - wishes: os itens que a pessoa quer RECEBER, um por item ("um lanche e um bolo de cenoura" → ["lanche", "bolo de cenoura"]; "algo leve" → ["algo leve"]). Atributos como "barato" não são itens. Sem pedido de comida, [].
+Nomes em wishes sem contagem ("2 pães de queijo" → ["pão de queijo"]), sem repetir o nome por unidade. O Core extrai a quantidade da mensagem original; não invente nem calcule quantidades.
 budgetText: trecho exato do valor citado ("até 30 reais"), sem converter nem calcular; senão null.
 clarification: se "ambiguous", pergunta curta e simpática em português; senão null.
 Se kind não for "preference", devolva as listas atuais.`;

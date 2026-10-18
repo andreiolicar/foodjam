@@ -256,13 +256,16 @@ export const PreliminaryProposalSchema = z.object({
   address: z.object({ id: IdSchema.exactOptional(), formatted: z.string().min(1) }),
   participants: z.array(z.object({ id: IdSchema, displayName: z.string().min(1), preferences: z.object({
     foodPreferences: z.array(z.string()).exactOptional(), dietaryRestrictions: z.array(z.string()).exactOptional(),
-    avoids: z.array(z.string()).exactOptional(), wishes: z.array(z.string()).exactOptional(), budgetCents: MoneyCentsSchema.exactOptional(),
+    avoids: z.array(z.string()).exactOptional(), wishes: z.array(z.string()).exactOptional(),
+    wishQuantities: z.array(QuantitySchema).min(1).exactOptional(), budgetCents: MoneyCentsSchema.exactOptional(),
   }) })).min(1).max(20),
   items: z.array(z.object({ participantId: IdSchema, storeId: IdSchema, menuItemId: IdSchema, quantity: QuantitySchema, isSubstitute: z.boolean().exactOptional() })).min(1),
   status: z.literal('preliminary'), pending: z.array(z.enum(['commercial_validation', 'catalog_incomplete'])),
 }).superRefine((p, ctx) => {
   if (!p.participants.some(person => person.id === p.organizerId) || new Set(p.participants.map(person => person.id)).size !== p.participants.length
-    || p.items.some(item => !p.participants.some(person => person.id === item.participantId)) || distinctStores(p.items) > MAX_STORES_PER_PROPOSAL) {
+    || p.items.some(item => !p.participants.some(person => person.id === item.participantId)) || distinctStores(p.items) > MAX_STORES_PER_PROPOSAL
+    || p.participants.some(person => person.preferences.wishQuantities !== undefined
+      && person.preferences.wishQuantities.length !== person.preferences.wishes?.length)) {
     ctx.addIssue({ code: 'custom', message: 'Composição preliminar inválida.' });
   }
 });

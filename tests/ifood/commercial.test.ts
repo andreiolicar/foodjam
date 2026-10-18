@@ -106,6 +106,20 @@ it('perfil financeiro observado conserva cada agregado e o total sem corrigir be
   expect(observation.items.reduce((sum, i) => sum + i.unitPriceCents! * i.quantity, 0)).toBe(10870);
   expect(observation.issues).toEqual(['address_binding_unconfirmed', 'total_decomposition_mismatch']);
 });
+it('agregados relatados no ensaio preservam total remoto e pendências sem deduzir significado dos benefícios', async () => {
+  const s = setup();
+  // Linha hipotética apenas para isolar a aritmética dos agregados relatados;
+  // não representa itens/preços do carrinho real, cujo payload não foi salvo.
+  s.client.callCartTool.mockResolvedValue(envelope({ ...cart, items: [{ itemId: 'item', quantity: 1, unitPrice: 35.99 }],
+    deliveryAddress: {}, deliveryMethod: { fee: 0 }, fees: [{ amount: 0.99 }], summary: {
+      subtotalAmount: 35.99, deliveryFeeAmount: 0, feeTotalAmount: 0.99,
+      benefitsTotalAmount: 22.98, voucherTotalAmount: 0, totalAmount: 18.99,
+    } }));
+  const observation = await api.readIfoodCart(s.client, s.entry.context, 'cart', 'BRL');
+  expect(observation.amounts).toEqual({ subtotalCents: 3599, deliveryCents: 0, feesCents: 99, benefitsCents: 2298, voucherCents: 0, totalCents: 1899 });
+  expect(observation.issues).toEqual(['address_binding_unconfirmed', 'total_decomposition_mismatch']);
+  expect(s.client.callCartTool).toHaveBeenCalledExactlyOnceWith('getCart', { cartId: 'cart' });
+});
 it.each(['address_order', 'changed_quantity'])('reserva ambígua bloqueia recriação da mesma proposta/loja: %s', async variation => {
   const s = setup(); s.client.callCartTool.mockRejectedValue(new Error('timeout'));
   const port = api.createIfoodCommercialPreparation(s.client, { authority: s.authority, journal: s.journal, authenticatedUserId: 'user' });

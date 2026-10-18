@@ -6,6 +6,7 @@ import { SISTEMA_COLETA, SISTEMA_COLETA_LOTE, montarPromptColeta, montarPromptCo
 import type { ColetaOutput } from './schemas.js';
 import { ColetaOutputSchema, criarColetaLoteSchema } from './schemas.js';
 import type { CoreSession } from './sessao.js';
+import { quantidadesDaMensagem } from './regras/quantidades.js';
 
 /** Mensagens maiores são cortadas antes de ir ao modelo. */
 export const MAX_MESSAGE_LENGTH = 500;
@@ -142,6 +143,9 @@ function aplicarSaidaColeta(
         avoids: limparLista(output.avoids),
         wishes: limparLista(output.wishes).slice(0, MAX_ITENS_POR_PESSOA),
       };
+      const quantities = quantidadesDaMensagem(text, preferences.wishes!, current);
+      if (!quantities) return { session, outcome: 'clarification', actions: [mensagemPrivada(session, participantId, 'Qual a quantidade de cada item? Informe um número inteiro de 1 a 10.')] };
+      if (quantities.some(n => n !== 1)) preferences.wishQuantities = quantities;
       const budgetCents = output.budgetText ? extrairOrcamentoCents(output.budgetText) : current.budgetCents;
       if (budgetCents !== undefined) preferences.budgetCents = budgetCents;
 

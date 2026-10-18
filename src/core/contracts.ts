@@ -21,6 +21,8 @@ export interface ParticipantPreferences {
    * combine com foodPreferences.
    */
   wishes?: string[];
+  /** Quantidades comprovadas, na mesma ordem de wishes. Ausência mantém uma unidade. */
+  wishQuantities?: number[];
   budgetCents?: MoneyCents;
 }
 
