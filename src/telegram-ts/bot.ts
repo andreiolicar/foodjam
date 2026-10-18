@@ -2,7 +2,7 @@
 import { Telegraf } from "telegraf";
 
 import { TELEGRAM_BOT_TOKEN } from "./config.js";
-import { registerHandlers } from "./handlers.js";
+import { registerHandlers } from "./handlers/index.js";
 
 if (!TELEGRAM_BOT_TOKEN) {
   throw new Error("TELEGRAM_BOT_TOKEN is not configured");
