@@ -1,5 +1,5 @@
 import type { LlmPort, LlmRequest } from '../ports.js';
-import { TAG_OPCOES } from '../prompts/ajuste.js';
+import { TAG_ITENS_ATUAIS, TAG_OPCOES } from '../prompts/ajuste.js';
 import type { EntradaLote } from '../prompts/coleta.js';
 import { TAG_LOTE, TAG_MENSAGEM, TAG_PREFERENCIAS, desescaparDados, montarPromptColeta } from '../prompts/coleta.js';
 import { TAG_ITENS, TAG_PESSOAS } from '../prompts/proposta.js';
@@ -147,11 +147,16 @@ function heuristicaClassificacao(request: LlmRequest): unknown {
 function heuristicaAjuste(request: LlmRequest): unknown {
   const mensagem = tag(request.prompt, TAG_MENSAGEM);
   const opcoes = JSON.parse(tag(request.prompt, TAG_OPCOES) || '[]') as ItemPrompt[];
-  const vazio = { menuItemId: null, quantity: null, clarification: null };
+  const atuais = JSON.parse(tag(request.prompt, TAG_ITENS_ATUAIS) || '[]') as ItemPrompt[];
+  const vazio = { menuItemId: null, replaceMenuItemId: null, quantity: null, clarification: null };
 
   if (!/troc|mud|prefir|quero|em vez|no lugar/.test(normalizar(mensagem))) return { kind: 'not_adjustment', ...vazio };
+
+  // "troca o meu bolo por um café": antes de "por" é o que sai, depois é o que entra.
+  const [antes = '', depois] = mensagem.split(/\b(?:por|pelo|pela)\b/i);
+  const novoTexto = depois ?? mensagem;
   const [melhor, segundo] = opcoes
-    .map((item) => ({ item, afinidade: afinidade(item, mensagem) }))
+    .map((item) => ({ item, afinidade: afinidade(item, novoTexto) }))
     .filter((o) => o.afinidade > 0)
     .sort((a, b) => b.afinidade - a.afinidade);
   if (!melhor) {
@@ -161,8 +166,17 @@ function heuristicaAjuste(request: LlmRequest): unknown {
   if (segundo && segundo.afinidade === melhor.afinidade) {
     return { kind: 'ambiguous', ...vazio, clarification: `Você quer ${melhor.item.nome} ou ${segundo.item.nome}?` };
   }
+
+  const citados = atuais.filter((i) => afinidade(i, antes) > 0);
+  const sai = citados.length === 1 ? citados[0]?.id : atuais.length === 1 ? atuais[0]?.id : null;
   const quantidade = /\b([2-9]|10)\b/.exec(mensagem)?.[1];
-  return { kind: 'swap', menuItemId: melhor.item.id, quantity: quantidade ? Number(quantidade) : null, clarification: null };
+  return {
+    kind: 'swap',
+    menuItemId: melhor.item.id,
+    replaceMenuItemId: sai ?? null,
+    quantity: quantidade ? Number(quantidade) : null,
+    clarification: null,
+  };
 }
 
 function heuristicaColeta(request: LlmRequest): unknown {

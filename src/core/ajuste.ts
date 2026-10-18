@@ -15,11 +15,16 @@ import { AjusteOutputSchema, MAX_QUANTITY } from './schemas.js';
 import type { CoreSession } from './sessao.js';
 import { TransicaoInvalidaError, apresentarProposta } from './sessao.js';
 
-/** Troca pedida por um participante: o item novo substitui o(s) item(ns) dele. */
+/** Troca pedida por um participante: o item novo entra no lugar de um item dele. */
 export interface Troca {
   participantId: ParticipantId;
   storeId: StoreId;
   menuItemId: MenuItemId;
+  /**
+   * Item atual da pessoa que sai. Opcional se ela tem um item só (ou nenhum:
+   * o novo é acrescentado). Com vários itens, sem ele o ajuste devolve which_item.
+   */
+  replaceMenuItemId?: MenuItemId;
   /** Padrão: 1. */
   quantity?: number;
 }
@@ -67,17 +72,21 @@ export function ajustar(session: CoreSession, troca: Troca, catalog: CatalogSnap
     };
   }
 
-  // Substitui no lugar do primeiro item da pessoa, para não mudar a ordem do rateio.
-  const items: ProposedItem[] = [];
-  let substituido = false;
-  for (const item of current.orders.flatMap((o) => o.items)) {
-    if (item.participantId !== troca.participantId) {
-      items.push(item);
-    } else if (!substituido) {
-      items.push(novoItem);
-      substituido = true;
-    }
+  // Qual item da pessoa sai: o indicado; sem indicação, o único que ela tem.
+  const atuais = current.orders.flatMap((o) => o.items);
+  const daPessoa = atuais.filter((i) => i.participantId === troca.participantId).map((i) => i.menuItemId);
+  const sai = troca.replaceMenuItemId ?? (daPessoa.length === 1 ? daPessoa[0] : undefined);
+  if (daPessoa.length > 0 && (sai === undefined || !daPessoa.includes(sai))) {
+    return { ok: false, problems: [{ code: 'which_item', participantId: troca.participantId, menuItemIds: daPessoa }] };
   }
+
+  // Substitui no lugar do item que sai, para não mudar a ordem do rateio; sem item, acrescenta.
+  let substituido = false;
+  const items: ProposedItem[] = atuais.map((item) => {
+    if (substituido || item.participantId !== troca.participantId || item.menuItemId !== sai) return item;
+    substituido = true;
+    return novoItem;
+  });
   if (!substituido) items.push(novoItem);
 
   const orders = montarPedidos(items, catalog.stores);
@@ -133,12 +142,19 @@ const MOTIVOS: Record<ProblemaProposta['code'], string> = {
   split_mismatch: 'o rateio não fechou',
   over_budget: 'passaria do seu orçamento',
   stale_catalog: 'o catálogo precisa ser consultado de novo',
+  which_item: 'não ficou claro qual dos seus itens trocar',
 };
 
 /** Texto curto, sem valores, para explicar por que o ajuste não foi feito. */
 export function descreverProblemas(problems: readonly ProblemaProposta[]): string {
   const motivos = [...new Set(problems.map((p) => MOTIVOS[p.code]))];
   return `Não consegui fazer essa troca: ${motivos.join('; ')}.`;
+}
+
+/** Pergunta escrita pelo código (não pelo modelo) quando não dá para saber qual item trocar. */
+export function perguntarQualItem(nomes: readonly string[]): string {
+  const lista = nomes.length > 1 ? `${nomes.slice(0, -1).join(', ')} ou ${nomes.at(-1)}` : (nomes[0] ?? '');
+  return `Qual item você quer trocar: ${lista}?`;
 }
 
 export async function interpretarAjuste(
@@ -168,8 +184,8 @@ export async function interpretarAjuste(
   });
 
   const opcoes = itensElegiveis(participant, catalog);
-  const atualId = session.proposal.orders.flatMap((o) => o.items).find((i) => i.participantId === participant.id)?.menuItemId;
-  const itemAtual = catalog.menuItems.find((i) => i.id === atualId);
+  const idsAtuais = session.proposal.orders.flatMap((o) => o.items).filter((i) => i.participantId === participant.id).map((i) => i.menuItemId);
+  const itensAtuais = idsAtuais.flatMap((id) => catalog.menuItems.filter((m) => m.id === id));
 
   let output;
   try {
@@ -178,7 +194,7 @@ export async function interpretarAjuste(
       phase: 'ajuste',
       tier: 'fast',
       system: SISTEMA_AJUSTE,
-      prompt: montarPromptAjuste(text, itemAtual, opcoes, catalog.stores),
+      prompt: montarPromptAjuste(text, itensAtuais, opcoes, catalog.stores),
       outputName: 'ajuste',
       schema: AjusteOutputSchema,
       ...(deps.timeoutMs !== undefined && { timeoutMs: deps.timeoutMs }),
@@ -208,11 +224,18 @@ export async function interpretarAjuste(
       participantId: participant.id,
       storeId: escolhido.storeId,
       menuItemId: escolhido.id,
+      ...(output.replaceMenuItemId !== null && { replaceMenuItemId: output.replaceMenuItemId }),
       ...(output.quantity !== null && { quantity: output.quantity }),
     },
     catalog,
   );
   if (!result.ok) {
+    // Vários itens e não ficou claro qual sai: pergunta em vez de adivinhar.
+    const qualItem = result.problems.find((p) => p.code === 'which_item');
+    if (qualItem) {
+      const nomes = itensAtuais.map((i) => i.name);
+      return { session, actions: [privada(perguntarQualItem(nomes))], outcome: 'clarification', problems: result.problems };
+    }
     return { session, actions: [privada(descreverProblemas(result.problems))], outcome: 'rejected', problems: result.problems };
   }
   return { session: result.session, actions: result.actions, outcome: 'adjusted' };

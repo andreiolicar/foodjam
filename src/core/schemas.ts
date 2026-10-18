@@ -188,6 +188,8 @@ export const AjusteOutputSchema = z
   .strictObject({
     kind: z.enum(['swap', 'not_adjustment', 'ambiguous']),
     menuItemId: IdSchema.nullable(),
+    /** Qual item atual da pessoa sai; null se ela tem um só ou se não dá para saber. */
+    replaceMenuItemId: IdSchema.nullable(),
     quantity: QuantitySchema.nullable(),
     clarification: z.string().trim().min(1).max(MAX_CLARIFICATION_LENGTH).nullable(),
   })

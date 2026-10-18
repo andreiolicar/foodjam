@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ajustar, proximaRevisao } from '../../src/core/ajuste.js';
-import { cancelar } from '../../src/core/sessao.js';
+import { apresentarProposta, cancelar } from '../../src/core/sessao.js';
 import { TransicaoInvalidaError } from '../../src/core/sessao.js';
-import { LOJAS, ORG, cenarioPadaria } from './fixtures.js';
+import { LOJAS, ORG, cenarioPadaria, item, proposta } from './fixtures.js';
 
 const soma = (values: number[]) => values.reduce((a, b) => a + b, 0);
 
@@ -135,5 +135,40 @@ describe('ajustar', () => {
     expect(() => ajustar(cancelada, { participantId: 'caio', storeId: LOJAS.padaria, menuItemId: 'pad-cafe' }, catalog)).toThrow(
       TransicaoInvalidaError,
     );
+  });
+});
+
+describe('ajustar: pessoa com vários itens', () => {
+  async function comDoisItens() {
+    const { catalog, revisao } = await cenarioPadaria();
+    const p = proposta(catalog, [item(catalog, 'bia', 'pad-misto'), item(catalog, 'bia', 'pad-bolo-cenoura'), item(catalog, 'caio', 'pad-cafe')], 'p2');
+    return { catalog, session: apresentarProposta(revisao, p) };
+  }
+  const itens = (r: { ok: boolean; proposal?: { orders: { items: { participantId: string; menuItemId: string }[] }[] } }) =>
+    r.proposal?.orders.flatMap((o) => o.items).map((i) => `${i.participantId}:${i.menuItemId}`);
+
+  it('troca só o item indicado, no mesmo lugar', async () => {
+    const { catalog, session } = await comDoisItens();
+    const r = ajustar(session, { participantId: 'bia', storeId: LOJAS.padaria, menuItemId: 'pad-cafe', replaceMenuItemId: 'pad-bolo-cenoura' }, catalog);
+    expect(itens(r as never)).toEqual(['bia:pad-misto', 'bia:pad-cafe', 'caio:pad-cafe']);
+  });
+
+  it('com vários itens e sem indicar qual sai: which_item com os itens da pessoa', async () => {
+    const { catalog, session } = await comDoisItens();
+    const r = ajustar(session, { participantId: 'bia', storeId: LOJAS.padaria, menuItemId: 'pad-cafe' }, catalog);
+    expect(r).toEqual({ ok: false, problems: [{ code: 'which_item', participantId: 'bia', menuItemIds: ['pad-misto', 'pad-bolo-cenoura'] }] });
+  });
+
+  it('item indicado que não é da pessoa: which_item', async () => {
+    const { catalog, session } = await comDoisItens();
+    const r = ajustar(session, { participantId: 'bia', storeId: LOJAS.padaria, menuItemId: 'pad-cafe', replaceMenuItemId: 'pad-cafe' }, catalog);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.problems[0]?.code).toBe('which_item');
+  });
+
+  it('com um item só, não precisa indicar', async () => {
+    const { catalog, session } = await comDoisItens();
+    const r = ajustar(session, { participantId: 'caio', storeId: LOJAS.padaria, menuItemId: 'pad-misto' }, catalog);
+    expect(itens(r as never)).toEqual(['bia:pad-misto', 'bia:pad-bolo-cenoura', 'caio:pad-misto']);
   });
 });

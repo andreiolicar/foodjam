@@ -16,7 +16,9 @@ export type ProblemaProposta =
   | { code: 'below_minimum'; storeId: StoreId }
   | { code: 'split_mismatch' }
   | { code: 'over_budget'; participantId: ParticipantId }
-  | { code: 'stale_catalog'; fetchedAt: string; maxAgeMs: number };
+  | { code: 'stale_catalog'; fetchedAt: string; maxAgeMs: number }
+  /** Ajuste: a pessoa tem vários itens e não ficou claro qual trocar. */
+  | { code: 'which_item'; participantId: ParticipantId; menuItemIds: MenuItemId[] };
 
 /**
  * Validação completa de uma proposta contra a sessão e o catálogo atual.

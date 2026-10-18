@@ -5,13 +5,14 @@ import type { IncomingMessage } from '../../src/core/contracts.js';
 import { FakeLlm, responderHeuristico } from '../../src/core/fakes/llm-fake.js';
 import { SISTEMA_AJUSTE } from '../../src/core/prompts/ajuste.js';
 import type { AjusteOutput } from '../../src/core/schemas.js';
-import { TransicaoInvalidaError, cancelar } from '../../src/core/sessao.js';
-import { ORG, cenarioPadaria } from './fixtures.js';
+import { TransicaoInvalidaError, apresentarProposta, cancelar } from '../../src/core/sessao.js';
+import { ORG, cenarioPadaria, item, proposta } from './fixtures.js';
 
 const msg = (text: string, participantId = 'caio'): IncomingMessage => ({ sessionId: 's1', participantId, text });
 const saida = (extra: Partial<AjusteOutput> = {}): AjusteOutput => ({
   kind: 'swap',
   menuItemId: null,
+  replaceMenuItemId: null,
   quantity: null,
   clarification: null,
   ...extra,
@@ -143,5 +144,57 @@ describe('descreverProblemas', () => {
         { code: 'over_budget', participantId: 'a' },
       ]),
     ).toBe('Não consegui fazer essa troca: a loja não atingiria o pedido mínimo; passaria do seu orçamento.');
+  });
+});
+
+describe('interpretarAjuste: pessoa com vários itens', () => {
+  /** Bia com misto e bolo de cenoura na padaria. */
+  async function comDoisItens() {
+    const { catalog, revisao } = await cenarioPadaria();
+    const p = proposta(catalog, [item(catalog, ORG, 'pad-misto'), item(catalog, 'bia', 'pad-misto'), item(catalog, 'bia', 'pad-bolo-cenoura')], 'p2');
+    return { catalog, session: apresentarProposta({ ...revisao, status: 'reviewing' }, p) };
+  }
+  const itensDaBia = (s: { proposal?: { orders: { items: { participantId: string; menuItemId: string }[] }[] } }) =>
+    s.proposal?.orders.flatMap((o) => o.items).filter((i) => i.participantId === 'bia').map((i) => i.menuItemId);
+
+  it('"troca o meu bolo por um café" troca só o bolo', async () => {
+    const { catalog, session } = await comDoisItens();
+    const llm = new FakeLlm([saida({ menuItemId: 'pad-cafe', replaceMenuItemId: 'pad-bolo-cenoura' })]);
+    const result = await interpretarAjuste(session, msg('troca o meu bolo por um café', 'bia'), catalog, { llm });
+
+    expect(result.outcome).toBe('adjusted');
+    expect(itensDaBia(result.session)).toEqual(['pad-misto', 'pad-cafe']);
+    const prompt = llm.requests[0]?.prompt ?? '';
+    expect(prompt).toContain('<itens_atuais>');
+    expect(prompt).toContain('pad-bolo-cenoura');
+  });
+
+  it('sem saber qual item sai, pergunta em vez de adivinhar (texto escrito pelo código)', async () => {
+    const { catalog, session } = await comDoisItens();
+    const llm = new FakeLlm([saida({ menuItemId: 'pad-cafe', replaceMenuItemId: null })]);
+    const result = await interpretarAjuste(session, msg('quero um café', 'bia'), catalog, { llm });
+
+    expect(result.outcome).toBe('clarification');
+    expect(result.session).toBe(session);
+    expect(result.actions).toEqual([
+      { type: 'send_message', sessionId: 's1', participantId: 'bia', text: 'Qual item você quer trocar: Misto Quente ou Bolo de Cenoura?' },
+    ]);
+  });
+
+  it('item a trocar inventado pelo modelo também vira pergunta', async () => {
+    const { catalog, session } = await comDoisItens();
+    const llm = new FakeLlm([saida({ menuItemId: 'pad-cafe', replaceMenuItemId: 'pad-pizza' })]);
+    const result = await interpretarAjuste(session, msg('troca a pizza por café', 'bia'), catalog, { llm });
+    expect(result.outcome).toBe('clarification');
+    expect(itensDaBia(result.session)).toEqual(['pad-misto', 'pad-bolo-cenoura']);
+  });
+
+  it('com o responder heurístico: troca só o item citado', async () => {
+    const { catalog, session } = await comDoisItens();
+    const result = await interpretarAjuste(session, msg('troca o meu bolo por um café', 'bia'), catalog, {
+      llm: new FakeLlm(responderHeuristico),
+    });
+    expect(result.outcome).toBe('adjusted');
+    expect(itensDaBia(result.session)).toEqual(['pad-misto', 'pad-cafe']);
   });
 });
