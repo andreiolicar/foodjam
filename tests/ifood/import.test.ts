@@ -9,6 +9,7 @@ it('importa API e CLI sem ambiente, rede, listener, processo ou saída automáti
   const cartCli = fileURLToPath(new URL('../../src/ifood/cart-cli.ts', import.meta.url));
   const smokeSetup = fileURLToPath(new URL('../../src/ifood/smoke-setup.ts', import.meta.url));
   const smokePreflight = fileURLToPath(new URL('../../src/ifood/smoke-preflight.ts', import.meta.url));
+  const paymentOrderReadCli = fileURLToPath(new URL('../../src/ifood/payment-order-read-cli.ts', import.meta.url));
   const script = `
     import http from 'node:http';
     import childProcess from 'node:child_process';
@@ -25,10 +26,11 @@ it('importa API e CLI sem ambiente, rede, listener, processo ou saída automáti
     await import(pathToFileURL(process.argv[4]).href);
     await import(pathToFileURL(process.argv[5]).href);
     await import(pathToFileURL(process.argv[6]).href);
+    await import(pathToFileURL(process.argv[7]).href);
     console.log(Object.keys(api).sort().join(','));
   `;
   const output = execFileSync(process.execPath, [
-    '--import', import.meta.resolve('tsx'), '--input-type=module', '-e', script, api, cli, readCli, cartCli, smokeSetup, smokePreflight,
+    '--import', import.meta.resolve('tsx'), '--input-type=module', '-e', script, api, cli, readCli, cartCli, smokeSetup, smokePreflight, paymentOrderReadCli,
   ], { env: {}, encoding: 'utf8', timeout: 10_000 });
   expect(output.trim()).toBe('createIfoodMcpClient,readIfoodMcpConfig');
 });

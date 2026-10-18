@@ -4,7 +4,7 @@ import { McpError } from '@modelcontextprotocol/sdk/types.js';
 
 export type IfoodMcpStage = 'mcp_initial_connect' | 'oauth_browser' | 'oauth_callback'
   | 'oauth_state_validation' | 'oauth_token_exchange' | 'oauth_tokens_storage'
-  | 'mcp_reconnect' | 'tools_list' | 'tools_read' | 'tools_cart' | 'mcp_close';
+  | 'mcp_reconnect' | 'tools_list' | 'tools_read' | 'tools_cart' | 'tools_payment_order' | 'mcp_close';
 
 interface SafeErrorDetails {
   errorType?: string;
@@ -25,7 +25,11 @@ interface SafeErrorDetails {
     | 'cart_tool_not_allowed' | 'cart_tool_not_found' | 'cart_catalog_ambiguous'
     | 'cart_arguments_invalid' | 'cart_schema_invalid'
     | 'cart_result_invalid' | 'cart_tool_failed' | 'cart_client_disconnected'
-    | 'cart_not_authenticated' | 'cart_mutations_disabled' | 'cart_execution_unsupported';
+    | 'cart_not_authenticated' | 'cart_mutations_disabled' | 'cart_execution_unsupported'
+    | 'payment_order_tool_not_allowed' | 'payment_order_tool_not_found' | 'payment_order_catalog_ambiguous'
+    | 'payment_order_arguments_invalid' | 'payment_order_schema_invalid' | 'payment_order_result_invalid'
+    | 'payment_order_tool_failed' | 'payment_order_client_disconnected' | 'payment_order_not_authenticated'
+    | 'payment_configuration_disabled' | 'payment_order_execution_unsupported';
 }
 
 export interface IfoodMcpDiagnostic extends SafeErrorDetails {
@@ -63,6 +67,7 @@ const stageMessages: Record<IfoodMcpStage, string> = {
   tools_list: 'Não foi possível listar ferramentas MCP.',
   tools_read: 'Não foi possível concluir a consulta MCP de leitura.',
   tools_cart: 'Não foi possível concluir a operação MCP de carrinho.',
+  tools_payment_order: 'Não foi possível concluir a operação MCP de pagamento ou acompanhamento.',
   mcp_close: 'Não foi possível encerrar a sessão MCP; recursos locais liberados.',
 };
 

@@ -24,6 +24,7 @@ function mockServer(options: {
   reconnectFailure?: boolean; malformedTokens?: boolean; requirePost?: boolean; clientFailure?: boolean;
   readCatalog?: boolean; readResult?: unknown;
   cartCatalog?: IfoodMcpTool[]; cartResult?: unknown;
+  paymentOrderCatalog?: IfoodMcpTool[]; paymentOrderResult?: unknown;
 } = {}) {
   const requests: { url: string; init: RequestInit | undefined }[] = [];
   const methods: string[] = [];
@@ -66,6 +67,12 @@ function mockServer(options: {
     const message = JSON.parse(String(init?.body)) as { id?: number; method: string; params?: { cursor?: string } };
     methods.push(message.method);
     if (message.method === 'notifications/initialized') return new Response(null, { status: 202 });
+    if (options.paymentOrderCatalog && message.method === 'tools/list') {
+      return Response.json({ jsonrpc: '2.0', id: message.id, result: { tools: options.paymentOrderCatalog } });
+    }
+    if (options.paymentOrderCatalog && message.method === 'tools/call') {
+      return Response.json({ jsonrpc: '2.0', id: message.id, result: options.paymentOrderResult });
+    }
     if (options.cartCatalog && message.method === 'tools/list') {
       return Response.json({ jsonrpc: '2.0', id: message.id, result: { tools: options.cartCatalog } });
     }
@@ -97,6 +104,76 @@ function mockServer(options: {
 afterEach(() => vi.restoreAllMocks());
 
 describe('SDK v1 real com HTTP externo simulado', () => {
+  // InputSchemas baseados nos metadados observados fornecidos pelo responsável.
+  // OutputSchema abaixo é fixture de teste, não afirmação sobre o servidor real.
+  const paymentOrderCatalog: IfoodMcpTool[] = [
+    { name: 'listPaymentMethods', inputSchema: { type: 'object', properties: { merchantId: { type: 'string', format: 'uuid' } }, required: ['merchantId'] } },
+    { name: 'setCartPayment', inputSchema: { type: 'object', properties: { cartId: { type: 'string', format: 'uuid' }, paymentMethodId: { type: 'string', format: 'uuid' }, cardTokenId: { type: 'string', format: 'uuid' } }, required: ['cartId', 'paymentMethodId'] } },
+    { name: 'getOrder', inputSchema: { type: 'object', properties: { orderId: { type: 'string' } }, required: ['orderId'] } },
+    { name: 'trackOrder', inputSchema: { type: 'object', properties: { orderId: { type: 'string' }, nextPageToken: { type: 'string' } }, required: ['orderId'] },
+      outputSchema: { type: 'object', properties: { history: { type: 'array' } }, required: ['history'] } },
+  ];
+  const paymentOrderCalls: [string, Record<string, unknown>, boolean][] = [
+    ['listPaymentMethods', { merchantId: '00000000-0000-4000-8000-000000000001' }, false],
+    ['setCartPayment', { cartId: '00000000-0000-4000-8000-000000000002', paymentMethodId: '00000000-0000-4000-8000-000000000003' }, true],
+    ['getOrder', { orderId: 'private-order-not-a-uuid' }, false],
+    ['trackOrder', { orderId: 'private-order-not-a-uuid', nextPageToken: 'private-page' }, false],
+  ];
+
+  it.each(paymentOrderCalls.flatMap(([name, args, allowPaymentConfiguration]) => [false, true].map((isError) => ({ name, args, allowPaymentConfiguration, isError }))))(
+    'IF-04 preserva resposta via OAuth/SDK/HTTP simulado: $name isError=$isError', async ({ name, args, allowPaymentConfiguration, isError }) => {
+      const callbackUrl = await localCallbackUrl();
+      const paymentOrderResult = {
+        content: [{ type: 'text', text: 'private-content', _meta: { source: 'private-source' } }], isError,
+        structuredContent: isError ? { detail: 'private-error' } : {
+          cardTokenId: 'private-card', address: 'private-address', document: 'private-document', verificationCode: 'private-code',
+          total: 5779, amount: '57.79', history: [], nextPageToken: 'private-next-page', consultAgainAfterSeconds: 23,
+        }, _meta: { audit: 'private-audit', retryAfter: 23 }, extra: 'private-extra',
+      };
+      const remote = mockServer({ paymentOrderCatalog, paymentOrderResult });
+      const events: IfoodMcpDiagnostic[] = [];
+      const client = createIfoodMcpClient(readIfoodMcpConfig({
+        IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+      }), {
+        allowPaymentConfiguration, onDiagnostic: (event) => events.push(event),
+        openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); },
+      });
+      try {
+        await client.connect();
+        await expect(client.callPaymentOrderTool(name, args)).resolves.toEqual(paymentOrderResult);
+        const requests = remote.requests.filter((request) => request.url === endpoint && request.init?.method === 'POST')
+          .map((request) => JSON.parse(String(request.init?.body)) as { method: string; params?: unknown });
+        expect(requests.filter((request) => request.method === 'tools/call')).toEqual([
+          expect.objectContaining({ method: 'tools/call', params: { name, arguments: args } }),
+        ]);
+        expect(remote.methods).toEqual(['initialize', 'notifications/initialized', 'tools/list', 'tools/call']);
+        expect(events).toContainEqual(expect.objectContaining({ stage: 'tools_payment_order', event: 'http_response', httpStatus: 200 }));
+        expect(events).toContainEqual(expect.objectContaining({ stage: 'tools_payment_order', event: isError ? 'failed' : 'succeeded' }));
+        expect(JSON.stringify(events)).not.toMatch(/private-|test-access-token|test-secret|test-code/);
+      } finally { await client.close(); }
+      expect(remote.requests.some((request) => request.init?.method === 'DELETE')).toBe(true);
+      await expect(nativeFetch(callbackUrl)).rejects.toThrow();
+    },
+  );
+
+  it.each(['setCartPayment', 'submitOrder', 'unknownTool'])('IF-04 bloqueia %s antes de enviar discovery/tools/call ao HTTP', async (name) => {
+    const callbackUrl = await localCallbackUrl();
+    const remote = mockServer({ paymentOrderCatalog, paymentOrderResult: { content: [] } });
+    const client = createIfoodMcpClient(readIfoodMcpConfig({
+      IFOOD_MCP_CLIENT_ID: 'test-client', IFOOD_MCP_CLIENT_SECRET: 'test-secret', IFOOD_MCP_CALLBACK_URL: callbackUrl,
+    }), {
+      allowCartMutations: true,
+      openBrowser: async (url) => { await nativeFetch(`${callbackUrl}?state=${url.searchParams.get('state')}&code=test-code`); },
+    });
+    try {
+      await client.connect();
+      await expect(client.callPaymentOrderTool(name, { userConsent: true })).rejects.toMatchObject({ diagnostic: {
+        reason: name === 'setCartPayment' ? 'payment_configuration_disabled' : 'payment_order_tool_not_allowed',
+      } });
+      expect(remote.methods).toEqual(['initialize', 'notifications/initialized']);
+    } finally { await client.close(); }
+  });
+
   // Schemas fictícios, não são contratos oficiais de carrinho.
   const cartCatalog: IfoodMcpTool[] = [
     { name: 'getCart', inputSchema: { type: 'object', properties: { cartId: { type: 'string' } }, required: ['cartId'], additionalProperties: false },

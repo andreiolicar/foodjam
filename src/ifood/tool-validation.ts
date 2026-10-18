@@ -4,8 +4,8 @@ import type { JsonSchemaType } from '@modelcontextprotocol/sdk/validation/types.
 import type { IfoodMcpTool } from './client.js';
 import { diagnosticError } from './diagnostics.js';
 
-type Operation = 'read' | 'cart';
-const stage = (operation: Operation) => operation === 'read' ? 'tools_read' : 'tools_cart';
+type Operation = 'read' | 'cart' | 'payment_order';
+const stage = (operation: Operation) => `tools_${operation}` as const;
 
 /** Conteúdo MCP opaco, preservado sem conversões de domínio ou finanças. */
 export interface IfoodMcpToolResult {

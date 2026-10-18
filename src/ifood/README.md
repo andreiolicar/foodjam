@@ -1,4 +1,4 @@
-# FoodJam — integração MCP do iFood (IF-01, IF-02 e IF-03)
+# FoodJam — integração MCP do iFood (IF-01 a IF-04, sem submissão)
 
 Responsável: Andrei. Branch: `feat/ifood-mcp`. **Íris** é o nome do agente
 cadastrado no portal; o produto e o cliente MCP se chamam **FoodJam**.
@@ -11,6 +11,8 @@ com `client_secret_post`, PKCE S256 e validação de state.
 Este módulo implementa conexão explícita, OAuth interativo para um usuário de
 teste, descoberta de ferramentas, execução restrita de consultas de leitura
 e operações de carrinho com mutações habilitadas explicitamente pela aplicação.
+A IF-04 acrescenta consulta de pagamentos, configuração de pagamento com
+habilitação independente e consultas de detalhes/acompanhamento de pedidos.
 Não interpreta conversas, calcula rateios, controla sessões do core ou conclui
 compras. A composição com o
 core/Telegram continua a cargo de `src/index.ts`, sem alterações nesta entrega.
@@ -25,6 +27,210 @@ com `listAddresses`, `getMerchant` e `getItem`. `browseOffers`, `searchOffers` e
 `getRecommendations` permanecem cobertas somente por testes automatizados com
 HTTP/doubles locais nesta entrega.
 
+## IF-04 — preparação de pagamento e acompanhamento
+
+**A leitura real `listPaymentMethods` foi validada no Mac em 17/10/2026**,
+conforme confirmação do responsável. OAuth foi concluído, a troca de tokens
+por `client_secret_post` retornou HTTP `200`, a conexão autenticada e a
+descoberta foram estabelecidas, e a consulta retornou HTTP `200`,
+`tools_payment_order: succeeded` e código de saída `0`, com encerramento da
+conexão. `annotation_mismatch` foi observado e não impediu a execução: é
+informativo quando o hint contradiz a classificação local, sem alterar as
+allowlists ou habilitar mutações.
+
+O teste foi executado manualmente pelo responsável; o assistente não fez
+chamadas remotas. Não houve configuração ou execução de pagamento, checkout
+ou pedido. Respostas, IDs de cartões/tokens, credenciais e dados pessoais não
+foram registrados aqui. Essa evidência não valida `setCartPayment`, `getOrder`
+ou `trackOrder` contra o servidor real.
+
+Esta etapa reutiliza o cliente autenticado, transporte, OAuth, catálogo paginado,
+validadores e encerramento existentes. A extensão pública é:
+
+```ts
+client.callPaymentOrderTool(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<IfoodMcpPaymentOrderResult>
+```
+
+`IfoodMcpPaymentOrderResult`, `IfoodMcpPaymentOrderToolName` e
+`IfoodMcpPaymentOrderReadToolName` são exportados por `index.ts`. O resultado
+permanece opaco. As APIs das IF-01, IF-02 e IF-03 continuam disponíveis com suas
+allowlists originais; chamar estas quatro ferramentas por `callReadTool` ou
+`callCartTool` continua bloqueado.
+
+| Ferramenta da IF-04 | Classificação local | Permissão adicional |
+| --- | --- | --- |
+| `listPaymentMethods` | Leitura sensível | Nenhuma |
+| `setCartPayment` | Mutação controlada | `allowPaymentConfiguration: true` |
+| `getOrder` | Leitura sensível | Nenhuma |
+| `trackOrder` | Leitura | Nenhuma |
+
+Todas exigem conexão aberta e token em memória, nome exato na allowlist e
+presença única no catálogo da conexão. Nomes desconhecidos, aliases e
+`submitOrder` são bloqueados antes de discovery/execução. Annotations não
+concedem permissão; uma divergência de `readOnlyHint` gera somente o evento
+fixo `tools_payment_order: annotation_mismatch`, conforme a política da IF-03.
+Ferramentas que exigem MCP Tasks são recusadas; esta API é síncrona.
+
+### Schemas observados e validação dinâmica
+
+Andrei forneceu os seguintes metadados de uma descoberta real anterior como
+referência para o preflight da IF-04. Não há confirmação de captura local.
+
+| Ferramenta | Campos obrigatórios observados | Campos opcionais observados |
+| --- | --- | --- |
+| `listPaymentMethods` | `merchantId`: string com formato UUID | — |
+| `setCartPayment` | `cartId`, `paymentMethodId`: strings com formato UUID | `cardTokenId`: string com formato UUID |
+| `getOrder` | `orderId`: string, sem formato UUID declarado | — |
+| `trackOrder` | `orderId`: string, sem formato UUID declarado | `nextPageToken`: string |
+
+**Divergência técnica:** o schema observado de `paymentMethodId` exige UUID,
+mas sua descrição cita `PIX` e `CREDIT_CARD`. O módulo não transforma esses
+nomes em IDs nem relaxa o schema. O chamador deve fornecer um identificador
+real retornado pelo serviço e compatível com o schema vigente. Se as duas
+fontes continuarem incompatíveis, interrompa a configuração e esclareça o
+contrato do servidor; não invente valores.
+
+Esses campos não são schemas fixos no adaptador: `listTools()` na conexão atual
+continua sendo a fonte da verdade. Os argumentos são copiados e validados
+contra `inputSchema`, sem coerção, defaults ou reconstrução de payload.
+IDs seguem o formato realmente declarado, inclusive `orderId` sem exigência
+local de UUID. Schemas não compiláveis falham fechado.
+
+OutputSchemas não foram preservados na captura anterior; não se confirma sua
+existência ou estrutura. Quando o servidor fornecer `outputSchema`, a resposta
+de sucesso é validada pelo validador existente, inclusive para ferramentas de
+páginas anteriores do catálogo. Sem esse schema, valida-se somente o envelope
+MCP e preserva-se a resposta opaca. Não há schema de saída inventado no código.
+Fixtures de saída nos testes representam cenários simulados, não contratos reais.
+
+Limitação: sem outputSchema, a validação do envelope não comprova o contrato
+de domínio do pagamento/pedido. O Core deve interpretar e validar os campos
+antes de usá-los. Os schemas históricos são uma referência de descoberta,
+não uma garantia de que permanecem iguais no servidor.
+
+### Configuração controlada de pagamento
+
+A habilitação é separada das mutações de carrinho:
+
+```ts
+// Opção definida pela aplicação confiável, após decidir permitir configuração.
+const client = createIfoodMcpClient(config, { allowPaymentConfiguration: true });
+try {
+  await client.connect();
+  const catalog = await client.listTools();
+  // A aplicação consulta listPaymentMethods e escolhe um método real.
+  // Esta função ilustrativa pertence à aplicação e deve respeitar o schema.
+  const args = await preparePaymentArgumentsInApplication(catalog);
+  const result = await client.callPaymentOrderTool('setCartPayment', args);
+  // Trate result privadamente e verifique isError antes de usar o resultado.
+  void result;
+} finally {
+  await client.close();
+}
+```
+
+Somente o booleano `true` na criação habilita `setCartPayment`; a opção é
+copiada para a vida da instância. Alterar o objeto original depois não habilita
+pagamento. `allowCartMutations` não concede essa permissão e habilitar pagamento
+não concede mutações de carrinho. Flags no payload, hints do servidor e
+`userConsent: true` não concedem permissão. OAuth autoriza acesso ao serviço.
+Cabe ao Core decidir quem pode configurar pagamento e qual método escolher;
+a fábrica/opções não devem ser controladas por texto do usuário ou por um LLM.
+A permissão da instância não substitui autorização por usuário/ação no Core.
+
+O adaptador não escolhe pagamento, não preenche `cardTokenId`, não consulta
+cartões implicitamente e não conclui compra. Quando necessário para cartão,
+`cardTokenId` deve vir de `listPaymentMethods` e ser fornecido pelo chamador.
+Configurar pagamento modifica o carrinho; não é autorização de submissão.
+
+### Acompanhamento, resultados e dados sensíveis
+
+`getOrder` consulta somente o pedido informado pelo chamador. `trackOrder`
+encaminha os argumentos completos, incluindo o token de paginação quando
+fornecido, e faz exatamente uma consulta. Status, histórico, tokens de próxima
+página e orientações de nova consulta são preservados onde o MCP os retornar:
+em `content`, `structuredContent`, `_meta` ou outros campos. Não há polling,
+paginação de histórico automática ou timers de acompanhamento. O Core decide
+quando consultar novamente e o que apresentar ao Telegram.
+
+Os resultados preservam `content`, `structuredContent`, `isError`, metadados e
+valores financeiros sem alterar unidades, arredondar ou converter strings.
+`isError: true` é devolvido como falha MCP, sem aplicar schema de sucesso ao
+conteúdo de erro e sem registrar o conteúdo. Erros de protocolo/rede/autenticação
+são convertidos pelos diagnósticos seguros existentes, sem mensagem, stack,
+data ou cause brutos. Recursos devem sempre ser fechados em `finally`.
+
+Não registre respostas ou argumentos dessas operações. `listPaymentMethods`
+pode retornar IDs de cartões/tokens; `getOrder` pode retornar endereço, dados
+de pagamento, documento e código de verificação. Também trate IDs de pedidos
+e tokens de paginação como dados privados. A resposta íntegra existe apenas
+para processamento privado pelo chamador; preservar a resposta não autoriza
+sua publicação no Telegram. O Core é responsável pela minimização e pela
+apresentação segura. O adaptador e a CLI não imprimem esses dados nem gravam
+respostas em arquivos. Não use cartões, tokens ou IDs fictícios em chamadas reais.
+
+### Validação real e procedimento manual, exclusivamente de leitura
+
+A única operação da IF-04 validada contra o servidor real nesta entrega é
+`listPaymentMethods`, em 17/10/2026, conforme o registro acima. Os testes
+automatizados continuam usando somente mocks/HTTP simulado. A consulta não
+configura pagamento, não cria pedido e não comprova execução de cobrança.
+
+| Ferramenta | Testes automatizados | Validação real nesta IF-04 |
+| --- | --- | --- |
+| `listPaymentMethods` | Doubles e SDK com HTTP simulado | Sim: leitura no Mac, HTTP 200, succeeded, saída 0 e conexão encerrada |
+| `setCartPayment` | Doubles e SDK com HTTP simulado | Não executada; exige autorização adicional |
+| `getOrder` | Doubles e SDK com HTTP simulado | Não executada |
+| `trackOrder` | Doubles e SDK com HTTP simulado | Não executada |
+
+Após configurar as credenciais locais, prepare argumentos conforme o schema
+vigente e com IDs reais autorizados. Os comandos abaixo documentam consultas
+manuais opcionais; não foram executados pelo assistente. Somente a leitura
+`listPaymentMethods` foi confirmada pelo responsável. Os arquivos indicados
+devem ser locais/privados, fora do Git.
+Não inclua respostas, dados de cartões ou credenciais nesses arquivos. O CLI
+recebe JSON por stdin e nunca imprime a resposta, IDs ou tokens de paginação:
+
+```bash
+node --import tsx src/ifood/payment-order-read-cli.ts listPaymentMethods < "$PAYMENT_METHODS_INPUT"
+node --import tsx src/ifood/payment-order-read-cli.ts getOrder < "$ORDER_DETAILS_INPUT"
+node --import tsx src/ifood/payment-order-read-cli.ts trackOrder < "$ORDER_TRACKING_INPUT"
+```
+
+Defina os três caminhos privados no terminal; não cole IDs/credenciais na linha
+de comando. Após build, pode usar `node dist/ifood/payment-order-read-cli.js`.
+A CLI aceita apenas estas três leituras, exige objeto JSON de até 1 MiB e
+encerra a conexão em sucesso, falha ou cancelamento. Status `0` significa
+consulta concluída e encerrada; status `1` indica falha, inclusive `isError`.
+Confira os eventos seguros de autenticação, `tools_list`,
+`tools_payment_order` e encerramento. Para revisar estruturas completas, use
+a API em memória em ambiente privado; não salve respostas nem as imprima.
+Nenhuma opção da CLI permite `setCartPayment` ou `submitOrder`. Não configure
+pagamento real sem autorização adicional e não crie/finalize pedidos nesta etapa.
+
+### Fronteira com o Core e pendência de submissão
+
+`submitOrder` continua completamente indisponível em todas as APIs de execução.
+Não há método de submissão, acesso irrestrito ao SDK nem mecanismo de consentimento
+artificial no módulo. Mesmo as duas habilitações de mutação combinadas com
+`userConsent: true` não permitem submeter um pedido.
+
+A futura integração precisa de um contrato Core → adaptador que contemple:
+
+- Identidade do organizador autorizado.
+- Identificação exata do carrinho.
+- Total revisado.
+- Confirmação explícita obtida na aplicação.
+- Verificação de que a confirmação permanece válida.
+- Proteção contra submissão duplicada.
+
+A definição e verificação dessas regras pertencem ao Core. A IF-04 documenta
+essa dependência e não altera `src/core/`, Telegram, contratos compartilhados
+ou `src/index.ts`. Não implementa confirmação, IA, rateio ou fluxo conversacional.
+
 ## Organização e dependências
 
 - `index.ts`: API pública, sem efeitos colaterais de importação.
@@ -36,9 +242,11 @@ HTTP/doubles locais nesta entrega.
 - `diagnostics.ts`: eventos por etapa e extração de metadados seguros dos erros.
 - `read-tools.ts`: política de leitura, argumentos JSON e validação de schemas/resultados.
 - `read-cli.ts`: teste real opcional de leitura, com resposta omitida do terminal.
-- `tool-validation.ts`: validação JSON/schema/envelope da IF-02 reutilizada pelas duas APIs.
+- `tool-validation.ts`: validação JSON/schema/envelope reutilizada pelas APIs de operações.
 - `cart-tools.ts`: allowlist e separação de consultas/mutações de carrinho.
 - `cart-cli.ts`: validação manual opcional de carrinho, somente leitura por padrão.
+- `payment-order-tools.ts`: allowlist local de pagamento e acompanhamento, com permissão independente.
+- `payment-order-read-cli.ts`: validação manual opcional restrita às três leituras da IF-04, sem imprimir respostas.
 - `cart-smoke.ts`: inspeção local de estrutura e extração explícita de UUID, sem persistir respostas.
 - `smoke-setup.ts`: recupera os argumentos anteriores no SQLite local do OpenCode, somente leitura, e grava entradas privadas do teste.
 - `smoke-preflight.ts`: pré-verificação manual de endereço, estabelecimento e produto, usando somente a API de leitura da IF-02.
@@ -424,10 +632,13 @@ Ferramentas que exigem execução assíncrona via MCP Tasks são bloqueadas ante
 da execução (`cart_execution_unsupported`); esta API executa chamadas síncronas.
 
 `submitOrder`, `setCartPayment`, `listPaymentMethods`, `setVoucher`,
-`removeVoucher`, `createAddress` e qualquer nome fora das duas allowlists são
+`removeVoucher`, `createAddress` e qualquer nome fora das allowlists da IF-02/IF-03 são
 bloqueados antes de executar, mesmo com escrita habilitada e independentemente
 de argumentos/annotations. `callReadTool` mantém sua lista original de sete
-leituras. O SDK e sua operação `request` não são expostos pela API pública.
+leituras. Esse bloqueio se refere às duas APIs anteriores; a IF-04 oferece
+`listPaymentMethods` e `setCartPayment` exclusivamente por `callPaymentOrderTool`,
+com a política separada descrita acima. O SDK e sua operação `request` não são
+expostos pela API pública.
 
 ### Schemas, estruturas e identificadores
 
@@ -783,7 +994,9 @@ Não houve validação real de descontos ou reconciliação financeira.
 `annotation_mismatch` pode ser apenas informativo: um hint contraditório não
 transforma uma leitura em mutação nem habilita escrita. As allowlists locais e
 `allowCartMutations === true` continuam determinando as permissões de carrinho;
-ferramentas desconhecidas, pagamentos, cupons e submissão permanecem bloqueados.
+ferramentas desconhecidas, pagamentos, cupons e submissão permanecem bloqueados
+nessa API de carrinho. Configuração de pagamento na IF-04 usa sua própria API
+e permissão independente.
 
 ### Verificação e limitações
 
@@ -933,12 +1146,23 @@ try {
   inputSchema e campos adicionais, como annotations e outputSchema.
 - `callReadTool(name, args): Promise<IfoodMcpReadResult>`; exige autenticação,
   allowlist, presença no catálogo e argumentos compatíveis com o schema real.
+- `callCartTool(name, args): Promise<IfoodMcpCartResult>`; mantém a política da
+  IF-03, com `allowCartMutations: true` exigida para suas cinco mutações.
+- `callPaymentOrderTool(name, args): Promise<IfoodMcpPaymentOrderResult>`; permite
+  somente as quatro ferramentas da IF-04 e exige `allowPaymentConfiguration: true`
+  para `setCartPayment`. Nunca permite `submitOrder`.
 - `close(): Promise<void>`; após fechar, crie outra instância para reconectar.
 
 Esses tipos não expõem o transporte MCP. Nenhum contrato compartilhado do core
 foi alterado e o core não precisa importar tipos do SDK.
 
 ## Testes e verificações
+
+Na entrega da IF-04, `npm run check` passou com **436 testes em 17 arquivos**:
+os **337 testes anteriores** foram preservados e **99 novos casos** cobrem a
+API/CLI de pagamento e acompanhamento e o SDK com HTTP simulado. `npm run build`
+e `git diff --check` também passaram. Nenhum resultado de teste simulado deve
+ser interpretado como validação no iFood real.
 
 ```bash
 npm test -- tests/ifood
@@ -1008,6 +1232,13 @@ incluiu uma criação autorizada por `createCart` e a consulta posterior por
 permanecem testadas somente por mocks. Nenhum identificador privado ou payload
 real foi versionado, e não houve checkout, pagamento ou submissão de pedido.
 
+Na **IF-04**, o responsável confirmou a leitura real de `listPaymentMethods`
+no Mac em **17/10/2026**: OAuth com `client_secret_post`, troca de tokens e
+consulta com HTTP `200`, descoberta concluída, `tools_payment_order: succeeded`,
+saída `0` e conexão encerrada. `annotation_mismatch` foi observado e permaneceu
+informativo. `setCartPayment`, `getOrder` e `trackOrder` continuam cobertas
+somente por testes simulados; não houve pagamento, checkout ou pedido.
+
 ## Acesso MCP versus autorização de compra
 
 OAuth autoriza acesso do agente às capacidades oferecidas pelo serviço. Não é
@@ -1017,6 +1248,8 @@ responsável. Listar `ifood_submitOrder`, se o servidor o retornar, não o execu
 nem autoriza compra. A IF-01 implementou descoberta; a IF-02 permite somente as
 consultas explicitamente aprovadas; a IF-03 permite as operações de carrinho
 da allowlist, exigindo decisão explícita da aplicação para mutações. Nenhuma
-dessas APIs habilita checkout, pagamento ou submissão de pedido.
+dessas APIs anteriores habilita checkout, pagamento ou submissão de pedido.
+A IF-04 habilita configuração de pagamento somente por sua opção independente;
+submissão/checkout continuam indisponíveis até a integração futura com o Core.
 
 Referência do SDK: [clientes e OAuth na documentação oficial v1](https://ts.sdk.modelcontextprotocol.io/client).

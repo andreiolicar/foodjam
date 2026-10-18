@@ -13,6 +13,8 @@ import { assertApprovedReadTool, findReadTool, snapshotReadArguments, validateRe
 import type { IfoodMcpReadResult } from './read-tools.js';
 import { assertApprovedCartTool, findCartTool } from './cart-tools.js';
 import type { IfoodMcpCartResult } from './cart-tools.js';
+import { assertApprovedPaymentOrderTool, findPaymentOrderTool } from './payment-order-tools.js';
+import type { IfoodMcpPaymentOrderResult } from './payment-order-tools.js';
 import { snapshotToolArguments, validateToolResult, validateToolSchema } from './tool-validation.js';
 
 /** Metadados preservados de tools/list; não representa permissão de execução. */
@@ -33,6 +35,7 @@ export interface IfoodMcpClient {
   listTools(): Promise<IfoodMcpTool[]>;
   callReadTool(name: string, args: Record<string, unknown>): Promise<IfoodMcpReadResult>;
   callCartTool(name: string, args: Record<string, unknown>): Promise<IfoodMcpCartResult>;
+  callPaymentOrderTool(name: string, args: Record<string, unknown>): Promise<IfoodMcpPaymentOrderResult>;
   /** Terminal e idempotente. Cancele e crie outro cliente para autenticar novamente. */
   close(): Promise<void>;
 }
@@ -42,6 +45,8 @@ export interface IfoodMcpClientOptions {
   onDiagnostic?: DiagnosticListener;
   /** Decisão da aplicação confiável, nunca derivada de argumentos/saída do LLM. */
   allowCartMutations?: boolean;
+  /** Habilitação independente para setCartPayment. Não permite submeter pedidos. */
+  allowPaymentConfiguration?: boolean;
 }
 
 /** Criar/importar não abre rede, callback, navegador nem lê process.env. */
@@ -56,6 +61,7 @@ export function createIfoodMcpClient(
   });
   // Snapshot: alterações posteriores no objeto de opções não habilitam escrita.
   const allowCartMutations = options.allowCartMutations === true;
+  const allowPaymentConfiguration = options.allowPaymentConfiguration === true;
   let client: Client | undefined;
   let transport: StreamableHTTPClientTransport | undefined;
   let provider: DevelopmentOAuthProvider | undefined;
@@ -241,6 +247,38 @@ export function createIfoodMcpClient(
         return result;
       } catch (error) {
         const failure = diagnosticError('tools_cart', error, httpContext.get('tools_cart'));
+        reportDiagnostic(options.onDiagnostic, failure.diagnostic);
+        throw failure;
+      }
+    },
+    async callPaymentOrderTool(name, args) {
+      const current = client;
+      try {
+        if (!connected || closed || !current) throw diagnosticError('tools_payment_order', undefined, { reason: 'payment_order_client_disconnected' });
+        if (!provider?.tokens()?.access_token) throw diagnosticError('tools_payment_order', undefined, { reason: 'payment_order_not_authenticated' });
+        assertApprovedPaymentOrderTool(name, allowPaymentConfiguration);
+        const argumentsSnapshot = snapshotToolArguments(args, 'payment_order');
+        if (!catalog) await api.listTools();
+        if (!connected || closed || client !== current) throw diagnosticError('tools_payment_order', undefined, { reason: 'payment_order_client_disconnected' });
+        const tool = findPaymentOrderTool(name, catalog ?? [], options.onDiagnostic);
+        startStage('tools_payment_order');
+        if (tool.execution && typeof tool.execution === 'object' && 'taskSupport' in tool.execution
+          && tool.execution.taskSupport === 'required') {
+          throw diagnosticError('tools_payment_order', undefined, { reason: 'payment_order_execution_unsupported' });
+        }
+        validateToolSchema(tool.inputSchema, argumentsSnapshot, 'input', 'payment_order');
+        if (!connected || closed || client !== current) throw diagnosticError('tools_payment_order', undefined, { reason: 'payment_order_client_disconnected' });
+        // Mesma fronteira do SDK da IF-03: preserva isError sem aplicar schema de sucesso.
+        const result = validateToolResult(tool, await current.request({
+          method: 'tools/call', params: { name, arguments: argumentsSnapshot },
+        }, CallToolResultSchema), 'payment_order');
+        if (result.isError) reportDiagnostic(options.onDiagnostic, {
+          stage: 'tools_payment_order', event: 'failed', reason: 'payment_order_tool_failed',
+        });
+        else reportDiagnostic(options.onDiagnostic, { stage: 'tools_payment_order', event: 'succeeded' });
+        return result;
+      } catch (error) {
+        const failure = diagnosticError('tools_payment_order', error, httpContext.get('tools_payment_order'));
         reportDiagnostic(options.onDiagnostic, failure.diagnostic);
         throw failure;
       }
