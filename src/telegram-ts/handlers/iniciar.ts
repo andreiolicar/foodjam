@@ -1,13 +1,11 @@
-import type { Context, Telegraf } from "telegraf";
+import { Markup, type Context, type Telegraf } from "telegraf";
 
 import { iris } from "../iris.js";
 import * as collector from "../collector.js";
 import { setOrganizador } from "./state.js";
 import { apresentarActions } from "../services/apresentacao.js";
 
-export function registrarIniciar(
-  bot: Telegraf<Context>,
-): void {
+export function registrarIniciar(bot: Telegraf<Context>): void {
   bot.command("iniciar", async (ctx) => {
     const chatId = ctx.chat.id;
     const usuario = ctx.from;
@@ -40,12 +38,24 @@ export function registrarIniciar(
         return;
       }
 
-      collector.start(chatId);
       setOrganizador(chatId, participantId);
 
       await ctx.reply(
-        "Coleta iniciada! Envie suas preferências neste chat. " +
-        "Quando terminar, digite /finalizar.",
+        "Antes de começar, confirme o endereço de entrega ou escolha outro endereço.",
+        Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              "✅ Sim, confirmar endereço",
+              "endereco:confirmar",
+            ),
+          ],
+          [
+            Markup.button.callback(
+              "🏠 Outro endereço",
+              "endereco:outro",
+            ),
+          ],
+        ]),
       );
     } catch (error) {
       console.error("Erro ao iniciar:", error);

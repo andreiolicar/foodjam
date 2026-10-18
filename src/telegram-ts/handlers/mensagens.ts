@@ -1,6 +1,14 @@
 import type { Context, Telegraf } from 'telegraf';
 
 import * as collector from '../collector.js';
+import { iris } from "../iris.js";
+import {
+  getOrganizador,
+  isAguardandoEndereco,
+  clearAguardandoEndereco,
+} from "./state.js";
+import { apresentarActions } from "../services/apresentacao.js";
+import { Markup } from "telegraf";
 
 export function registrarMensagens(
   bot: Telegraf<Context>,
@@ -13,6 +21,60 @@ export function registrarMensagens(
     if (!message || !usuario) {
       return next();
     }
+    
+    // Durante a troca, a próxima mensagem de texto é o novo endereço.
+  if (isAguardandoEndereco(chatId)) {
+    if (!("text" in message) || message.text.startsWith("/")) {
+      return;
+    }
+
+    const organizadorId = getOrganizador(chatId);
+
+    if (String(usuario.id) !== organizadorId) {
+      await ctx.reply("Aguarde o organizador informar o endereço.");
+      return;
+    }
+
+    try {
+      const resposta = await iris.mensagem(
+        {
+          sessionId: String(chatId),
+          participantId: String(usuario.id),
+          text: message.text,
+        },
+        usuario.first_name ?? "Participante",
+      );
+
+      await apresentarActions(ctx, chatId, resposta);
+
+      console.log("Resposta ao novo endereço:", resposta);
+
+      await ctx.reply(
+        "O endereço foi enviado à Íris. Confirme-o ou informe outro endereço.",
+        Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              "✅ Confirmar endereço",
+              "endereco:confirmar",
+            ),
+          ],
+          [
+            Markup.button.callback(
+              "✏️ Corrigir / informar outro",
+              "endereco:outro",
+            ),
+          ],
+        ]),
+      );
+
+      clearAguardandoEndereco(chatId);
+    } catch (error) {
+      console.error("Erro ao processar o novo endereço:", error);
+      await ctx.reply("Não foi possível processar esse endereço.");
+    }
+
+    return;
+  }
 
     // Permite que /iniciar, /finalizar e outros comandos
     // sejam tratados pelos respectivos handlers.
