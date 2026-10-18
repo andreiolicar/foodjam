@@ -237,8 +237,19 @@ export interface DiscoveryMenu {
   /** Consulta limitada intencionalmente; não representa fim de catálogo. */
   truncated?: boolean;
 }
+/** Motivos observados; amostra parcial não implica esgotamento de chamadas/tempo. */
+export type DiscoveryCoverageReason = 'term_limit' | 'store_limit' | 'request_limit' | 'time_limit'
+  | 'catalog_partial' | 'pagination_truncated' | 'item_limit' | 'classification_limit';
 export interface DiscoveryCoverage {
+  reasons?: DiscoveryCoverageReason[];
+  /** Lojas distintas encontradas na amostra, incluindo fechadas. */
+  candidateStores?: number;
+  /** Lojas relidas individualmente para conferir funcionamento. */
+  checkedStores?: number;
+  /** Lojas distintas observadas fechadas na busca ou nas releituras. */
+  closedStores?: number;
   classificationLimited?: boolean;
+  /** requests conta operações da porta; cada uma pode ter paginação interna limitada. */
   terms: number; stores: number; items: number; requests: number; limited: boolean;
 }
 export interface PreliminaryProposal {

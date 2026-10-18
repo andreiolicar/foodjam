@@ -1,4 +1,4 @@
-import type { DeliveryAddress, DiscoveryCoverage, DiscoveryItem, DiscoveryStore, Participant } from './contracts.js';
+import type { DeliveryAddress, DiscoveryCoverage, DiscoveryCoverageReason, DiscoveryItem, DiscoveryStore, Participant } from './contracts.js';
 import type { DiscoveryCatalogPort } from './ports.js';
 import { termosDeBusca } from './catalogo.js';
 import { normalizar } from './regras/elegibilidade.js';
@@ -28,9 +28,18 @@ export function limitarCandidatos(items: readonly DiscoveryItem[], groups: reado
 /** Recuperação limitada e distribuída entre os desejos; sem valores comerciais. */
 export async function buscarDescoberta(port: DiscoveryCatalogPort, participants: readonly Participant[], address: DeliveryAddress, options?: Partial<DiscoveryLimits>) {
   const limits = discoveryLimits(options); const start = Date.now();
-  const coverage: DiscoveryCoverage = { terms: 0, stores: 0, items: 0, requests: 0, limited: false };
+  const coverage: DiscoveryCoverage = { terms: 0, stores: 0, items: 0, requests: 0, limited: false, reasons: [] };
+  function limited(reason: DiscoveryCoverageReason) {
+    coverage.limited = true;
+    if (!coverage.reasons!.includes(reason)) coverage.reasons!.push(reason);
+  }
+  const searchOptions = { onTruncated: () => limited('pagination_truncated') };
   async function read<T>(operation: () => Promise<T>): Promise<T | undefined> {
-    if (coverage.requests >= limits.maxRequests || Date.now() - start >= limits.deadlineMs) { coverage.limited = true; return undefined; }
+    const requestsExhausted = coverage.requests >= limits.maxRequests;
+    const timeExhausted = Date.now() - start >= limits.deadlineMs;
+    if (requestsExhausted) limited('request_limit');
+    if (timeExhausted) limited('time_limit');
+    if (requestsExhausted || timeExhausted) return undefined;
     coverage.requests++; return operation(); // Erros de interpretação/transporte não viram lista vazia.
   }
   const perPerson = participants.map(p => termosDeBusca([p]));
@@ -38,35 +47,59 @@ export async function buscarDescoberta(port: DiscoveryCatalogPort, participants:
   for (let i = 0; i < Math.max(0, ...perPerson.map(t => t.length)); i++) for (const list of perPerson) if (list[i]) terms.set(normalizar(list[i]!), list[i]!);
   if (!terms.size) terms.set('', '');
   const queries = [...terms.values()].slice(0, limits.maxSearchTerms);
-  coverage.limited = terms.size > queries.length;
+  if (terms.size > queries.length) limited('term_limit');
   const matchesByTerm = new Map<string, string[]>();
   const groups: string[][] = []; const known = new Map<string, DiscoveryStore>(); const seeds = new Map<string, DiscoveryItem[]>();
   for (const query of queries) {
-    const found = await read(() => port.searchStores(query, address));
+    const found = await read(() => port.searchStores(query, address, searchOptions));
     if (found === undefined) break;
     coverage.terms++;
     for (const store of found) known.set(store.id, store);
-    const matches = query && port.searchItems ? await read(() => port.searchItems!(query, address)) : [];
+    const matches = query && port.searchItems ? await read(() => port.searchItems!(query, address, searchOptions)) : [];
     matchesByTerm.set(normalizar(query), (matches ?? []).map(i => i.id));
     for (const item of matches ?? []) { const list = seeds.get(item.storeId) ?? []; list.push(item); seeds.set(item.storeId, list); }
     groups.push([...new Set([...(matches ?? []).map(i => i.storeId), ...found.filter(s => s.isOpen).map(s => s.id)])]);
   }
-  const candidates = new Set<string>();
-  for (let i = 0; i < Math.max(0, ...groups.map(g => g.length)); i++) for (const group of groups) {
-    const id = group[i]; if (!id || known.get(id)?.isOpen === false) continue;
-    if (candidates.size < limits.maxStores) candidates.add(id); else if (!candidates.has(id)) coverage.limited = true;
+  const closed = new Set([...known.values()].filter(s => s.isOpen === false).map(s => s.id));
+  // Em cada desejo, abertas comprovadas precedem donos ITEM não verificados.
+  // A rodada entre desejos evita que várias lojas de um desejo eliminem outro.
+  const ranked = groups.map(group => [
+    ...group.filter(id => known.get(id)?.isOpen === true),
+    ...group.filter(id => !known.has(id)),
+  ]);
+  coverage.candidateStores = new Set(groups.flat().concat([...closed])).size;
+  coverage.checkedStores = 0;
+  const stores: DiscoveryStore[] = []; const items: DiscoveryItem[] = [];
+  const visited = new Set<string>(); let turn = 0;
+  function nextCandidate(): string | undefined {
+    const pending = ranked.map((ids, index) => ({ index,
+      id: ids.find(id => !visited.has(id)),
+      accepted: ids.filter(id => stores.some(store => store.id === id)).length,
+    })).filter(group => group.id !== undefined);
+    if (!pending.length) return undefined;
+    const leastServed = Math.min(...pending.map(group => group.accepted));
+    // Rejeição não conta como cobertura; empate alterna os desejos, evitando
+    // gastar todo o orçamento no primeiro antes de consultar os demais.
+    pending.sort((a, b) => (a.index - turn + ranked.length) % ranked.length - (b.index - turn + ranked.length) % ranked.length);
+    const group = pending.find(group => group.accepted === leastServed)!;
+    visited.add(group.id!); turn = (group.index + 1) % ranked.length;
+    return group.id;
   }
-  const stores: DiscoveryStore[] = []; const items: DiscoveryItem[] = []; let sawClosed = [...known.values()].some(s => !s.isOpen);
-  for (const id of candidates) {
+  for (let id = nextCandidate(); id !== undefined; id = nextCandidate()) {
+    // Uma loja rejeitada não consome a vaga de uma loja aberta posterior.
+    // As releituras continuam submetidas aos mesmos limites de chamadas/tempo.
+    if (stores.length >= limits.maxStores) { limited('store_limit'); break; }
     const current = await read(() => port.getStore(id, address));
     if (current === undefined) break;
+    coverage.checkedStores++;
     if (current.id !== id) throw new Error('Estabelecimento divergente.');
-    if (!current.isOpen) { sawClosed = true; continue; }
+    if (current.isOpen !== true) { if (current.isOpen === false) closed.add(id); continue; }
     const menu = await read(() => port.getMenu(id, address));
     if (menu === undefined) break;
-    if (menu.storeOpen === false) { sawClosed = true; continue; }
+    if (menu.storeOpen === false) { closed.add(id); continue; }
     stores.push(current);
-    coverage.limited ||= menu.coverage !== 'complete' || menu.truncated === true;
+    if (menu.coverage !== 'complete') limited('catalog_partial');
+    if (menu.truncated === true) limited('pagination_truncated');
     const merged = new Map<string, DiscoveryItem>();
     for (const item of [...(seeds.get(id) ?? []), ...menu.items]) {
       if (item.storeId !== id) throw new Error('Produto fora do estabelecimento.');
@@ -74,7 +107,7 @@ export async function buscarDescoberta(port: DiscoveryCatalogPort, participants:
     }
     const available = [...merged.values()].filter(i => i.available !== false);
     const selected = limitarCandidatos(available, [...matchesByTerm.values()], limits.maxItemsPerStore);
-    coverage.limited ||= available.length > selected.length;
+    if (available.length > selected.length) limited('item_limit');
     items.push(...selected);
   }
   // Distribui o limite global por loja para não eliminar a última preferência.
@@ -83,7 +116,8 @@ export async function buscarDescoberta(port: DiscoveryCatalogPort, participants:
     const item = items.filter(row => row.storeId === store.id)[i];
     if (item && chosen.length < limits.maxItems) chosen.push(item);
   }
-  coverage.limited ||= items.length > chosen.length;
+  if (items.length > chosen.length) limited('item_limit');
   coverage.stores = stores.length; coverage.items = chosen.length;
-  return { stores, items: chosen, coverage, sawClosed, matchesByTerm };
+  coverage.closedStores = closed.size;
+  return { stores, items: chosen, coverage, sawClosed: closed.size > 0, matchesByTerm };
 }

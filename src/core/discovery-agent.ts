@@ -1,5 +1,5 @@
 import type { AcaoPropostaPreliminar, Agente, NomesCatalogo, Resposta, Organizador } from './agente.js';
-import type { DeliveryAddress, DiscoveryItem, DiscoveryStore, PreliminaryProposal, IncomingMessage, CoreAction } from './contracts.js';
+import type { DeliveryAddress, DiscoveryCoverage, DiscoveryItem, DiscoveryStore, PreliminaryProposal, IncomingMessage, CoreAction } from './contracts.js';
 import type { DiscoveryCatalogPort, LlmPort, SessionStore, SessionRecord } from './ports.js';
 import { SessoesEmMemoria } from './sessoes.js';
 import type { CoreSession } from './sessao.js';
@@ -20,7 +20,7 @@ export interface RespostaDescoberta extends Resposta {
 }
 
 /** Mesma API do Core para exploração; operações cotadas continuam bloqueadas. */
-export function criarAgenteDescoberta(deps: { catalog: DiscoveryCatalogPort; llm: LlmPort; sessions?: SessionStore; registrar?: (record: LlmCallRecord) => void; discoveryLimits?: Partial<DiscoveryLimits> }) {
+export function criarAgenteDescoberta(deps: { catalog: DiscoveryCatalogPort; llm: LlmPort; sessions?: SessionStore; registrar?: (record: LlmCallRecord) => void; discoveryLimits?: Partial<DiscoveryLimits>; registrarDescoberta?: (event: { outcome: string; coverage: DiscoveryCoverage }) => void }) {
   const sessions = deps.sessions ?? new SessoesEmMemoria();
   const queues = new Map<string, Promise<unknown>>();
   const choices = new Map<string, number>();
@@ -63,12 +63,20 @@ export function criarAgenteDescoberta(deps: { catalog: DiscoveryCatalogPort; llm
     const revision = record.proposalCount + 1;
     const base = clear(record.session); await sessions.set({ ...record, session: base, proposalCount: revision });
     const result = await proporDescoberta({ ...base, participants }, { port: deps.catalog, ...(deps.discoveryLimits ? { limits: deps.discoveryLimits } : {}), llm: deps.llm, address, mode: 'model', ...(deps.registrar ? { registrar: deps.registrar } : {}), proposalId: `${id}-preliminary-${revision}` });
+    const outcome = result.proposal ? 'preliminary_ready' : result.reason ?? 'no_candidates';
+    if (result.coverage) deps.registrarDescoberta?.({ outcome, coverage: structuredClone(result.coverage) });
+    const reasons = result.coverage?.reasons ?? [];
+    const labels = { term_limit: 'termos', store_limit: 'lojas', request_limit: 'chamadas', time_limit: 'tempo', item_limit: 'produtos' };
+    const budgets = Object.entries(labels).filter(([key]) => reasons.includes(key as keyof typeof labels)).map(([, label]) => label);
+    const coverageText = budgets.length
+      ? `A pesquisa foi limitada por: ${budgets.join(', ')}. Foi consultada apenas uma amostra do catálogo.`
+      : result.coverage?.limited ? 'Foi consultada uma amostra parcial do catálogo; páginas ou ofertas podem ter ficado fora da pesquisa.' : undefined;
     // A cobertura pública mantém as pessoas sem perfil, mas não lhes atribui itens.
     const proposal = result.proposal ? { ...result.proposal, participants: structuredClone(base.participants) } : undefined;
     const alternative = result.alternatives?.[0] ? { ...result.alternatives[0], participants: structuredClone(base.participants) } : undefined;
     const session = { ...base, ...(proposal ? { preliminary: proposal } : {}), ...(alternative ? { preliminaryAlternative: alternative } : {}) };
     await sessions.set({ ...record, session, proposalCount: revision, discoveryCatalog: { stores: result.stores, items: result.items } });
-    return { outcome: result.proposal ? 'preliminary_ready' : result.reason ?? 'no_candidates', actions: !result.proposal && result.coverage?.limited ? [{ type: 'send_message', sessionId: id, text: 'A pesquisa atingiu limites de amostra, chamadas ou tempo; não foi pesquisado o catálogo completo.' }] : [], session,
+    return { outcome, actions: !result.proposal && coverageText ? [{ type: 'send_message', sessionId: id, text: coverageText }] : [], session,
       ...(proposal ? { preliminary: proposal } : {}), ...(session.preliminaryAlternative ? { preliminaryAlternative: session.preliminaryAlternative } : {}), collection, stores: result.stores, items: result.items };
   }
   async function collect(id: string, items: readonly ItemLote[]): Promise<RespostaDescoberta> {

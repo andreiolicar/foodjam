@@ -11,7 +11,7 @@ const DICAS_SEM_PROPOSTA: Record<string, string> = {
   model_failed: 'A IA real está indisponível ou retornou dados inválidos. Preferências preservadas; confira o diagnóstico antes de repetir.',
   preferences_required: 'A coleta ainda não reconheceu preferências válidas. Confiram as perguntas no privado.',
   catalog_failed: 'Não foi possível consultar o catálogo real do iFood. Nenhuma simulação foi utilizada.',
-  store_closed: 'O estabelecimento consultado está fechado. Nenhum carrinho foi criado.',
+  store_closed: 'Na amostra pesquisada, foram encontradas lojas fechadas e não foi possível confirmar uma loja aberta com produtos. Isso não representa todo o catálogo. Nenhum carrinho foi criado.',
   error: 'A consulta não pôde ser concluída. A sessão permanece disponível.',
   no_session: 'Não existe pedido ativo. Me mencione ou use /iniciar para começar.',
   session_finished: 'Não existe pedido ativo. Me mencione ou use /iniciar para começar.',

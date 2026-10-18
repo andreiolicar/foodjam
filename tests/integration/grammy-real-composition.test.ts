@@ -91,7 +91,7 @@ it('entrada real conecta grammY/Core/adaptador MCP, preserva revisão/alternativ
 });
 it('loja fechada não produz card nem classificação; configuração fake não chega ao MCP', async () => {
   isOpen = false; const h = await setup();
-  try { await h.text(71, 'Hambúrguer'); await h.text(71, '/montar'); expect(h.sent.some(m => m.text.includes('está fechado'))).toBe(true); expect(h.sent.some(m => m.text.includes('Sugestão preliminar'))).toBe(false); expect(http).toHaveBeenCalledTimes(1); } finally { await h.runtime.close(); }
+  try { await h.text(71, 'Hambúrguer'); await h.text(71, '/montar'); expect(h.sent.some(m => m.text.includes('amostra pesquisada') && m.text.includes('fechad'))).toBe(true); expect(h.sent.some(m => m.text.includes('atingiu limites de amostra, chamadas ou tempo'))).toBe(false); expect(h.sent.some(m => m.text.includes('Sugestão preliminar'))).toBe(false); expect(http).toHaveBeenCalledTimes(1); } finally { await h.runtime.close(); }
   transport.factory.mockClear();
   await expect(criarAplicacaoReal({ ...env, AI_PROVIDER: 'fake' })).rejects.toThrow(); expect(transport.factory).not.toHaveBeenCalled();
 });
@@ -132,5 +132,32 @@ it('composição de produção procura hambúrguer e açaí em duas lojas e most
     await h.text(72, '/endereco'); expect((await h.runtime.iris.obter(String(group)))?.preliminary).toBeDefined();
     await h.text(71, '/endereco'); expect((await h.runtime.iris.obter(String(group)))?.preliminary).toBeUndefined();
     expect((await h.runtime.iris.obter(String(group)))?.address?.status).toBe('pending_confirmation');
+  } finally { await h.runtime.close(); }
+});
+
+it('composição real prioriza lojas abertas por desejo mesmo com ITEM fechado, sem mutações e com diagnóstico sanitizado', async () => {
+  const original = transport.read.getMockImplementation()!;
+  const closed = randomUUID();
+  transport.read.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+    if (name === 'searchOffers' && args.resultKind === 'ITEM') return envelope({ resultKind: 'ITEM', results: [{ itemId: 'closed-product-test', itemName: 'Hambúrguer', merchant: { merchantId: closed } }], hasMore: false });
+    if (name === 'getMerchant' && args.merchantId === closed) return envelope({ merchantId: closed, merchantName: 'Loja fechada', isOpen: false });
+    return original(name, args);
+  });
+  const h = await setup();
+  try {
+    await h.text(71, 'Hambúrguer'); await h.text(72, 'Hambúrguer'); await h.text(71, '/montar');
+    expect((await h.runtime.iris.obter(String(group)))?.preliminary?.items).toHaveLength(2);
+    const diagnostic = h.runtime.diagnostico();
+    expect(diagnostic.discovery).toHaveLength(1);
+    expect(diagnostic.discovery[0]).toMatchObject({ outcome: 'preliminary_ready', coverage: { stores: 1, reasons: ['catalog_partial'] } });
+    const safe = JSON.stringify(diagnostic.discovery);
+    expect(safe).not.toContain(merchant); expect(safe).not.toContain(closed); expect(safe).not.toContain('Endereço privado'); expect(safe).not.toContain('Pessoa');
+    const log = vi.mocked(console.info).mock.calls.find(([label]) => label === 'FoodJam descoberta:');
+    expect(log).toBeDefined(); expect(JSON.parse(String(log![1]))).toEqual(diagnostic.discovery[0]);
+    for (const [name, args] of transport.read.mock.calls) {
+      expect(['listAddresses', 'searchOffers', 'getMerchant', 'browseOffers']).toContain(name);
+      if (name === 'searchOffers') expect(args).toMatchObject({ merchantType: 'RESTAURANT', refinements: { onlyOpen: true } });
+    }
+    expect(transport.factory).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ allowCartMutations: false, allowPaymentConfiguration: false }));
   } finally { await h.runtime.close(); }
 });

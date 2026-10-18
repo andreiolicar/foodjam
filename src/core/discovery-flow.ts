@@ -55,7 +55,8 @@ export async function proporDescoberta(inputSession: CoreSession, deps: {
     });
     const matching = termosDeBusca([participant]).map(term => found.matchesByTerm.get(normalizar(term)) ?? []);
     const itensPermitidos = classificationMode === 'model' ? limitarCandidatos(allowed, matching, maxClassification) : allowed;
-    if (itensPermitidos.length < allowed.length) { found.coverage.classificationLimited = true; found.coverage.limited = true; }
+    if (itensPermitidos.length < allowed.length) { found.coverage.classificationLimited = true; found.coverage.limited = true;
+      const reasons = found.coverage.reasons ??= []; if (!reasons.includes('classification_limit')) reasons.push('classification_limit'); }
     return { participant, desejos: desejosDe(participant), itensPermitidos };
   }).filter(p => p.itensPermitidos.length);
   const catalogIncomplete = found.coverage.limited;

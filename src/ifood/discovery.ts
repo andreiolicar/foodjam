@@ -64,11 +64,13 @@ export function createIfoodDiscoveryCatalog(client: Pick<IfoodMcpClient, 'callRe
     async listSavedAddresses() {
       return savedAddressRecords(await read('listAddresses', {})).map(row => ({ id: row.addressId, formatted: row.formattedAddress }));
     },
-    async searchStores(query, address) {
+    async searchStores(query, address, searchOptions) {
       if (typeof query !== 'string') throw new IfoodCatalogError('invalid_input');
       const userLocation = await location(address);
-      const args = { merchantType: 'RESTAURANT', resultKind: 'MERCHANT', userLocation };
+      // Filtro documentado para descoberta; funcionamento ainda é validado no Core.
+      const args = { merchantType: 'RESTAURANT', resultKind: 'MERCHANT', userLocation, refinements: { onlyOpen: true } };
       const stores = await pages(query.trim() ? 'searchOffers' : 'browseOffers', { ...args, ...(query.trim() ? { query } : {}) }, 'MERCHANT', store, options.allowTruncatedStoreSearch === true);
+      if (stores.truncated) searchOptions?.onTruncated?.();
       if (stores.rows.length || !query.trim()) return stores.rows;
       // Uma busca de produto pode não encontrar MERCHANT. Cada linha ITEM
       // fornece a própria loja, sem atribuir ofertas globais a outra loja.
@@ -78,17 +80,19 @@ export function createIfoodDiscoveryCatalog(client: Pick<IfoodMcpClient, 'callRe
         catalogDiscoveryItem(value, actual.id);
         return actual;
       }, options.allowTruncatedStoreSearch === true);
+      if (offers.truncated) searchOptions?.onTruncated?.();
       return offers.rows;
     },
-    async searchItems(query, address) {
+    async searchItems(query, address, searchOptions) {
       catalogInput(query);
-      const offers = await pages('searchOffers', { merchantType: 'RESTAURANT', resultKind: 'ITEM', query, userLocation: await location(address) }, 'ITEM', value => {
+      const offers = await pages('searchOffers', { merchantType: 'RESTAURANT', resultKind: 'ITEM', query, userLocation: await location(address), refinements: { onlyOpen: true } }, 'ITEM', value => {
         if (!value || typeof value !== 'object') throw new IfoodCatalogError('invalid_data');
         const row = value as { merchantId?: unknown; merchant?: { merchantId?: unknown } };
         const owner = row.merchant?.merchantId ?? row.merchantId;
         if (typeof owner !== 'string') throw new IfoodCatalogError('invalid_data');
         return item(value, owner);
       }, true);
+      if (offers.truncated) searchOptions?.onTruncated?.();
       return offers.rows;
     },
     async getStore(storeId, address) {
