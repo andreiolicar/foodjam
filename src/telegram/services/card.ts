@@ -211,7 +211,8 @@ export function textosItensPropostaPreliminar(dados: DadosPropostaPreliminar): I
       lines.push(`⭐ ${rating.toFixed(1).replace('.', ',')}${votes}`);
     }
     const price = item?.priceCents === undefined ? item?.basePriceCents === undefined ? 'preço a confirmar' : `preço base ${formatarBRL(item.basePriceCents)} por unidade; promoção/valor aplicável a confirmar` : `${formatarBRL(item.priceCents)} por unidade`;
-    lines.push(price, item?.available === undefined ? 'disponibilidade não confirmada' : item.available ? 'disponibilidade informada no catálogo; confirmar no carrinho' : 'indisponível');
+    lines.push(price);
+    if (item?.available === false) lines.push('indisponível');
     return { key, texto: lines.join('\n'), ...(item?.itemImageUrl === undefined ? {} : { itemImageUrl: item.itemImageUrl }) };
   });
 }

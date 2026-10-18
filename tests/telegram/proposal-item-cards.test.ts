@@ -35,7 +35,7 @@ it('duas pessoas e dois produtos recebem resumo único com botões e duas fotos 
  expect(main!.text).not.toMatch(/Produto|Loja|R\$|[Ss]ubtotal|[Tt]otal/);expect(main!.options.reply_markup).toBeDefined();
  expect(a!.text).toContain('Produto &lt;a&gt;');expect(a!.text).toContain('Ana &amp; Bia');expect(a!.text).not.toContain('Bruno');expect(a!.text).toContain('Loja &lt;A&gt;');expect(a!.text).toContain('⭐ 4,7 (850 avaliações)');expect(a!.text).not.toContain('3,9');
  expect(b!.text).toContain('Produto &lt;b&gt;');expect(b!.text).toContain('Bruno');expect(b!.text).toContain('Loja &amp; B');expect(b!.text).toContain('⭐ 3,9 (12 avaliações)');expect(b!.text).not.toContain('4,7');
- for(const m of [a!,b!]){expect(m.text).toContain('R$ 25,90 por unidade');expect(m.text).toContain('disponibilidade não confirmada');expect(m.options.reply_markup).toBeUndefined();expect(m.options.reply_parameters).toEqual({message_id:11});expect(m.options.parse_mode).toBe('HTML');expect(propostaDoCard(f.group,m.id)).toBeUndefined();}
+ for(const m of [a!,b!]){expect(m.text).toContain('R$ 25,90 por unidade');expect(m.text).not.toContain('disponibilidade não confirmada');expect(m.options.reply_markup).toBeUndefined();expect(m.options.reply_parameters).toEqual({message_id:11});expect(m.options.parse_mode).toBe('HTML');expect(propostaDoCard(f.group,m.id)).toBeUndefined();}
  expect(propostaDoCard(f.group,main!.id)).toBe('p1');expect(f.fetchImage.mock.calls.map(([url])=>String(url))).toEqual([image('a'),image('b')]);
 });
 it('uma pessoa com um item recebe exatamente um resumo e uma mensagem de item',async()=>{

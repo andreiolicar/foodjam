@@ -75,7 +75,8 @@ function assertProposal(h: Awaited<ReturnType<typeof setup>>, session: Awaited<R
   expect(card).toContain('2 de 2'); expect(card).toContain('valores finais não confirmados');
   expect(card).not.toMatch(/R\$|Hambúrguer MCP|[Tt]otal/);
   const individual = h.sent.filter(m => m.text.startsWith('🍽️ <b>') && !m.text.includes('Sugestão preliminar'));
-  expect(individual.length).toBeGreaterThan(0); expect(individual.every(m => m.text.includes('disponibilidade não confirmada') && m.buttons.length === 0)).toBe(true);
+  expect(individual.length).toBeGreaterThan(0); expect(individual.every(m => !m.text.includes('disponibilidade não confirmada') && m.buttons.length === 0)).toBe(true);
+  expect(card).toContain('Disponibilidade e valores comerciais ainda precisam de confirmação.');
   expect(transport.factory).toHaveBeenCalledWith(expect.anything(), {allowCartMutations: false, allowPaymentConfiguration: false});
   expect(transport.read.mock.calls.every(([name]) => ['listAddresses','searchOffers','browseOffers','getMerchant'].includes(name))).toBe(true);
   expect(h.runtime.bot.isRunning()).toBe(false);

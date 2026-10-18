@@ -64,7 +64,8 @@ it('entrada real conecta grammY/Core/adaptador MCP, preserva revisão/alternativ
     const proposal = (await h.runtime.iris.obter(String(group)))?.preliminary;
     expect(proposal?.items).toHaveLength(2);
     expect(proposal?.items.every(i => i.storeId === merchant && products.includes(i.menuItemId))).toBe(true);
-    expect(publicText).toContain('2 de 2'); expect(publicText).toContain('preço a confirmar'); expect(publicText).toContain('disponibilidade não confirmada');
+    expect(publicText).toContain('2 de 2'); expect(publicText).toContain('preço a confirmar'); expect(publicText).not.toContain('disponibilidade não confirmada');
+    expect(publicText).toContain('Disponibilidade e valores comerciais ainda precisam de confirmação.');
     expect(publicText).not.toMatch(new RegExp(`${merchant}|${products.join('|')}|loja-burger|burger-x-salada|R\\$ 0,00`));
     const confirm = vi.spyOn(h.runtime.iris, 'fechar'); const readCount = transport.read.mock.calls.length;
     const review = h.button('Revisar proposta preliminar');
@@ -175,7 +176,8 @@ it('composição de produção procura hambúrguer e açaí em duas lojas e most
     expect(individual.every(m => m.buttons.length === 0)).toBe(true);
     const card = h.sent.map(m => m.text).join('\n');
     expect(card).toContain('2 de 2'); expect(card).toContain('R$ 25,90 por unidade'); expect(card).toContain('R$ 32,50 por unidade');
-    expect(card).toContain('disponibilidade não confirmada'); expect(summary).toContain('valores finais não confirmados');
+    expect(card).not.toContain('disponibilidade não confirmada'); expect(summary).toContain('valores finais não confirmados');
+    expect(summary).toContain('Disponibilidade e valores comerciais ainda precisam de confirmação.');
     expect(transport.read.mock.calls.every(([name]) => ['listAddresses', 'searchOffers', 'getMerchant', 'browseOffers'].includes(name))).toBe(true);
     await h.text(72, '/endereco'); expect((await h.runtime.iris.obter(String(group)))?.preliminary).toBeDefined();
     await h.text(71, '/endereco'); expect((await h.runtime.iris.obter(String(group)))?.preliminary).toBeUndefined();
